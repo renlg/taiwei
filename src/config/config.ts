@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { ensureTaiweiHome } from '../util/paths.js';
 import { HOOK_EVENTS, type HookCommands } from '../hooks/runner.js';
+import { passwordForStorage } from './password.js';
 
 export type SecurityRememberMode = 'off' | 'session' | 'permanent';
 
@@ -102,7 +103,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     }
     await saveConfig(DEFAULT_CONFIG);
   }
-  return {
+  const config: TaiweiConfig = {
     ...DEFAULT_CONFIG,
     ...stored,
     hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
@@ -116,18 +117,30 @@ export async function loadConfig(): Promise<TaiweiConfig> {
       patterns: [...(stored.security?.patterns ?? DEFAULT_CONFIG.security.patterns)],
       approvedPatterns: [...(stored.security?.approvedPatterns ?? DEFAULT_CONFIG.security.approvedPatterns)],
     },
-    apiKey: process.env.TAIWEI_API_KEY ?? stored.apiKey ?? DEFAULT_CONFIG.apiKey,
-    baseUrl: process.env.TAIWEI_BASE_URL ?? stored.baseUrl ?? DEFAULT_CONFIG.baseUrl,
-    model: process.env.TAIWEI_MODEL ?? stored.model ?? DEFAULT_CONFIG.model,
-    ...(process.env.TAIWEI_AUTH_PASSWORD !== undefined
-      ? { auth: { ...DEFAULT_CONFIG.auth, ...stored.auth, password: process.env.TAIWEI_AUTH_PASSWORD } }
-      : {}),
+    apiKey: stored.apiKey ?? DEFAULT_CONFIG.apiKey,
+    baseUrl: stored.baseUrl ?? DEFAULT_CONFIG.baseUrl,
+    model: stored.model ?? DEFAULT_CONFIG.model,
   };
+  const storedPassword = config.auth.password;
+  const diskPassword = passwordForStorage(storedPassword);
+  if (diskPassword !== storedPassword) {
+    config.auth.password = diskPassword;
+    await saveConfig(config);
+  }
+  config.apiKey = process.env.TAIWEI_API_KEY ?? config.apiKey;
+  config.baseUrl = process.env.TAIWEI_BASE_URL ?? config.baseUrl;
+  config.model = process.env.TAIWEI_MODEL ?? config.model;
+  if (process.env.TAIWEI_AUTH_PASSWORD !== undefined) config.auth.password = process.env.TAIWEI_AUTH_PASSWORD;
+  return config;
 }
 
 export async function saveConfig(config: TaiweiConfig): Promise<void> {
   const paths = await ensureTaiweiHome();
-  await writeFile(paths.config, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  const stored = {
+    ...config,
+    auth: { ...config.auth, password: passwordForStorage(config.auth.password) },
+  };
+  await writeFile(paths.config, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
 }
 
 export async function initializeConfig(): Promise<TaiweiConfig> {
@@ -149,6 +162,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
         approvedPatterns: [...(stored.security?.approvedPatterns ?? DEFAULT_CONFIG.security.approvedPatterns)],
       },
     };
+    config.auth.password = passwordForStorage(config.auth.password);
     await saveConfig(config);
     return config;
   } catch (error) {

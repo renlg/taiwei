@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { loadConfig, resolveWorkspaceDir, validateGatewayAuth } from '../src/config/config.js';
+import { loadConfig, resolveWorkspaceDir, validateGatewayAuth, type TaiweiConfig } from '../src/config/config.js';
 import { nextRun, parseInterval } from '../src/cron/scheduler.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { streamChat } from '../src/llm/client.js';
@@ -15,6 +15,7 @@ import { handleModelCommand } from '../src/cli/repl.js';
 import type { TaiweiApp } from '../src/app.js';
 import { detectDanger } from '../src/security/commands.js';
 import { HookRunner, type HookCommands } from '../src/hooks/runner.js';
+import { isScryptPassword, verifyPassword } from '../src/config/password.js';
 
 const emptyHooks = (): HookCommands => ({ beforeMessage: [], beforeLLM: [], afterLLM: [], beforeTool: [], afterTool: [] });
 
@@ -58,6 +59,30 @@ test('gateway auth validation rejects an enabled empty password', () => {
   }), /auth\.password.*TAIWEI_AUTH_PASSWORD/);
 });
 
+test('config load migrates a stored plaintext password without persisting env overrides', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-password-migration-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  const oldModel = process.env.TAIWEI_MODEL;
+  process.env.TAIWEI_HOME = directory;
+  process.env.TAIWEI_MODEL = 'environment-model';
+  try {
+    await writeFile(join(directory, 'config.json'), JSON.stringify({
+      model: 'stored-model',
+      auth: { enabled: true, username: 'admin', password: 'legacy secret' },
+    }));
+    const config = await loadConfig();
+    const stored = JSON.parse(await readFile(join(directory, 'config.json'), 'utf8')) as TaiweiConfig;
+    assert.equal(config.model, 'environment-model');
+    assert.equal(stored.model, 'stored-model');
+    assert.ok(isScryptPassword(stored.auth.password));
+    assert.ok(verifyPassword('legacy secret', stored.auth.password));
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    if (oldModel === undefined) delete process.env.TAIWEI_MODEL; else process.env.TAIWEI_MODEL = oldModel;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('danger detector covers destructive commands, warns on forced pushes, and appends custom patterns', () => {
   for (const command of [
     'rm -rf /', 'rm -rf ~', 'rm -r jxsg', 'rm -rf ./dist', 'rm -r /tmp/x',
@@ -69,6 +94,12 @@ test('danger detector covers destructive commands, warns on forced pushes, and a
   assert.equal(detectDanger('git push --force origin main')?.level, 'warn');
   assert.equal(detectDanger('echo deploy-production', ['deploy-production'])?.source, 'custom');
   assert.equal(detectDanger('rm ordinary-file.txt'), undefined);
+  for (const command of [
+    'cat ~/.taiwei/config.json',
+    'echo x > /Users/leo/.taiwei/gateway-sessions.json',
+    'python inspect.py $HOME/.taiwei/login-locks.json',
+  ]) assert.match(detectDanger(command)?.reason ?? '', /taiwei sensitive config/, command);
+  assert.equal(detectDanger('cat ~/.taiwei/memory.md'), undefined);
 });
 
 test('model state uses configured models in order and falls back only to current', async () => {

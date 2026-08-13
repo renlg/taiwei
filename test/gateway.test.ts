@@ -12,6 +12,7 @@ import { SessionStore } from '../src/gateway/sessions.js';
 import type { ChatMessage } from '../src/llm/client.js';
 import type { GatewayModelState } from '../src/gateway/server.js';
 import { DEFAULT_CONFIG, type TaiweiConfig } from '../src/config/config.js';
+import { hashPassword, isScryptPassword } from '../src/config/password.js';
 import { HookRunner } from '../src/hooks/runner.js';
 
 class MockChat implements ChatBridge {
@@ -348,6 +349,61 @@ test('gateway authenticates API requests and preserves tokens across restarts', 
     assert.equal(logout.status, 200);
     assert.match(logout.headers.get('set-cookie') ?? '', /Max-Age=0/);
     assert.equal((await fetch(`${baseUrl}/api/sessions`, { headers: { authorization: `Bearer ${token}` } })).status, 401);
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('gateway login migrates a legacy plaintext password to scrypt', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-password-migration-test-'));
+  const config = structuredClone(DEFAULT_CONFIG);
+  config.auth = { enabled: true, username: 'admin', password: 'legacy secret' };
+  const configState = {
+    load: async () => structuredClone(config),
+    save: async (next: TaiweiConfig) => { config.auth = structuredClone(next.auth); },
+  };
+  const server = createGatewayServer({
+    chat: new MockChat(),
+    sessions: new SessionStore(join(directory, 'sessions')),
+    authSessions: new AuthSessionStore(join(directory, 'gateway-sessions.json')),
+    loginLocks: new LoginLockStore(join(directory, 'login-locks.json')),
+    auth: config.auth,
+    configState,
+    log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  try {
+    const login = await fetch(`http://127.0.0.1:${port}/api/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'legacy secret' }),
+    });
+    assert.equal(login.status, 200);
+    assert.match(config.auth.password, /^scrypt\$[a-f0-9]{32}\$[a-f0-9]{128}$/);
+    assert.ok(isScryptPassword(config.auth.password));
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('gateway login verifies a scrypt password', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-scrypt-login-test-'));
+  const server = createGatewayServer({
+    chat: new MockChat(),
+    sessions: new SessionStore(join(directory, 'sessions')),
+    authSessions: new AuthSessionStore(join(directory, 'gateway-sessions.json')),
+    loginLocks: new LoginLockStore(join(directory, 'login-locks.json')),
+    auth: { enabled: true, username: 'admin', password: hashPassword('hashed secret') },
+    log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  try {
+    const login = await fetch(`http://127.0.0.1:${port}/api/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'hashed secret' }),
+    });
+    assert.equal(login.status, 200);
   } finally {
     await closeGateway(server);
     await rm(directory, { recursive: true, force: true });

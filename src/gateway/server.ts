@@ -10,6 +10,7 @@ import { SessionStore, type SessionToolCall } from './sessions.js';
 import { openSse, sendSse } from './sse.js';
 import { getCurrentModel, resolveModels, setCurrentModel, type ModelListResult } from '../config/model.js';
 import { DEFAULT_CONFIG, expandHome, loadConfig, resolveContextWindow, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
+import { hashPassword, isScryptPassword, verifyPassword } from '../config/password.js';
 import { getPaths } from '../util/paths.js';
 import { DEFAULT_DANGER_PATTERNS } from '../security/commands.js';
 import { ConfirmationBroker } from './confirmations.js';
@@ -29,6 +30,7 @@ export interface GatewayServerOptions {
   contextWindow?: (model: string) => number | Promise<number>;
   log?: (message: string) => void;
   auth?: { enabled: boolean; username: string; password: string };
+  authPasswordFromEnvironment?: boolean;
   authSessions?: AuthSessionStore;
   loginLocks?: LoginLockStore;
   uploadsDirectory?: string;
@@ -202,10 +204,11 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const body = await readJson(request) as { username?: unknown; password?: unknown };
         const ip = request.socket.remoteAddress ?? 'unknown';
         const username = typeof body?.username === 'string' ? body.username : '';
+        const configuredPassword = options.auth?.password ?? '';
         const valid = typeof body?.username === 'string'
           && typeof body?.password === 'string'
           && constantTimeEqual(body.username, options.auth?.username ?? '')
-          && constantTimeEqual(body.password, options.auth?.password ?? '');
+          && verifyPassword(body.password, configuredPassword);
         const attempt = await loginLocks.attempt(username, ip, valid);
         if (attempt.lock) {
           log(`[taiwei] Warning: login lock ${attempt.lock} reached for ${ip} (${username || '<empty>'})`);
@@ -215,6 +218,15 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         if (attempt.failed) {
           json(response, 401, { error: 'Invalid username or password' });
           return;
+        }
+        if (!options.authPasswordFromEnvironment && !isScryptPassword(configuredPassword)) {
+          const migratedPassword = hashPassword(body.password as string);
+          const config = await configState.load();
+          if (config.auth.password === configuredPassword) {
+            config.auth.password = migratedPassword;
+            await configState.save(config);
+          }
+          if (options.auth) options.auth.password = migratedPassword;
         }
         const token = await authSessions.create(body.username as string);
         json(response, 200, { token }, { 'set-cookie': sessionCookie(token) });

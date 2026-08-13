@@ -112,7 +112,7 @@ Health checks are available at `GET /api/health`. Model state is exposed through
 
 #### Dangerous-command confirmation
 
-Command confirmation is enabled by default. The built-in regex classes cover recursive forced removal of root/home/system paths (including `sudo rm`), `mkfs`, device-writing `dd`, `fdisk`/`format`, system shutdown/reboot/halt/poweroff, recursive permission/ownership changes, fork bombs, forced Git pushes, and `curl`/`wget` output piped into a shell. Strings in `security.patterns` are additional case-insensitive regular expressions; they append to the built-ins rather than replacing them. Invalid custom regexes are rejected by the settings API.
+Command confirmation is enabled by default. The built-in regex classes cover access to sensitive taiwei configuration files (`config.json`, `gateway-sessions.json`, and `login-locks.json`), recursive forced removal of root/home/system paths (including `sudo rm`), `mkfs`, device-writing `dd`, `fdisk`/`format`, system shutdown/reboot/halt/poweroff, recursive permission/ownership changes, fork bombs, forced Git pushes, and `curl`/`wget` output piped into a shell. Other taiwei state such as `memory.md`, chat sessions, and uploads is not covered by the sensitive-config rule. Strings in `security.patterns` are additional case-insensitive regular expressions; they append to the built-ins rather than replacing them. Invalid custom regexes are rejected by the settings API.
 
 When bash matches a rule, the chat stream pauses and emits:
 
@@ -159,7 +159,7 @@ Authentication is opt-in. It is strongly recommended whenever the gateway binds 
 }
 ```
 
-The password is stored as plain text because taiwei is a local tool; protect `~/.taiwei/config.json` with normal user-only filesystem permissions. You may leave `auth.password` empty in the file and supply `TAIWEI_AUTH_PASSWORD` when starting the gateway. If authentication is enabled and neither source provides a password, `taiwei serve` refuses to start with setup instructions.
+On config load/save, taiwei replaces a non-empty plaintext password with a salted scrypt value in the form `scrypt$<saltHex>$<hashHex>`. Existing plaintext configurations migrate automatically at startup or after their first successful login; login accepts both formats during migration. You may leave `auth.password` empty in the file and supply the plaintext `TAIWEI_AUTH_PASSWORD` only in the environment when starting the gateway. If authentication is enabled and neither source provides a password, `taiwei serve` refuses to start with setup instructions.
 
 Open the gateway and sign in through the login screen. Successful login creates a seven-day sliding session in `~/.taiwei/gateway-sessions.json`; the browser keeps both an HttpOnly cookie and a bearer token, and gateway restarts preserve active logins. Login lock state is persisted separately in `~/.taiwei/login-locks.json`: five failures for the same account and IP within a sliding ten-minute window trigger a ten-minute cooldown, ten cumulative failures permanently lock that account/IP pair, and ten failures across any accounts from one IP within a sliding ten-minute window lock the IP for ten minutes. A successful login resets the matching account/IP counters. Click the username in the top-right corner and choose **退出登录 / Logout** to invalidate the current token and return to login.
 

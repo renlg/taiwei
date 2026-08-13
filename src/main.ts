@@ -53,6 +53,7 @@ async function main(): Promise<void> {
       const server = createGatewayServer({
         chat: new AgentChatBridge(app),
         auth: app.config.auth,
+        authPasswordFromEnvironment: process.env.TAIWEI_AUTH_PASSWORD !== undefined,
         authSessions,
         loginLocks,
         hooks: app.hooks,
