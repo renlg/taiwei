@@ -46,6 +46,25 @@ const elements = {
   settingsClose: $('#settings-close'),
   settingsError: $('#settings-error'),
   settingsReset: $('#settings-reset'),
+  skillsOpen: $('#skills-open'),
+  skillsModal: $('#skills-modal'),
+  skillsClose: $('#skills-close'),
+  skillsError: $('#skills-error'),
+  skillList: $('#skill-list'),
+  skillDetail: $('#skill-detail'),
+  knowledgeOpen: $('#knowledge-open'),
+  knowledgeModal: $('#knowledge-modal'),
+  knowledgeClose: $('#knowledge-close'),
+  knowledgeError: $('#knowledge-error'),
+  knowledgeRebuild: $('#knowledge-rebuild'),
+  knowledgeUpload: $('#knowledge-upload'),
+  knowledgeFileInput: $('#knowledge-file-input'),
+  knowledgeIndexStatus: $('#knowledge-index-status'),
+  knowledgeSearchForm: $('#knowledge-search-form'),
+  knowledgeSearchInput: $('#knowledge-search-input'),
+  knowledgeResultsSection: $('#knowledge-results-section'),
+  knowledgeResults: $('#knowledge-results'),
+  knowledgeFiles: $('#knowledge-files'),
   workspaceInput: $('#workspace-input'),
   workspaceResolved: $('#workspace-resolved'),
   workspaceLabel: $('#workspace-label'),
@@ -210,6 +229,134 @@ async function openSettings() {
     elements.settingsModal.showModal();
     elements.workspaceInput.focus();
   } catch (error) { showToast(error.message); }
+}
+
+function closeResourcePanels(except) {
+  for (const modal of [elements.skillsModal, elements.knowledgeModal]) {
+    if (modal !== except && modal.open) modal.close();
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderResourceEmpty(container, message) {
+  const empty = document.createElement('div');
+  empty.className = 'resource-empty';
+  empty.textContent = message;
+  container.replaceChildren(empty);
+}
+
+async function showSkillDetail(name, button) {
+  elements.skillsError.textContent = '';
+  elements.skillList.querySelectorAll('.skill-item').forEach((item) => item.classList.toggle('active', item === button));
+  renderResourceEmpty(elements.skillDetail, '加载中…');
+  try {
+    const skill = await requestJson(`/api/skills/${encodeURIComponent(name)}`);
+    const header = document.createElement('header');
+    const title = document.createElement('h3'); title.textContent = skill.name;
+    const description = document.createElement('p'); description.textContent = skill.description;
+    header.append(title, description);
+    const content = document.createElement('div');
+    content.innerHTML = renderMarkdown(skill.content);
+    elements.skillDetail.replaceChildren(header, content);
+  } catch (error) {
+    elements.skillsError.textContent = error.message;
+    renderResourceEmpty(elements.skillDetail, '无法加载技能详情');
+  }
+}
+
+async function loadSkills() {
+  elements.skillsError.textContent = '';
+  renderResourceEmpty(elements.skillList, '加载中…');
+  renderResourceEmpty(elements.skillDetail, '选择一个技能查看详情');
+  try {
+    const { skills } = await requestJson('/api/skills');
+    if (!skills.length) {
+      renderResourceEmpty(elements.skillList, '暂无技能, 将 SKILL.md 放入 ~/.taiwei/skills/<name>/ 目录');
+      return;
+    }
+    elements.skillList.replaceChildren();
+    skills.forEach((skill) => {
+      const item = document.createElement('button');
+      item.type = 'button'; item.className = 'skill-item';
+      const name = document.createElement('strong'); name.textContent = skill.name;
+      const description = document.createElement('span'); description.textContent = skill.description;
+      item.append(name, description);
+      item.addEventListener('click', () => showSkillDetail(skill.name, item));
+      elements.skillList.append(item);
+    });
+  } catch (error) {
+    elements.skillsError.textContent = error.message;
+    renderResourceEmpty(elements.skillList, '技能加载失败');
+  }
+}
+
+async function openSkills() {
+  closeResourcePanels(elements.skillsModal);
+  if (!elements.skillsModal.open) elements.skillsModal.showModal();
+  elements.body.classList.remove('sidebar-open');
+  await loadSkills();
+}
+
+function renderKnowledge(data) {
+  const index = data.index;
+  elements.knowledgeIndexStatus.textContent = index.exists
+    ? `已索引 · ${index.chunks} chunks · ${index.hasVectors ? '含向量' : '仅 BM25'} · ${index.embedModel || '无 embedding 模型'}`
+    : '尚未建立索引';
+  if (!data.files.length) {
+    renderResourceEmpty(elements.knowledgeFiles, '知识库为空, 上传 .md/.txt 文件开始使用');
+    return;
+  }
+  elements.knowledgeFiles.replaceChildren();
+  data.files.forEach((file) => {
+    const row = document.createElement('div'); row.className = 'knowledge-file';
+    const info = document.createElement('div'); info.className = 'knowledge-file-info';
+    const path = document.createElement('span'); path.className = 'knowledge-file-path'; path.textContent = file.path; path.title = file.path;
+    const meta = document.createElement('span'); meta.className = 'knowledge-file-meta';
+    const modified = new Date(file.mtime);
+    meta.textContent = `${formatBytes(file.size)} · ${Number.isNaN(modified.getTime()) ? file.mtime : modified.toLocaleString('zh-CN')}`;
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'knowledge-delete'; remove.textContent = '×'; remove.setAttribute('aria-label', `删除 ${file.path}`);
+    remove.addEventListener('click', async () => {
+      if (!confirm(`确定删除知识库文件「${file.path}」吗？`)) return;
+      remove.disabled = true;
+      try {
+        await requestJson(`/api/knowledge?path=${encodeURIComponent(file.path)}`, { method: 'DELETE' });
+        showToast(`已删除 ${file.path}`);
+        await loadKnowledge();
+      } catch (error) { elements.knowledgeError.textContent = error.message; remove.disabled = false; }
+    });
+    info.append(path, meta); row.append(info, remove); elements.knowledgeFiles.append(row);
+  });
+}
+
+async function loadKnowledge() {
+  elements.knowledgeError.textContent = '';
+  renderResourceEmpty(elements.knowledgeFiles, '加载中…');
+  try { renderKnowledge(await requestJson('/api/knowledge')); }
+  catch (error) { elements.knowledgeError.textContent = error.message; renderResourceEmpty(elements.knowledgeFiles, '知识库加载失败'); }
+}
+
+async function openKnowledge() {
+  closeResourcePanels(elements.knowledgeModal);
+  if (!elements.knowledgeModal.open) elements.knowledgeModal.showModal();
+  elements.body.classList.remove('sidebar-open');
+  await loadKnowledge();
+}
+
+function renderKnowledgeResults(results) {
+  elements.knowledgeResultsSection.hidden = false;
+  if (!results.length) { renderResourceEmpty(elements.knowledgeResults, '未找到相关内容'); return; }
+  elements.knowledgeResults.replaceChildren();
+  results.forEach((result) => {
+    const item = document.createElement('article'); item.className = 'knowledge-result';
+    const score = document.createElement('span'); score.className = 'knowledge-result-score'; score.textContent = `score ${Number(result.score).toFixed(4)}`;
+    const text = document.createElement('div'); text.className = 'knowledge-result-text'; text.textContent = result.text;
+    item.append(score, text); elements.knowledgeResults.append(item);
+  });
 }
 
 function enqueueConfirmation(request, answerView) {
@@ -941,6 +1088,56 @@ elements.stop.addEventListener('click', async () => {
 
 elements.settingsOpen.addEventListener('click', openSettings);
 elements.settingsClose.addEventListener('click', () => elements.settingsModal.close());
+elements.skillsOpen.addEventListener('click', openSkills);
+elements.skillsClose.addEventListener('click', () => elements.skillsModal.close());
+elements.knowledgeOpen.addEventListener('click', openKnowledge);
+elements.knowledgeClose.addEventListener('click', () => elements.knowledgeModal.close());
+for (const modal of [elements.skillsModal, elements.knowledgeModal]) {
+  modal.addEventListener('click', (event) => { if (event.target === modal) modal.close(); });
+}
+elements.knowledgeUpload.addEventListener('click', () => elements.knowledgeFileInput.click());
+elements.knowledgeFileInput.addEventListener('change', async () => {
+  const [file] = elements.knowledgeFileInput.files;
+  elements.knowledgeFileInput.value = '';
+  if (!file) return;
+  elements.knowledgeError.textContent = '';
+  elements.knowledgeUpload.disabled = true;
+  elements.knowledgeUpload.textContent = '上传中…';
+  try {
+    await requestJson('/api/knowledge/upload', {
+      method: 'POST',
+      headers: { 'content-type': file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name) },
+      body: file,
+    });
+    showToast(`已上传 ${file.name}`);
+    await loadKnowledge();
+  } catch (error) { elements.knowledgeError.textContent = error.message; }
+  finally { elements.knowledgeUpload.disabled = false; elements.knowledgeUpload.textContent = '上传文件'; }
+});
+elements.knowledgeRebuild.addEventListener('click', async () => {
+  elements.knowledgeError.textContent = '';
+  elements.knowledgeRebuild.disabled = true;
+  elements.knowledgeRebuild.textContent = '重建中…';
+  try {
+    const result = await requestJson('/api/knowledge/rebuild', { method: 'POST' });
+    showToast(`索引完成：${result.chunks} chunks，${result.hasVectors ? '含向量' : '仅 BM25'}`);
+    await loadKnowledge();
+  } catch (error) { elements.knowledgeError.textContent = error.message; }
+  finally { elements.knowledgeRebuild.disabled = false; elements.knowledgeRebuild.textContent = '重建索引'; }
+});
+elements.knowledgeSearchForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const query = elements.knowledgeSearchInput.value.trim();
+  elements.knowledgeError.textContent = '';
+  if (!query) { elements.knowledgeError.textContent = '请输入搜索关键词'; return; }
+  const button = elements.knowledgeSearchForm.querySelector('button');
+  button.disabled = true; button.textContent = '搜索中…';
+  try {
+    const { results } = await requestJson(`/api/knowledge/search?q=${encodeURIComponent(query)}&limit=5`);
+    renderKnowledgeResults(results);
+  } catch (error) { elements.knowledgeError.textContent = error.message; }
+  finally { button.disabled = false; button.textContent = '搜索'; }
+});
 elements.patternAdd.addEventListener('click', () => addPatternRow());
 elements.settingsForm.addEventListener('submit', async (event) => {
   event.preventDefault();

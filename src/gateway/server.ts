@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -15,6 +15,10 @@ import { getPaths } from '../util/paths.js';
 import { DEFAULT_DANGER_PATTERNS } from '../security/commands.js';
 import { ConfirmationBroker } from './confirmations.js';
 import { HOOK_EVENTS, HookRunner, type HookCommands, type HookEvent } from '../hooks/runner.js';
+import { SkillLoader } from '../skills/loader.js';
+import { buildIndex, type RagIndexData } from '../rag/index.js';
+import { retrieve, type SearchResult } from '../rag/retrieve.js';
+import { createEmbedder } from '../rag/embedding.js';
 
 export interface GatewayModelState {
   getCurrentModel(): Promise<string>;
@@ -37,10 +41,15 @@ export interface GatewayServerOptions {
   confirmations?: ConfirmationBroker;
   configState?: { load(): Promise<TaiweiConfig>; save(config: TaiweiConfig): Promise<void> };
   hooks?: HookRunner;
+  skillLoader?: SkillLoader;
+  knowledgeDirectory?: string;
+  ragIndexPath?: string;
+  buildKnowledgeIndex?: () => Promise<RagIndexData>;
+  searchKnowledge?: (query: string, limit: number) => Promise<SearchResult[]>;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '6';
+const STATIC_ASSET_VERSION = '7';
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -65,6 +74,7 @@ const TEXT_EXTENSIONS = new Set([
   '.zsh', '.fish', '.xml', '.toml', '.ini', '.conf', '.env', '.rs', '.rb', '.php', '.swift',
   '.kt', '.kts', '.scala', '.vue', '.svelte', '.tex', '.rst', '.properties', '.gradle', '.dockerfile',
 ]);
+const KNOWLEDGE_EXTENSIONS = new Set(['.md', '.txt']);
 
 interface UploadedFile {
   name: string;
@@ -148,6 +158,35 @@ function withinDirectory(path: string, directory: string): boolean {
   return child !== '' && !child.startsWith('..') && !isAbsolute(child);
 }
 
+async function walkKnowledge(directory: string, root = directory): Promise<Array<{ path: string; size: number; mtime: string }>> {
+  const files: Array<{ path: string; size: number; mtime: string }> = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...await walkKnowledge(path, root));
+    else if (entry.isFile() && KNOWLEDGE_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
+      const info = await stat(path);
+      files.push({ path: relative(root, path).replaceAll('\\', '/'), size: info.size, mtime: info.mtime.toISOString() });
+    }
+  }
+  return files.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+async function knowledgeIndexStatus(path: string): Promise<{ exists: boolean; chunks: number; hasVectors: boolean; embedModel: string | null; updatedAt: string | null }> {
+  try {
+    const index = JSON.parse(await readFile(path, 'utf8')) as RagIndexData;
+    return {
+      exists: true,
+      chunks: Array.isArray(index.chunks) ? index.chunks.length : 0,
+      hasVectors: Array.isArray(index.vectors) && index.vectors.length > 0,
+      embedModel: index.embedModel ?? null,
+      updatedAt: index.createdAt ?? null,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { exists: false, chunks: 0, hasVectors: false, embedModel: null, updatedAt: null };
+    throw new HttpError(500, `无法读取知识库索引：${(error as Error).message}`);
+  }
+}
+
 async function attachmentContext(files: unknown, uploadsDirectory: string): Promise<string> {
   if (files === undefined) return '';
   if (!Array.isArray(files) || files.length > MAX_FILES_PER_MESSAGE) throw new HttpError(400, `files must contain at most ${MAX_FILES_PER_MESSAGE} uploads`);
@@ -179,6 +218,12 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const confirmations = options.confirmations ?? new ConfirmationBroker();
   const configState = options.configState ?? { load: loadConfig, save: saveConfig };
   const uploadsDirectory = resolve(options.uploadsDirectory ?? getPaths().uploads);
+  const taiweiPaths = getPaths();
+  const skillLoader = options.skillLoader ?? new SkillLoader();
+  const knowledgeDirectory = resolve(options.knowledgeDirectory ?? taiweiPaths.knowledge);
+  const ragIndexPath = resolve(options.ragIndexPath ?? taiweiPaths.ragIndex);
+  const buildKnowledgeIndex = options.buildKnowledgeIndex ?? (async () => buildIndex(createEmbedder(await configState.load())));
+  const searchKnowledge = options.searchKnowledge ?? (async (query: string, limit: number) => retrieve(query, limit, createEmbedder(await configState.load())));
   const authEnabled = options.auth?.enabled ?? false;
   if (authEnabled && !options.auth?.password) {
     throw new Error('Gateway auth is enabled but no password is set. Set auth.password in ~/.taiwei/config.json or TAIWEI_AUTH_PASSWORD.');
@@ -349,6 +394,87 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         runner.configure(config.hooks, config.hookTimeoutSeconds, workspace);
         const execution = await runner.test(body.command.trim(), body.event as HookEvent, sampleHookFields(body.event as HookEvent, workspace));
         json(response, 200, execution);
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/skills') {
+        const skills = await skillLoader.list();
+        json(response, 200, { skills: skills.map(({ name, description }) => ({ name, description })) });
+        return;
+      }
+      const skillRoute = pathname.match(/^\/api\/skills\/([^/]+)$/);
+      if (method === 'GET' && skillRoute) {
+        let name: string;
+        try { name = decodeURIComponent(skillRoute[1]); }
+        catch { throw new HttpError(400, '技能名称编码无效'); }
+        try {
+          const skill = await skillLoader.load(name);
+          json(response, 200, { name: skill.name, description: skill.description, content: await readFile(skill.path, 'utf8') });
+        } catch (error) {
+          if ((error as Error).message.startsWith('Skill not found:')) throw new HttpError(404, `技能不存在：${name}`);
+          throw error;
+        }
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/knowledge') {
+        await mkdir(knowledgeDirectory, { recursive: true });
+        json(response, 200, { files: await walkKnowledge(knowledgeDirectory), index: await knowledgeIndexStatus(ragIndexPath) });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/knowledge/rebuild') {
+        await mkdir(knowledgeDirectory, { recursive: true });
+        const files = await walkKnowledge(knowledgeDirectory);
+        if (!files.length) throw new HttpError(400, '知识库为空，请先上传 .md 或 .txt 文件');
+        let index: RagIndexData;
+        try { index = await buildKnowledgeIndex(); }
+        catch (error) { throw new HttpError(500, `重建知识库索引失败：${(error as Error).message}`); }
+        if (!index.chunks.length) throw new HttpError(400, '知识库文件中没有可索引的内容');
+        json(response, 200, {
+          ok: true,
+          chunks: index.chunks.length,
+          hasVectors: Boolean(index.vectors?.length),
+          embedModel: index.embedModel ?? null,
+        });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/knowledge/search') {
+        const url = new URL(request.url ?? '/', 'http://localhost');
+        const query = (url.searchParams.get('q') ?? '').trim();
+        if (!query) throw new HttpError(400, 'q 不能为空');
+        const requestedLimit = Number(url.searchParams.get('limit') ?? 5);
+        if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 20) throw new HttpError(400, 'limit 必须是 1 到 20 的整数');
+        const results = await searchKnowledge(query, requestedLimit);
+        json(response, 200, { results: results.map(({ text, score }) => ({ text, score })) });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/knowledge/upload') {
+        const url = new URL(request.url ?? '/', 'http://localhost');
+        const headerName = request.headers['x-file-name'];
+        const rawName = typeof headerName === 'string' ? headerName : url.searchParams.get('name') ?? '';
+        if (!rawName) throw new HttpError(400, '缺少文件名');
+        let decodedName = rawName;
+        try { decodedName = decodeURIComponent(rawName); } catch {}
+        const name = sanitizeFilename(decodedName);
+        if (!KNOWLEDGE_EXTENSIONS.has(extname(name).toLowerCase())) throw new HttpError(400, '知识库只支持 .md 和 .txt 文件');
+        const data = await readUpload(request);
+        await mkdir(knowledgeDirectory, { recursive: true });
+        await writeFile(join(knowledgeDirectory, name), data);
+        json(response, 201, { path: name });
+        return;
+      }
+      if (method === 'DELETE' && pathname === '/api/knowledge') {
+        const url = new URL(request.url ?? '/', 'http://localhost');
+        const requestedPath = url.searchParams.get('path') ?? '';
+        if (!requestedPath) throw new HttpError(400, 'path 不能为空');
+        if (isAbsolute(requestedPath) || !KNOWLEDGE_EXTENSIONS.has(extname(requestedPath).toLowerCase())) throw new HttpError(400, '知识库路径无效');
+        const target = resolve(knowledgeDirectory, requestedPath);
+        if (!withinDirectory(target, knowledgeDirectory)) throw new HttpError(400, '知识库路径无效');
+        const info = await stat(target).catch((error) => {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+          throw error;
+        });
+        if (!info?.isFile()) throw new HttpError(404, '知识库文件不存在');
+        await unlink(target);
+        json(response, 200, { ok: true });
         return;
       }
       if (method === 'POST' && pathname === '/api/confirm') {

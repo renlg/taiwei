@@ -30,6 +30,10 @@
         <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="关闭侧边栏">×</button>
       </div>
       <button class="new-chat sidebar-new" type="button"><span>+</span><span class="sidebar-label">新对话</span></button>
+      <nav class="sidebar-sections" aria-label="资源管理">
+        <button class="sidebar-section-button" id="skills-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">✦</span><span class="sidebar-label">技能</span></button>
+        <button class="sidebar-section-button" id="knowledge-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">▤</span><span class="sidebar-label">知识库</span></button>
+      </nav>
       <div class="history-heading"><span>历史会话</span><span id="session-count">0</span></div>
       <nav class="session-list" id="session-list" aria-label="历史会话"></nav>
       <div class="sidebar-footer">
@@ -178,6 +182,43 @@
       <div class="modal-error" id="settings-error" role="alert"></div>
       <footer><button class="secondary-button" id="settings-reset" type="button">重置安全默认值</button><button class="primary-button" id="settings-save" type="submit">保存设置</button></footer>
     </form>
+  </dialog>
+  <dialog class="modal management-modal" id="skills-modal">
+    <div class="modal-card management-card">
+      <header><div><h2>技能</h2><p>浏览安装在本机的 taiwei 技能</p></div><button class="icon-button" id="skills-close" type="button" aria-label="关闭">×</button></header>
+      <div class="management-error" id="skills-error" role="alert"></div>
+      <div class="skills-layout">
+        <div class="resource-list skill-list" id="skill-list" aria-label="技能列表"></div>
+        <article class="skill-detail markdown-view" id="skill-detail"><div class="resource-empty">选择一个技能查看详情</div></article>
+      </div>
+    </div>
+  </dialog>
+  <dialog class="modal management-modal" id="knowledge-modal">
+    <div class="modal-card management-card knowledge-card">
+      <header>
+        <div><h2>知识库</h2><p>管理用于本地检索的 Markdown 与文本文件</p></div>
+        <button class="icon-button" id="knowledge-close" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="knowledge-actions">
+        <button class="primary-button" id="knowledge-rebuild" type="button">重建索引</button>
+        <button class="secondary-button" id="knowledge-upload" type="button">上传文件</button>
+        <input id="knowledge-file-input" type="file" accept=".md,.txt,text/markdown,text/plain" hidden>
+      </div>
+      <div class="index-status" id="knowledge-index-status" aria-live="polite"></div>
+      <div class="management-error" id="knowledge-error" role="alert"></div>
+      <form class="knowledge-search" id="knowledge-search-form">
+        <input id="knowledge-search-input" type="search" placeholder="搜索知识库…" aria-label="搜索知识库">
+        <button class="small-button" type="submit">搜索</button>
+      </form>
+      <section class="knowledge-results-section" id="knowledge-results-section" hidden>
+        <h3>检索结果</h3>
+        <div class="knowledge-results" id="knowledge-results"></div>
+      </section>
+      <section class="knowledge-files-section">
+        <h3>文件</h3>
+        <div class="resource-list knowledge-files" id="knowledge-files"></div>
+      </section>
+    </div>
   </dialog>
   <div class="toast" id="toast" role="status"></div>
   <script type="module" src="/app.js?v={{ASSET_VERSION}}"></script>

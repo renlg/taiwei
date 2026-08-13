@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -96,7 +96,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=6/);
+    assert.match(pageBody, /logo\.png\?v=7/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -180,6 +180,68 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     const removed = await fetch(`${baseUrl}/api/sessions/${created.id}`, { method: 'DELETE' });
     assert.equal(removed.status, 204);
     assert.equal((await fetch(`${baseUrl}/api/sessions/${created.id}`)).status, 404);
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('gateway lists skills and safely manages knowledge files', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-resources-test-'));
+  const knowledgeDirectory = join(directory, 'knowledge');
+  const nestedDirectory = join(knowledgeDirectory, 'guides');
+  const skillPath = join(directory, 'skills', 'review', 'SKILL.md');
+  await mkdir(nestedDirectory, { recursive: true });
+  await mkdir(join(directory, 'skills', 'review'), { recursive: true });
+  await writeFile(join(nestedDirectory, 'intro.md'), '# Intro\n\nKnowledge text');
+  await writeFile(skillPath, '---\nname: review\ndescription: Review code\n---\n\n# Review\n');
+  const skill = { name: 'review', description: 'Review code', body: '# Review', path: skillPath };
+  const server = createGatewayServer({
+    chat: new MockChat(),
+    sessions: new SessionStore(join(directory, 'sessions')),
+    uploadsDirectory: join(directory, 'uploads'),
+    knowledgeDirectory,
+    ragIndexPath: join(directory, 'rag-index.json'),
+    skillLoader: { list: async () => [skill], load: async (name: string) => {
+      if (name !== 'review') throw new Error(`Skill not found: ${name}`);
+      return skill;
+    } },
+    log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    const skills = await (await fetch(`${baseUrl}/api/skills`)).json();
+    assert.deepEqual(skills, { skills: [{ name: 'review', description: 'Review code' }] });
+    const detail = await (await fetch(`${baseUrl}/api/skills/review`)).json() as { content: string };
+    assert.match(detail.content, /name: review/);
+    assert.equal((await fetch(`${baseUrl}/api/skills/missing`)).status, 404);
+
+    const initial = await (await fetch(`${baseUrl}/api/knowledge`)).json() as {
+      files: Array<{ path: string; size: number; mtime: string }>;
+      index: { exists: boolean; chunks: number; hasVectors: boolean };
+    };
+    assert.equal(initial.files[0].path, 'guides/intro.md');
+    assert.ok(initial.files[0].size > 0);
+    assert.equal(initial.index.exists, false);
+
+    const invalidUpload = await fetch(`${baseUrl}/api/knowledge/upload`, {
+      method: 'POST', headers: { 'x-file-name': 'notes.pdf' }, body: 'not allowed',
+    });
+    assert.equal(invalidUpload.status, 400);
+    const upload = await fetch(`${baseUrl}/api/knowledge/upload`, {
+      method: 'POST', headers: { 'x-file-name': encodeURIComponent('../notes.txt') }, body: 'uploaded knowledge',
+    });
+    assert.equal(upload.status, 201);
+    assert.deepEqual(await upload.json(), { path: 'notes.txt' });
+    assert.equal((await stat(join(knowledgeDirectory, 'notes.txt'))).isFile(), true);
+
+    const traversal = await fetch(`${baseUrl}/api/knowledge?path=${encodeURIComponent('../outside.md')}`, { method: 'DELETE' });
+    assert.equal(traversal.status, 400);
+    const deleted = await fetch(`${baseUrl}/api/knowledge?path=${encodeURIComponent('notes.txt')}`, { method: 'DELETE' });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), { ok: true });
+    assert.equal((await fetch(`${baseUrl}/api/knowledge?path=${encodeURIComponent('notes.txt')}`, { method: 'DELETE' })).status, 404);
   } finally {
     await closeGateway(server);
     await rm(directory, { recursive: true, force: true });
