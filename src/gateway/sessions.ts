@@ -18,12 +18,21 @@ export interface SessionMessage {
   status?: 'stopped' | 'error';
 }
 
+export interface SessionUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  contextWindow: number;
+  model: string;
+}
+
 export interface GatewaySession {
   id: string;
   title: string;
   createdAt: string;
   updatedAt: string;
   messages: SessionMessage[];
+  usage?: SessionUsage;
 }
 
 export interface SessionSummary {

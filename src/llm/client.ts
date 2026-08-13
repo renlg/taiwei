@@ -11,7 +11,13 @@ export type ChatMessage =
   | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[] }
   | { role: 'tool'; content: string; tool_call_id: string; name?: string };
 
-export interface ChatResult { content: string; toolCalls: ToolCall[]; }
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface ChatResult { content: string; toolCalls: ToolCall[]; usage?: TokenUsage; }
 
 export interface ChatRequest {
   baseUrl: string;
@@ -22,6 +28,20 @@ export interface ChatRequest {
   signal?: AbortSignal;
   timeoutMs?: number;
   onText?: (text: string) => void;
+}
+
+interface ProviderUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
+function normalizeUsage(usage?: ProviderUsage): TokenUsage | undefined {
+  if (!usage) return undefined;
+  const promptTokens = Number.isFinite(usage.prompt_tokens) ? Math.max(0, usage.prompt_tokens ?? 0) : 0;
+  const completionTokens = Number.isFinite(usage.completion_tokens) ? Math.max(0, usage.completion_tokens ?? 0) : 0;
+  const totalTokens = Number.isFinite(usage.total_tokens) ? Math.max(0, usage.total_tokens ?? 0) : promptTokens + completionTokens;
+  return { promptTokens, completionTokens, totalTokens };
 }
 
 function friendlyProviderError(status: number, body: string): Error {
@@ -37,16 +57,25 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
   const response = await fetch(`${request.baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST', signal,
     headers: { 'content-type': 'application/json', ...(request.apiKey ? { authorization: `Bearer ${request.apiKey}` } : {}) },
-    body: JSON.stringify({ model: request.model, messages: request.messages, tools: request.tools, stream: true }),
+    body: JSON.stringify({
+      model: request.model,
+      messages: request.messages,
+      tools: request.tools,
+      stream: true,
+      stream_options: { include_usage: true },
+    }),
   });
   if (!response.ok) throw friendlyProviderError(response.status, await response.text());
   if (response.headers.get('content-type')?.includes('application/json')) {
-    const payload = await response.json() as { choices?: Array<{ message?: { content?: string | null; tool_calls?: ToolCall[] } }> };
+    const payload = await response.json() as {
+      choices?: Array<{ message?: { content?: string | null; tool_calls?: ToolCall[] } }>;
+      usage?: ProviderUsage;
+    };
     const message = payload.choices?.[0]?.message;
     if (!message) throw new Error('Provider returned a malformed completion');
     const content = message.content ?? '';
     if (content) request.onText?.(content);
-    return { content, toolCalls: message.tool_calls ?? [] };
+    return { content, toolCalls: message.tool_calls ?? [], usage: normalizeUsage(payload.usage) };
   }
   if (!response.body) throw new Error('Provider returned an empty response body');
 
@@ -54,6 +83,7 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
   const decoder = new TextDecoder();
   let buffer = '';
   let content = '';
+  let usage: TokenUsage | undefined;
   const calls = new Map<number, ToolCall>();
   for (;;) {
     const { done, value } = await reader.read();
@@ -64,8 +94,12 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
       if (!data || data === '[DONE]') continue;
-      let payload: { choices?: Array<{ delta?: { content?: string; tool_calls?: Array<{ index: number; id?: string; type?: 'function'; function?: { name?: string; arguments?: string } }> } }> };
+      let payload: {
+        choices?: Array<{ delta?: { content?: string; tool_calls?: Array<{ index: number; id?: string; type?: 'function'; function?: { name?: string; arguments?: string } }> } }>;
+        usage?: ProviderUsage;
+      };
       try { payload = JSON.parse(data) as typeof payload; } catch { continue; }
+      usage = normalizeUsage(payload.usage) ?? usage;
       const delta = payload.choices?.[0]?.delta;
       if (delta?.content) { content += delta.content; request.onText?.(delta.content); }
       for (const part of delta?.tool_calls ?? []) {
@@ -78,5 +112,5 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
     }
     if (done) break;
   }
-  return { content, toolCalls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call) };
+  return { content, toolCalls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call), usage };
 }

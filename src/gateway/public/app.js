@@ -9,6 +9,11 @@ const elements = {
   loginSubmit: $('#login-submit'),
   appShell: $('#app-shell'),
   logout: $('#logout'),
+  userMenu: $('#user-menu'),
+  userTrigger: $('#user-trigger'),
+  userPopover: $('#user-popover'),
+  userAvatar: $('.user-avatar'),
+  usernameLabels: document.querySelectorAll('[data-username]'),
   sessionList: $('#session-list'),
   sessionCount: $('#session-count'),
   title: $('#session-title'),
@@ -26,6 +31,9 @@ const elements = {
   input: $('#input'),
   send: $('#send'),
   stop: $('#stop'),
+  contextMeter: $('#context-meter'),
+  contextFill: $('#context-fill'),
+  contextTooltip: $('#context-tooltip'),
   scrollBottom: $('#scroll-bottom'),
   theme: $('#theme-toggle'),
   sidebarToggle: $('#sidebar-toggle'),
@@ -45,6 +53,8 @@ const state = {
   models: [],
   currentModel: 'OpenAI compatible',
   switchingModel: false,
+  contextWindow: 128000,
+  usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, contextWindow: 128000, model: '' },
 };
 
 function escapeHtml(value) {
@@ -136,6 +146,22 @@ async function copyText(text, button) {
 function setStatus(kind, label) {
   elements.status.className = `status-pill ${kind}`;
   elements.status.querySelector('span').textContent = label;
+}
+
+function formatTokens(value) {
+  return Math.max(0, Number(value) || 0).toLocaleString('en-US');
+}
+
+function renderUsage(usage = state.usage) {
+  const contextWindow = Math.max(1, Number(usage.contextWindow) || state.contextWindow || 128000);
+  const totalTokens = Math.max(0, Number(usage.totalTokens) || 0);
+  const percentage = Math.min(100, (totalTokens / contextWindow) * 100);
+  elements.contextFill.style.width = `${percentage}%`;
+  elements.contextMeter.classList.toggle('warning', percentage >= 70 && percentage < 90);
+  elements.contextMeter.classList.toggle('danger', percentage >= 90);
+  elements.contextMeter.setAttribute('aria-valuenow', percentage.toFixed(1));
+  elements.contextMeter.setAttribute('aria-valuetext', `${percentage.toFixed(1)}%，${formatTokens(totalTokens)} / ${formatTokens(contextWindow)} tokens`);
+  elements.contextTooltip.textContent = `总计 ${formatTokens(totalTokens)} · 提示 ${formatTokens(usage.promptTokens)} · 补全 ${formatTokens(usage.completionTokens)} · 窗口 ${formatTokens(contextWindow)} tokens · ${percentage.toFixed(1)}%`;
 }
 
 function setStreaming(streaming) {
@@ -293,6 +319,16 @@ function renderConversation(session) {
   const messages = session?.messages || [];
   elements.welcome.classList.toggle('hidden', messages.length > 0);
   for (const message of messages) addMessage(message);
+  state.usage = session?.usage
+    ? { ...session.usage, contextWindow: state.contextWindow, model: state.currentModel }
+    : {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      contextWindow: state.contextWindow,
+      model: state.currentModel,
+    };
+  renderUsage();
   state.followOutput = true;
   autoScroll(true);
 }
@@ -310,6 +346,7 @@ async function authenticatedFetch(path, options) {
 function showLogin() {
   localStorage.removeItem('taiwei-token');
   state.authToken = '';
+  closeUserMenu();
   elements.appShell.hidden = true;
   elements.loginScreen.hidden = false;
   elements.loginPassword.value = '';
@@ -337,6 +374,11 @@ async function requestJson(path, options) {
 function closeModelMenu() {
   elements.modelMenu.hidden = true;
   elements.modelTrigger.setAttribute('aria-expanded', 'false');
+}
+
+function closeUserMenu() {
+  elements.userPopover.hidden = true;
+  elements.userTrigger.setAttribute('aria-expanded', 'false');
 }
 
 function renderModels() {
@@ -369,6 +411,10 @@ async function selectModel(name) {
       body: JSON.stringify({ model: name }),
     });
     state.currentModel = result.current;
+    state.contextWindow = result.contextWindow || state.contextWindow;
+    state.usage = { ...state.usage, contextWindow: state.contextWindow, model: state.currentModel };
+    if (state.current) state.current.usage = state.usage;
+    renderUsage();
     if (!state.models.includes(result.current)) state.models.push(result.current);
     renderModels();
     closeModelMenu();
@@ -394,6 +440,13 @@ elements.modelTrigger.addEventListener('click', () => {
 elements.modelOptions.addEventListener('click', (event) => {
   const option = event.target.closest('[data-model]');
   if (option) selectModel(option.dataset.model);
+});
+
+elements.userTrigger.addEventListener('click', () => {
+  const opening = elements.userPopover.hidden;
+  elements.userPopover.hidden = !opening;
+  elements.userTrigger.setAttribute('aria-expanded', String(opening));
+  if (opening) elements.logout.focus();
 });
 
 async function refreshSessions() {
@@ -460,6 +513,7 @@ async function submit(message) {
   const toolViews = [];
   let answer = '';
   let serverError = '';
+  let usageCheckpoint = 0;
   state.controller = new AbortController();
   setStreaming(true);
   try {
@@ -489,6 +543,12 @@ async function submit(message) {
         if (item.event === 'token') {
           answer += item.data.text || '';
           updateAssistant(answerView, answer);
+          const estimatedTokens = Math.ceil(Math.max(0, answer.length - usageCheckpoint) / 4);
+          renderUsage({
+            ...state.usage,
+            completionTokens: state.usage.completionTokens + estimatedTokens,
+            totalTokens: state.usage.totalTokens + estimatedTokens,
+          });
         } else if (item.event === 'tool') {
           const call = { name: item.data.name, args: item.data.args || {} };
           assistantMessage.toolCalls.push(call);
@@ -508,6 +568,18 @@ async function submit(message) {
             target.details.classList.add('done');
             target.details.querySelector('.tool-detail').textContent = `${JSON.stringify(target.call.args, null, 2)}\n\n结果\n${item.data.result}`;
           }
+        } else if (item.event === 'usage') {
+          state.usage = {
+            promptTokens: item.data.promptTokens || 0,
+            completionTokens: item.data.completionTokens || 0,
+            totalTokens: item.data.totalTokens || 0,
+            contextWindow: item.data.contextWindow || state.contextWindow,
+            model: item.data.model || state.currentModel,
+          };
+          state.contextWindow = state.usage.contextWindow;
+          state.current.usage = state.usage;
+          usageCheckpoint = answer.length;
+          renderUsage();
         } else if (item.event === 'done') {
           answer = item.data.text || answer;
           if (item.data.sessionId) state.current.id = item.data.sessionId;
@@ -550,6 +622,8 @@ async function submit(message) {
           const fresh = await requestJson(`/api/sessions/${encodeURIComponent(state.current.id)}`);
           state.current = fresh;
           elements.title.textContent = fresh.title;
+          state.usage = fresh.usage ?? state.usage;
+          renderUsage();
           renderSessionList();
         }
       } catch {}
@@ -600,6 +674,7 @@ elements.scrollBottom.addEventListener('click', () => {
 
 document.addEventListener('click', (event) => {
   if (!elements.modelSwitcher.contains(event.target)) closeModelMenu();
+  if (!elements.userMenu.contains(event.target)) closeUserMenu();
   const codeButton = event.target.closest('[data-copy-code]');
   if (codeButton) copyText(codeButton.closest('.code-block').querySelector('code').textContent, codeButton);
   const chip = event.target.closest('[data-prompt]');
@@ -611,7 +686,14 @@ document.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { closeModelMenu(); elements.modelTrigger.focus(); }
+  if (event.key === 'Escape') {
+    const modelWasOpen = !elements.modelMenu.hidden;
+    const userWasOpen = !elements.userPopover.hidden;
+    closeModelMenu();
+    closeUserMenu();
+    if (userWasOpen) elements.userTrigger.focus();
+    else if (modelWasOpen) elements.modelTrigger.focus();
+  }
 });
 
 document.querySelectorAll('.new-chat').forEach((button) => button.addEventListener('click', createSession));
@@ -680,10 +762,14 @@ async function loadChat() {
     showChat();
     state.sessions = sessions;
     state.currentModel = models?.current || info.model || state.currentModel;
+    state.contextWindow = info.contextWindow || state.contextWindow;
     state.models = models?.models?.length ? models.models : [state.currentModel];
     if (!state.models.includes(state.currentModel)) state.models.unshift(state.currentModel);
     renderModels();
-    elements.logout.hidden = !info.authEnabled;
+    const username = info.username || '';
+    elements.usernameLabels.forEach((element) => { element.textContent = username; });
+    elements.userAvatar.textContent = Array.from(username)[0]?.toUpperCase() || 'U';
+    elements.userTrigger.hidden = !info.authEnabled;
     renderSessionList();
     if (sessions.length) await loadSession(sessions[0].id);
     else renderConversation(null);

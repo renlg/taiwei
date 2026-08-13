@@ -34,7 +34,6 @@
       <nav class="session-list" id="session-list" aria-label="历史会话"></nav>
       <div class="sidebar-footer">
         <div class="local-status"><span class="local-dot"></span><span class="sidebar-label">本地安全运行</span></div>
-        <button class="logout-button" id="logout" type="button" title="退出登录" hidden><span>⇥</span><span class="sidebar-label">退出</span></button>
       </div>
     </aside>
     <div class="mobile-scrim" id="mobile-scrim"></div>
@@ -47,24 +46,23 @@
             <h1 id="session-title">新会话</h1>
             <div class="topbar-meta">
               <span class="status-pill idle" id="status-pill"><i></i><span>就绪</span></span>
-              <div class="model-switcher" id="model-switcher">
-                <button class="model-trigger" id="model-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
-                  <span class="model-spark" aria-hidden="true">✦</span>
-                  <span class="model-name" id="model-name">OpenAI compatible</span>
-                  <span class="model-chevron" aria-hidden="true">⌄</span>
-                </button>
-                <div class="model-menu" id="model-menu" role="listbox" aria-label="选择模型" hidden>
-                  <div class="model-menu-heading">选择模型</div>
-                  <div class="model-options" id="model-options"></div>
-                  <div class="model-error" id="model-error" role="status"></div>
-                </div>
-              </div>
             </div>
           </div>
         </div>
         <div class="topbar-actions">
           <button class="icon-button" id="theme-toggle" type="button" aria-label="切换主题">☾</button>
-          <button class="new-chat compact-new" type="button"><span>+</span><span>新对话</span></button>
+          <div class="user-menu" id="user-menu">
+            <button class="user-trigger" id="user-trigger" type="button" aria-haspopup="menu" aria-expanded="false" hidden>
+              <span class="user-avatar" aria-hidden="true"></span>
+              <span class="username" data-username></span>
+              <span class="user-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div class="user-popover" id="user-popover" role="menu" hidden>
+              <span class="user-popover-label">当前账号</span>
+              <strong data-username></strong>
+              <button class="logout-button" id="logout" type="button" role="menuitem">退出登录 / Logout</button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -97,11 +95,31 @@
         <form class="composer" id="composer">
           <textarea id="input" rows="1" maxlength="20000" placeholder="给 taiwei 发消息…" aria-label="消息"></textarea>
           <div class="composer-footer">
-            <span class="composer-hint">Enter 发送 · Shift + Enter 换行</span>
-            <button class="send-button" id="send" type="submit" aria-label="发送">↑</button>
-            <button class="stop-button" id="stop" type="button" aria-label="停止"><span></span> 停止</button>
+            <div class="composer-controls">
+              <div class="model-switcher" id="model-switcher">
+                <button class="model-trigger" id="model-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="model-spark" aria-hidden="true">✦</span>
+                  <span class="model-name" id="model-name">OpenAI compatible</span>
+                  <span class="model-chevron" aria-hidden="true">⌄</span>
+                </button>
+                <div class="model-menu" id="model-menu" role="listbox" aria-label="选择模型" hidden>
+                  <div class="model-menu-heading">选择模型</div>
+                  <div class="model-options" id="model-options"></div>
+                  <div class="model-error" id="model-error" role="status"></div>
+                </div>
+              </div>
+              <span class="composer-hint">Enter 发送 · Shift + Enter 换行</span>
+            </div>
+            <div class="composer-actions">
+              <button class="send-button" id="send" type="submit" aria-label="发送">↑</button>
+              <button class="stop-button" id="stop" type="button" aria-label="停止"><span></span> 停止</button>
+            </div>
           </div>
         </form>
+        <div class="context-meter" id="context-meter" role="progressbar" tabindex="0" aria-label="上下文窗口使用量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="context-track"><div class="context-fill" id="context-fill"></div></div>
+          <div class="context-tooltip" id="context-tooltip" role="tooltip"></div>
+        </div>
         <p class="disclaimer">taiwei 可能会犯错。重要信息请仔细核对。</p>
       </div>
     </main>

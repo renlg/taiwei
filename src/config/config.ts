@@ -4,6 +4,8 @@ import { ensureTaiweiHome } from '../util/paths.js';
 export interface TaiweiConfig {
   model: string;
   models?: string[];
+  contextWindow?: number;
+  contextWindows?: Record<string, number>;
   baseUrl: string;
   apiKey: string;
   maxTurns: number;
@@ -21,6 +23,7 @@ export interface TaiweiConfig {
 
 export const DEFAULT_CONFIG: TaiweiConfig = {
   model: 'gpt-4.1-mini',
+  contextWindow: 128_000,
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
   maxTurns: 50,
@@ -35,6 +38,13 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
     password: '',
   },
 };
+
+export function resolveContextWindow(config: TaiweiConfig, model = config.model): number {
+  const configured = config.contextWindows?.[model] ?? config.contextWindow;
+  return typeof configured === 'number' && Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : DEFAULT_CONFIG.contextWindow ?? 128_000;
+}
 
 export async function loadConfig(): Promise<TaiweiConfig> {
   const paths = await ensureTaiweiHome();

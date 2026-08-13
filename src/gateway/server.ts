@@ -8,6 +8,7 @@ import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
 import { SessionStore, type SessionToolCall } from './sessions.js';
 import { openSse, sendSse } from './sse.js';
 import { getCurrentModel, resolveModels, setCurrentModel, type ModelListResult } from '../config/model.js';
+import { loadConfig, resolveContextWindow } from '../config/config.js';
 
 export interface GatewayModelState {
   getCurrentModel(): Promise<string>;
@@ -20,13 +21,14 @@ export interface GatewayServerOptions {
   publicDirectory?: string;
   sessions?: SessionStore;
   modelState?: GatewayModelState;
+  contextWindow?: (model: string) => number | Promise<number>;
   log?: (message: string) => void;
   auth?: { enabled: boolean; username: string; password: string };
   authSessions?: AuthSessionStore;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '2';
+const STATIC_ASSET_VERSION = '3';
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -96,6 +98,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   }
   const log = options.log ?? console.log;
   const modelState: GatewayModelState = options.modelState ?? { getCurrentModel, resolveModels, setCurrentModel };
+  const contextWindowFor = options.contextWindow ?? (async (model: string) => resolveContextWindow(await loadConfig(), model));
   const loginFailures = new Map<string, { count: number; windowStartedAt: number }>();
   return createServer(async (request, response) => {
     const started = Date.now();
@@ -139,6 +142,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       let authenticatedToken: string | undefined;
+      let authenticatedUsername: string | undefined;
       if (authEnabled && pathname.startsWith('/api/')) {
         authenticatedToken = requestToken(request);
         const authenticated = authenticatedToken ? await authSessions.authenticate(authenticatedToken) : undefined;
@@ -146,6 +150,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           json(response, 401, { error: 'unauthorized' });
           return;
         }
+        authenticatedUsername = authenticated.username;
       }
       if (method === 'POST' && pathname === '/api/logout') {
         if (authenticatedToken) await authSessions.delete(authenticatedToken);
@@ -153,7 +158,13 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'GET' && pathname === '/api/info') {
-        json(response, 200, { model: await modelState.getCurrentModel(), authEnabled });
+        const model = await modelState.getCurrentModel();
+        json(response, 200, {
+          model,
+          contextWindow: await contextWindowFor(model),
+          authEnabled,
+          ...(authenticatedUsername ? { username: authenticatedUsername } : {}),
+        });
         return;
       }
       if (method === 'GET' && pathname === '/api/models') {
@@ -179,7 +190,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           return;
         }
         await modelState.setCurrentModel(model);
-        json(response, 200, { ok: true, current: model });
+        json(response, 200, { ok: true, current: model, contextWindow: await contextWindowFor(model) });
         return;
       }
       if (method === 'GET' && pathname === '/api/sessions') {
@@ -224,6 +235,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         }
         const message = body.message.trim();
         const history = sessions.toChatHistory(session);
+        const activeModel = await modelState.getCurrentModel();
+        const activeContextWindow = await contextWindowFor(activeModel);
         if (!session.messages.some((item) => item.role === 'user')) session.title = sessions.titleFrom(message) || session.title;
         session.messages.push({ role: 'user', content: message, timestamp: new Date().toISOString() });
         openSse(response);
@@ -245,6 +258,16 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
               const call = [...toolCalls].reverse().find((item) => item.name === event.name && item.result === undefined);
               if (call) call.result = event.result;
               sendSse(response, 'tool_result', { name: event.name, result: event.result });
+            } else if (event.type === 'usage') {
+              const previous = session.usage;
+              session.usage = {
+                promptTokens: (previous?.promptTokens ?? 0) + event.usage.promptTokens,
+                completionTokens: (previous?.completionTokens ?? 0) + event.usage.completionTokens,
+                totalTokens: (previous?.totalTokens ?? 0) + event.usage.totalTokens,
+                contextWindow: activeContextWindow,
+                model: event.model || activeModel,
+              };
+              sendSse(response, 'usage', session.usage);
             } else {
               finalText = event.text;
               sendSse(response, 'done', { text: event.text, sessionId: session.id });

@@ -1,6 +1,7 @@
 import type { AgentContext } from './context.js';
 import type { TaiweiConfig } from '../config/config.js';
 import { streamChat } from '../llm/client.js';
+import type { TokenUsage } from '../llm/client.js';
 import { toOpenAITool } from '../llm/tools.js';
 import type { ToolRegistry } from '../tools/registry.js';
 
@@ -17,6 +18,7 @@ export type AgentEvent =
   | { type: 'token'; text: string }
   | { type: 'tool'; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; name: string; result: string }
+  | { type: 'usage'; usage: TokenUsage; model: string }
   | { type: 'done'; text: string };
 
 export async function runAgentTurn(
@@ -43,6 +45,7 @@ export async function runAgentTurn(
         options.onEvent?.({ type: 'token', text });
       },
     });
+    if (result.usage) options.onEvent?.({ type: 'usage', usage: result.usage, model });
     conversation.push({ role: 'assistant', content: result.content || null, ...(result.toolCalls.length ? { tool_calls: result.toolCalls } : {}) });
     if (!result.toolCalls.length) {
       const text = fullText || result.content;

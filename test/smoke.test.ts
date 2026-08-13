@@ -26,6 +26,7 @@ test('config initializes with defaults and honors environment overrides', async 
     const config = await loadConfig();
     assert.equal(config.model, 'test-model');
     assert.equal(config.baseUrl, 'https://api.openai.com/v1');
+    assert.equal(config.contextWindow, 128_000);
     assert.equal(config.maxTurns, 50);
     assert.equal(config.auth.enabled, false);
     assert.equal(config.auth.username, 'admin');
@@ -107,11 +108,16 @@ test('cron schedule parser handles intervals and cron expressions', () => {
 });
 
 test('LLM client assembles streamed text and fragmented tool calls', async () => {
-  const server = createServer((_request, response) => {
+  let requestPayload: { stream_options?: { include_usage?: boolean } } = {};
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requestPayload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof requestPayload;
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     response.write('data: {"choices":[{"delta":{"content":"Hello "}}]}\n\n');
     response.write('data: {"choices":[{"delta":{"content":"world","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"memory_","arguments":"{\\"te"}}]}}]}\n\n');
     response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"append","arguments":"xt\\":\\"note\\"}"}}]}}]}\n\n');
+    response.write('data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}\n\n');
     response.end('data: [DONE]\n\n');
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -126,6 +132,8 @@ test('LLM client assembles streamed text and fragmented tool calls', async () =>
     });
     assert.equal(streamed, 'Hello world');
     assert.equal(result.content, 'Hello world');
+    assert.deepEqual(result.usage, { promptTokens: 11, completionTokens: 3, totalTokens: 14 });
+    assert.deepEqual(requestPayload.stream_options, { include_usage: true });
     assert.deepEqual(result.toolCalls[0], { id: 'call_1', type: 'function', function: { name: 'memory_append', arguments: '{"text":"note"}' } });
   } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
 });

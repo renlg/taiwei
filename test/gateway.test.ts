@@ -22,6 +22,7 @@ class MockChat implements ChatBridge {
       { type: 'tool', name: 'read', args: { path: 'README.md' } },
       { type: 'tool_result', name: 'read', result: 'contents' },
       { type: 'token', text: 'world' },
+      { type: 'usage', usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 }, model: 'free' },
       { type: 'done', text: 'Hello world' },
     ] satisfies AgentEvent[]) sink.event(event);
   }
@@ -43,7 +44,14 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     resolveModels: async () => ({ models: ['good', 'free'], current: currentModel, source: 'config' }),
     setCurrentModel: async (model) => { currentModel = model; },
   };
-  const server = createGatewayServer({ chat: mock, sessions, modelState, publicDirectory: directory, log: () => {} });
+  const server = createGatewayServer({
+    chat: mock,
+    sessions,
+    modelState,
+    contextWindow: async () => 1_000,
+    publicDirectory: directory,
+    log: () => {},
+  });
   const port = await listenGateway(server, '127.0.0.1', 0);
   const baseUrl = `http://127.0.0.1:${port}`;
   try {
@@ -55,7 +63,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     const switched = await fetch(`${baseUrl}/api/model`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'free' }),
     });
-    assert.deepEqual(await switched.json(), { ok: true, current: 'free' });
+    assert.deepEqual(await switched.json(), { ok: true, current: 'free', contextWindow: 1_000 });
     assert.deepEqual(await (await fetch(`${baseUrl}/api/model`)).json(), { current: 'free' });
     const unknown = await fetch(`${baseUrl}/api/model`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'missing' }),
@@ -68,7 +76,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=2/);
+    assert.match(pageBody, /logo\.png\?v=3/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -103,21 +111,27 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.match(body, /event: token\ndata: \{"text":"Hello "\}/);
     assert.match(body, /event: tool\ndata: \{"name":"read","args":\{"path":"README.md"\}\}/);
     assert.match(body, /event: tool_result/);
+    assert.match(body, /event: usage\ndata: \{"promptTokens":10,"completionTokens":2,"totalTokens":12,"contextWindow":1000,"model":"free"\}/);
     assert.match(body, new RegExp(`event: done\\ndata: \\{"text":"Hello world","sessionId":"${created.id}"\\}`));
 
     const detail = await fetch(`${baseUrl}/api/sessions/${created.id}`);
-    const persisted = await detail.json() as { title: string; messages: Array<{ role: string; content: string; toolCalls?: unknown[] }> };
+    const persisted = await detail.json() as {
+      title: string;
+      messages: Array<{ role: string; content: string; toolCalls?: unknown[] }>;
+      usage?: { promptTokens: number; completionTokens: number; totalTokens: number; contextWindow: number; model: string };
+    };
     assert.equal(persisted.title, 'hello');
     assert.deepEqual(persisted.messages.map(({ role, content }) => ({ role, content })), [
       { role: 'user', content: 'hello' }, { role: 'assistant', content: 'Hello world' },
     ]);
     assert.equal(persisted.messages[1].toolCalls?.length, 1);
+    assert.deepEqual(persisted.usage, { promptTokens: 10, completionTokens: 2, totalTokens: 12, contextWindow: 1_000, model: 'free' });
 
     const secondChat = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: 'again', sessionId: created.id }),
     });
     assert.equal(secondChat.status, 200);
-    await secondChat.text();
+    assert.match(await secondChat.text(), /event: usage\ndata: \{"promptTokens":20,"completionTokens":4,"totalTokens":24,"contextWindow":1000,"model":"free"\}/);
     assert.deepEqual(mock.histories[1], [
       { role: 'user', content: 'hello' }, { role: 'assistant', content: 'Hello world' },
     ]);
@@ -173,6 +187,8 @@ test('gateway authenticates API requests and preserves tokens across restarts', 
 
     const authorized = await fetch(`${baseUrl}/api/sessions`, { headers: { authorization: `Bearer ${token}` } });
     assert.equal(authorized.status, 200);
+    const info = await fetch(`${baseUrl}/api/info`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal((await info.json() as { username?: string }).username, 'admin');
     const cookieAuthorized = await fetch(`${baseUrl}/api/sessions`, { headers: { cookie: `taiwei_token=${token}` } });
     assert.equal(cookieAuthorized.status, 200);
 
