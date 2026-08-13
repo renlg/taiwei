@@ -1,6 +1,6 @@
 # taiwei
 
-`taiwei` is a proactive, terminal-only AI agent inspired by opencode and OpenClaw. It supports streamed OpenAI-compatible models, tool calls, skills, scheduled autonomous turns, MCP servers, durable memory, local RAG, and plugins—without a web UI or daemon.
+`taiwei` is a proactive AI agent inspired by opencode and OpenClaw. It supports a terminal CLI and local browser chat, streamed OpenAI-compatible models, tool calls, skills, scheduled autonomous turns, MCP servers, durable memory, local RAG, and plugins.
 
 ## Install and initialize
 
@@ -20,7 +20,11 @@ Edit `~/.taiwei/config.json`, or set environment variables:
   "baseUrl": "https://api.openai.com/v1",
   "apiKey": "",
   "maxTurns": 50,
-  "requestTimeoutMs": 120000
+  "requestTimeoutMs": 120000,
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 8688
+  }
 }
 ```
 
@@ -31,6 +35,8 @@ Edit `~/.taiwei/config.json`, or set environment variables:
 ```bash
 ./bin/taiwei                         # interactive REPL
 ./bin/taiwei "summarize this repo"   # one-shot agent turn
+./bin/taiwei serve                   # local web chat at http://127.0.0.1:8688
+./bin/taiwei serve --port 9000       # override the configured port
 ./bin/taiwei --help
 ./bin/taiwei --version
 ```
@@ -54,6 +60,14 @@ Cron arguments that contain spaces should be quoted:
 ```
 
 Ctrl+C cancels an active LLM request or tool. Scheduled turns wait for an active interactive turn to finish, run in a fresh conversation, then print a notification banner in the REPL.
+
+### Local web chat
+
+Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The gateway streams answer tokens and tool activity into a plain browser UI. Stop cancels the current LLM request or tool through the same cooperative interrupt mechanism as the CLI.
+
+The v1.1 gateway uses one in-memory conversation shared by clients connected to that server process. Conversation history survives between turns, but resets when the gateway restarts; browser refresh does not clear the server-side conversation. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
+
+Health checks are available at `GET /api/health`.
 
 ## State and extensions
 
