@@ -139,6 +139,7 @@ export async function runAgentTurn(
       output ??= await registry.dispatch(call.function.name, args, {
         signal: options.signal,
         cwd,
+        agentContext: context,
         authorizeCommand: options.authorizeCommand
           ? (command, commandCwd) => options.authorizeCommand!(command, commandCwd, options.confirmDanger, options.signal)
           : undefined,

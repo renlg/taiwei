@@ -1,12 +1,13 @@
 import type { ChatMessage } from '../llm/client.js';
 import type { MemoryStore } from '../memory/store.js';
-import { renderSkills } from '../skills/inject.js';
+import { renderSkillIndex, renderSkills } from '../skills/inject.js';
 import type { Skill, SkillLoader } from '../skills/loader.js';
 
 const BASE_PERSONA = `You are taiwei, a capable proactive AI assistant running in a terminal. Be concise, practical, and transparent. Use tools when they improve accuracy. Preserve user data and ask before destructive actions.`;
 
 export class AgentContext {
   readonly messages: ChatMessage[] = [];
+  private readonly availableSkills = new Map<string, Skill>();
   private readonly activeSkills = new Map<string, Skill>();
   private retrievedContext = '';
 
@@ -15,8 +16,10 @@ export class AgentContext {
   async systemPrompt(workspace?: string): Promise<string> {
     const sections = [BASE_PERSONA, `Current date and time: ${new Date().toString()}`];
     if (workspace) sections.push(`Current workspace (default working directory for tools): ${workspace}`);
-    const skills = renderSkills([...this.activeSkills.values()].filter((skill) => !this.skillLoader.isDisabled(skill)));
-    if (skills) sections.push(skills);
+    const availableSkills = renderSkillIndex([...this.availableSkills.values()].filter((skill) => !this.skillLoader.isDisabled(skill)));
+    if (availableSkills) sections.push(availableSkills);
+    const activeSkills = renderSkills([...this.activeSkills.values()].filter((skill) => !this.skillLoader.isDisabled(skill)));
+    if (activeSkills) sections.push(activeSkills);
     const memory = (await this.memory.tail()).trim();
     if (memory) sections.push(`Persistent memory (may be outdated; use as background only):\n${memory}`);
     if (this.retrievedContext) sections.push(this.retrievedContext);
@@ -30,6 +33,11 @@ export class AgentContext {
   }
 
   activateSkill(skill: Skill): void { this.activeSkills.set(skill.name, skill); }
+
+  setAvailableSkills(skills: Skill[]): void {
+    this.availableSkills.clear();
+    for (const skill of skills) this.availableSkills.set(skill.name, skill);
+  }
 
   unloadSkill(name: string): boolean {
     return this.activeSkills.delete(name);

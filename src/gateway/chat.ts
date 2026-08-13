@@ -26,7 +26,7 @@ export class AgentChatBridge implements ChatBridge {
     for (const skill of this.app.context.listActiveSkills()) context.activateSkill(skill);
     if (this.app.config.autoLoadSkills !== false) {
       try {
-        for (const skill of await this.app.skills.list()) context.activateSkill(skill);
+        context.setAvailableSkills(await this.app.skills.list());
       } catch { /* Missing or unreadable skills must never block a web chat turn. */ }
     }
     try {

@@ -22,6 +22,7 @@ import { AgentContext } from '../src/agent/context.js';
 import { runAgentTurn } from '../src/agent/loop.js';
 import { MemoryStore } from '../src/memory/store.js';
 import { SkillLoader } from '../src/skills/loader.js';
+import { createLoadSkillTool } from '../src/tools/impl/skill.js';
 
 const emptyHooks = (): HookCommands => ({ beforeMessage: [], beforeLLM: [], afterLLM: [], beforeTool: [], afterTool: [] });
 
@@ -205,6 +206,41 @@ test('skill loader omits disabled skills from list and load', async () => {
     assert.deepEqual((await loader.list({ includeDisabled: true })).map((skill) => skill.name), ['disabled', 'enabled']);
     await assert.rejects(loader.load('disabled'), /Skill not found: disabled/);
     assert.equal((await loader.load('disabled', { includeDisabled: true })).name, 'disabled');
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('load_skill activates full instructions and rejects disabled or missing skills without throwing', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-load-skill-tool-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  await mkdir(join(directory, 'skills', 'weather-dir'), { recursive: true });
+  await mkdir(join(directory, 'skills', 'disabled-dir'), { recursive: true });
+  await writeFile(join(directory, 'skills', 'weather-dir', 'SKILL.md'), '---\nname: weather\ndescription: Forecast weather\n---\n\nWEATHER_BODY_SENTINEL');
+  await writeFile(join(directory, 'skills', 'disabled-dir', 'SKILL.md'), '---\nname: disabled\ndescription: Disabled instructions\n---\n\nDISABLED_BODY_SENTINEL');
+  try {
+    const loader = new SkillLoader(['disabled-dir']);
+    const context = new AgentContext(new MemoryStore(), loader);
+    context.setAvailableSkills(await loader.list());
+    const registry = new ToolRegistry();
+    registry.register(createLoadSkillTool(loader));
+    const toolContext = { cwd: directory, agentContext: context };
+
+    const before = await context.systemPrompt();
+    assert.match(before, /- weather: Forecast weather/);
+    assert.doesNotMatch(before, /WEATHER_BODY_SENTINEL/);
+
+    assert.equal(await registry.dispatch('load_skill', { name: 'weather-dir' }, toolContext), 'WEATHER_BODY_SENTINEL');
+    assert.equal(await registry.dispatch('load_skill', { name: 'weather-dir' }, toolContext), 'WEATHER_BODY_SENTINEL');
+    const after = await context.systemPrompt();
+    assert.match(after, /Active skills:\n## weather/);
+    assert.match(after, /WEATHER_BODY_SENTINEL/);
+
+    assert.equal(await registry.dispatch('load_skill', { name: 'disabled-dir' }, toolContext), 'Skill "disabled-dir" is disabled');
+    assert.equal(await registry.dispatch('load_skill', { name: 'missing' }, toolContext), 'Skill not found: missing');
+    assert.doesNotMatch(await context.systemPrompt(), /DISABLED_BODY_SENTINEL/);
   } finally {
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
     await rm(directory, { recursive: true, force: true });

@@ -63,7 +63,7 @@ class MockMcpBridge {
   async test(): Promise<{ connected: boolean; detail: string }> { return { connected: true, detail: '2 tools' }; }
 }
 
-test('gateway chat auto-loads only enabled skills by default and honors autoLoadSkills=false', async () => {
+test('gateway chat indexes only enabled skills by default without injecting bodies and honors autoLoadSkills=false', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-auto-skills-test-'));
   const oldHome = process.env.TAIWEI_HOME;
   process.env.TAIWEI_HOME = directory;
@@ -74,14 +74,14 @@ test('gateway chat auto-loads only enabled skills by default and honors autoLoad
   try {
     const skills = new SkillLoader(['disabled']);
     const memory = new MemoryStore();
-    let capturedSkills: string[] = [];
+    let capturedPrompt = '';
     const makeApp = (autoLoadSkills: boolean) => ({
       config: { ...structuredClone(DEFAULT_CONFIG), autoLoadSkills },
       memory,
       skills,
       context: new AgentContext(memory, skills),
       run: async (_message: string, options: { context?: AgentContext }) => {
-        capturedSkills = options.context?.listActiveSkills().map((skill) => skill.name) ?? [];
+        capturedPrompt = await options.context?.systemPrompt() ?? '';
         return 'done';
       },
       interrupt: { cancel: () => false },
@@ -89,11 +89,15 @@ test('gateway chat auto-loads only enabled skills by default and honors autoLoad
     const sink: ChatSink = { event: () => {}, error: (error) => { throw error; } };
 
     await new AgentChatBridge(makeApp(true)).run('hello', sink);
-    assert.deepEqual(capturedSkills, ['enabled']);
+    assert.match(capturedPrompt, /Available skills:\n- enabled: Enabled skill/);
+    assert.match(capturedPrompt, /Call load_skill\(name\) to load a skill's full instructions before using it\./);
+    assert.doesNotMatch(capturedPrompt, /Active skills:/);
+    assert.doesNotMatch(capturedPrompt, /\nEnabled(?:\n|$)/);
+    assert.doesNotMatch(capturedPrompt, /disabled/i);
 
-    capturedSkills = [];
+    capturedPrompt = '';
     await new AgentChatBridge(makeApp(false)).run('hello', sink);
-    assert.deepEqual(capturedSkills, []);
+    assert.doesNotMatch(capturedPrompt, /Available skills:/);
   } finally {
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
     await rm(directory, { recursive: true, force: true });

@@ -1,6 +1,7 @@
 import type { ToolDefinition } from '../llm/tools.js';
 import type { HookRunner } from '../hooks/runner.js';
 import type { ToolSettings } from '../config/config.js';
+import type { AgentContext } from '../agent/context.js';
 
 export interface ToolConfigField {
   type: 'number' | 'string';
@@ -20,6 +21,8 @@ export interface ToolContext {
   authorizeCommand?: (command: string, cwd: string) => Promise<boolean>;
   hooks?: HookRunner;
   sessionId?: string;
+  /** The conversation owning this dispatch; session-aware tools must mutate this context, not global app state. */
+  agentContext?: AgentContext;
   /** Runtime-only settings supplied by ToolRegistry; these are never exposed as LLM arguments. */
   toolConfig?: Readonly<Record<string, unknown>>;
 }

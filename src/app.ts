@@ -15,6 +15,7 @@ import { createMemoryTools } from './tools/impl/memory.js';
 import { ragSearchTool } from './tools/impl/rag.js';
 import { readTool } from './tools/impl/read.js';
 import { searchTool } from './tools/impl/search.js';
+import { createLoadSkillTool } from './tools/impl/skill.js';
 import { writeTool } from './tools/impl/write.js';
 import { ToolRegistry } from './tools/registry.js';
 import { CommandSecurity, type ConfirmationHandler } from './security/commands.js';
@@ -42,7 +43,7 @@ export class TaiweiApp {
     const workspace = resolveWorkspaceDir(this.config);
     await mkdir(workspace, { recursive: true });
     this.hooks = new HookRunner(this.config.hooks, this.config.hookTimeoutSeconds, workspace);
-    for (const tool of [bashTool, readTool, writeTool, searchTool, ragSearchTool, ...createMemoryTools(this.memory)]) this.registry.register(tool);
+    for (const tool of [bashTool, readTool, writeTool, searchTool, ragSearchTool, createLoadSkillTool(this.skills), ...createMemoryTools(this.memory)]) this.registry.register(tool);
     if (options.external !== false) {
       await this.plugins.reload();
       await this.mcp.reload();
