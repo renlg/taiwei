@@ -33,6 +33,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
   await writeFile(join(directory, 'index.html'), '<!doctype html><title>taiwei test</title>');
   await writeFile(join(directory, 'app.js'), 'console.log("taiwei test")');
   await writeFile(join(directory, 'style.css'), 'body {}');
+  await writeFile(join(directory, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   const mock = new MockChat();
   const sessions = new SessionStore(join(directory, 'sessions'));
   const server = createGatewayServer({ chat: mock, sessions, model: 'test-model', publicDirectory: directory, log: () => {} });
@@ -51,6 +52,11 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     const stylesheet = await fetch(`${baseUrl}/style.css`);
     assert.equal(stylesheet.status, 200);
     assert.match(stylesheet.headers.get('content-type') ?? '', /text\/css/);
+
+    const logo = await fetch(`${baseUrl}/logo.png`);
+    assert.equal(logo.status, 200);
+    assert.equal(logo.headers.get('content-type'), 'image/png');
+    assert.deepEqual(Buffer.from(await logo.arrayBuffer()), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
     const createdResponse = await fetch(`${baseUrl}/api/sessions`, { method: 'POST' });
     assert.equal(createdResponse.status, 201);

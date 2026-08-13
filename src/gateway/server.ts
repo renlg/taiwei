@@ -20,6 +20,19 @@ export interface GatewayServerOptions {
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
 
+const STATIC_CONTENT_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+};
+
 const LOGIN_WINDOW_MS = 10 * 60 * 1_000;
 const MAX_LOGIN_FAILURES = 5;
 
@@ -221,12 +234,12 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         response.end();
         return;
       }
-      if (method === 'GET' && (pathname === '/' || pathname === '/index.html' || pathname === '/app.js' || pathname === '/style.css')) {
+      const staticMatch = pathname.match(/^\/([^/]+)(\.[^.]+)$/);
+      const staticContentType = staticMatch ? STATIC_CONTENT_TYPES[staticMatch[2].toLowerCase()] : undefined;
+      if (method === 'GET' && (pathname === '/' || staticContentType)) {
         const filename = pathname === '/' ? 'index.html' : pathname.slice(1);
         const content = await readFile(join(publicDirectory, filename));
-        const contentType = filename.endsWith('.js') ? 'text/javascript; charset=utf-8'
-          : filename.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/html; charset=utf-8';
-        response.writeHead(200, { 'content-type': contentType });
+        response.writeHead(200, { 'content-type': staticContentType ?? STATIC_CONTENT_TYPES['.html'] });
         response.end(content);
         return;
       }
