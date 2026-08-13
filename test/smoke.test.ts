@@ -47,21 +47,44 @@ test('gateway auth validation rejects an enabled empty password', () => {
   }), /auth\.password.*TAIWEI_AUTH_PASSWORD/);
 });
 
-test('model state falls back when upstream is unavailable and persists switches', async () => {
+test('model state uses configured models in order and falls back only to current', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-model-test-'));
   const oldHome = process.env.TAIWEI_HOME;
   const oldModel = process.env.TAIWEI_MODEL;
+  const originalFetch = globalThis.fetch;
+  let upstreamCalls = 0;
   process.env.TAIWEI_HOME = directory;
   delete process.env.TAIWEI_MODEL;
+  globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+    upstreamCalls += 1;
+    return originalFetch(...args);
+  }) as typeof fetch;
   try {
+    await writeFile(join(directory, 'config.json'), JSON.stringify({
+      model: 'current',
+      models: ['good', ' free ', 'good', '', 'deepseek-v4-flash'],
+      baseUrl: 'http://127.0.0.1:1/v1',
+      apiKey: 'secret',
+    }));
+    assert.deepEqual(await resolveModels(), {
+      models: ['good', 'free', 'deepseek-v4-flash'],
+      current: 'current',
+      source: 'config',
+    });
+
+    await writeFile(join(directory, 'config.json'), JSON.stringify({ model: 'empty-current', models: [] }));
+    assert.deepEqual(await resolveModels(), { models: ['empty-current'], current: 'empty-current', source: 'fallback' });
+
     await writeFile(join(directory, 'config.json'), JSON.stringify({ model: 'good', baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'secret' }));
     assert.deepEqual(await resolveModels(), { models: ['good'], current: 'good', source: 'fallback' });
+    assert.equal(upstreamCalls, 0);
     await setCurrentModel('free');
     assert.equal(await getCurrentModel(), 'free');
     const stored = JSON.parse(await readFile(join(directory, 'config.json'), 'utf8')) as { model: string; baseUrl: string };
     assert.equal(stored.model, 'free');
     assert.equal(stored.baseUrl, 'http://127.0.0.1:1/v1');
   } finally {
+    globalThis.fetch = originalFetch;
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
     if (oldModel === undefined) delete process.env.TAIWEI_MODEL; else process.env.TAIWEI_MODEL = oldModel;
     await rm(directory, { recursive: true, force: true });

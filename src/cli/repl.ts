@@ -54,11 +54,10 @@ export async function handleModelCommand(app: TaiweiApp, name?: string): Promise
   const available = await resolveModels();
   if (!name) {
     const lines = available.models.map((model) => `${model === available.current ? '*' : ' '} ${model}`);
-    if (!available.models.includes(available.current)) lines.unshift(`* ${available.current}`);
     return `Current model: ${available.current}\nAvailable models:\n${lines.join('\n')}`;
   }
   const model = name.trim();
-  const known = available.models.includes(model) || model === available.current;
+  const known = available.models.includes(model);
   if (!known && available.source !== 'fallback') {
     throw new Error(`Unknown model: ${model}. Available models:\n${available.models.join('\n')}`);
   }

@@ -255,7 +255,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         }
         const model = body.model.trim();
         const listed = await modelState.resolveModels();
-        const known = listed.models.includes(model) || model === listed.current;
+        const known = listed.models.includes(model);
         if (!known && listed.source !== 'fallback') {
           json(response, 400, { error: `Unknown model: ${model}`, models: listed.models });
           return;

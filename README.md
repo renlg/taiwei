@@ -17,7 +17,7 @@ Edit `~/.taiwei/config.json`, or set environment variables:
 ```json
 {
   "model": "gpt-4.1-mini",
-  "models": ["gpt-4.1-mini", "good", "free"],
+  "models": ["good", "free", "deepseek-v4-flash"],
   "contextWindow": 128000,
   "contextWindows": { "gpt-4.1-mini": 128000, "good": 200000 },
   "baseUrl": "https://api.openai.com/v1",
@@ -38,7 +38,7 @@ Edit `~/.taiwei/config.json`, or set environment variables:
 
 `TAIWEI_API_KEY`, `TAIWEI_BASE_URL`, `TAIWEI_MODEL`, and `TAIWEI_AUTH_PASSWORD` override the corresponding file values. `TAIWEI_HOME` can override the state directory (useful for isolated environments).
 
-The optional `models` array is the candidate list shown by the REPL and web gateway. Without it, taiwei requests `GET {baseUrl}/models` using the configured API key and falls back to the current model if the provider is unavailable. Model names are used as returned, including relay group names such as `good` and `free`.
+The optional `models` array is the user-curated candidate list shown by the REPL and web gateway. taiwei never fetches the provider's upstream model list. Duplicate names are removed while preserving order; when `models` is absent or empty, only the current model is shown.
 
 `contextWindows` can override the context-window size for individual model names. `contextWindow` is the fallback for models without an entry and defaults to 128,000 tokens when omitted or invalid.
 
@@ -73,7 +73,7 @@ Cron arguments that contain spaces should be quoted:
 
 Ctrl+C cancels an active LLM request or tool. Scheduled turns wait for an active interactive turn to finish, run in a fresh conversation, then print a notification banner in the REPL.
 
-Run `/model` to list available models and mark the current one, or `/model <name>` to switch. The choice is written to `~/.taiwei/config.json` and is shared immediately by the REPL, one-shot commands, scheduled turns, and the gateway.
+Run `/model` to list the models configured in the `models` array and mark the current one, or `/model <name>` to switch. With a configured list, switching to any other name is rejected. When the list is absent or empty, any non-empty model name is allowed. The choice is written to `~/.taiwei/config.json` and is shared immediately by the REPL, one-shot commands, scheduled turns, and the gateway.
 
 ### Local web chat
 

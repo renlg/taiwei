@@ -70,7 +70,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.deepEqual(await switched.json(), { ok: true, current: 'free', contextWindow: 1_000 });
     assert.deepEqual(await (await fetch(`${baseUrl}/api/model`)).json(), { current: 'free' });
     const unknown = await fetch(`${baseUrl}/api/model`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'missing' }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'deepseek-v4-flash' }),
     });
     assert.equal(unknown.status, 400);
 
