@@ -1,0 +1,6 @@
+#!/usr/bin/env node
+
+import('../dist/src/main.js').catch((error) => {
+  console.error(`[taiwei] Failed to start: ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
+});

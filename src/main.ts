@@ -1,0 +1,43 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { TaiweiApp } from './app.js';
+import { runOnce } from './cli/once.js';
+import { runRepl } from './cli/repl.js';
+import { initializeConfig } from './config/config.js';
+import { ensureTaiweiHome } from './util/paths.js';
+
+const VERSION = '0.1.0';
+const USAGE = `taiwei — proactive terminal AI agent
+
+Usage:
+  taiwei                     Start the interactive REPL
+  taiwei "prompt"            Run one agent turn
+  taiwei --init              Initialize ~/.taiwei
+  taiwei --help              Show this help
+  taiwei --version           Show the version`;
+
+async function initializeHome(): Promise<void> {
+  const paths = await ensureTaiweiHome();
+  await initializeConfig();
+  const directory = join(paths.skills, 'getting-started');
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, 'SKILL.md'), `---\nname: getting-started\ndescription: A sample skill demonstrating taiwei skills.\n---\n\nAnswer clearly and end with one practical next step.\n`, { encoding: 'utf8', flag: 'wx' }).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'EEXIST') throw error; });
+  console.log(`[taiwei] Initialized ${paths.home}`);
+}
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) { console.log(USAGE); return; }
+  if (args.includes('--version') || args.includes('-v')) { console.log(VERSION); return; }
+  if (args.includes('--init')) { await initializeHome(); return; }
+  const app = new TaiweiApp();
+  try {
+    await app.initialize({ scheduler: args.length === 0 });
+    if (args.length) process.exitCode = await runOnce(app, args.join(' '));
+    else await runRepl(app);
+  } catch (error) {
+    console.error(`[taiwei] ${(error as Error).message}`); process.exitCode = 1;
+  } finally { await app.close(); }
+}
+
+await main();
