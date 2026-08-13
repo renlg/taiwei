@@ -16,8 +16,8 @@ export interface McpServerConfig {
 
 export interface McpConnection { config: McpServerConfig; client: Client; toolNames: string[]; }
 
-export async function loadMcpConfig(): Promise<McpServerConfig[]> {
-  const { mcp } = await ensureTaiweiHome();
+export async function loadMcpConfig(path?: string): Promise<McpServerConfig[]> {
+  const mcp = path ?? (await ensureTaiweiHome()).mcp;
   try {
     const value = JSON.parse(await readFile(mcp, 'utf8')) as unknown;
     if (!Array.isArray(value)) throw new Error('root value must be an array');
@@ -32,14 +32,19 @@ export async function loadMcpConfig(): Promise<McpServerConfig[]> {
 
 export async function connectServer(config: McpServerConfig): Promise<McpConnection> {
   const client = new Client({ name: 'taiwei', version: '0.1.0' });
-  if (config.transport === 'stdio') {
-    if (!config.command) throw new Error(`MCP server ${config.name} requires command`);
-    const params: StdioServerParameters = { command: config.command, args: config.args, env: config.env };
-    await client.connect(new StdioClientTransport(params));
-  } else {
-    if (!config.url) throw new Error(`MCP server ${config.name} requires url`);
-    await client.connect(new SSEClientTransport(new URL(config.url)));
+  try {
+    if (config.transport === 'stdio') {
+      if (!config.command) throw new Error(`MCP server ${config.name} requires command`);
+      const params: StdioServerParameters = { command: config.command, args: config.args, env: config.env };
+      await client.connect(new StdioClientTransport(params));
+    } else {
+      if (!config.url) throw new Error(`MCP server ${config.name} requires url`);
+      await client.connect(new SSEClientTransport(new URL(config.url)));
+    }
+    const listed = await client.listTools();
+    return { config, client, toolNames: listed.tools.map((tool) => tool.name) };
+  } catch (error) {
+    await client.close().catch(() => {});
+    throw error;
   }
-  const listed = await client.listTools();
-  return { config, client, toolNames: listed.tools.map((tool) => tool.name) };
 }

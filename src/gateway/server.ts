@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ChatBridge } from './chat.js';
 import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
@@ -19,6 +19,7 @@ import { SkillLoader } from '../skills/loader.js';
 import { buildIndex, type RagIndexData } from '../rag/index.js';
 import { retrieve, type SearchResult } from '../rag/retrieve.js';
 import { createEmbedder } from '../rag/embedding.js';
+import { loadMcpConfig, type McpServerConfig } from '../mcp/client.js';
 
 export interface GatewayModelState {
   getCurrentModel(): Promise<string>;
@@ -46,10 +47,16 @@ export interface GatewayServerOptions {
   ragIndexPath?: string;
   buildKnowledgeIndex?: () => Promise<RagIndexData>;
   searchKnowledge?: (query: string, limit: number) => Promise<SearchResult[]>;
+  mcpBridge?: {
+    reload(): Promise<void>;
+    list(): Array<{ name: string; connected: boolean; detail: string }>;
+    test(config: McpServerConfig): Promise<{ connected: boolean; detail: string }>;
+  };
+  mcpConfigPath?: string;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '7';
+const STATIC_ASSET_VERSION = '8';
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -187,6 +194,48 @@ async function knowledgeIndexStatus(path: string): Promise<{ exists: boolean; ch
   }
 }
 
+type McpPublicServer = Omit<McpServerConfig, 'env'> & { envKeys: string[] };
+
+function publicMcpServer(config: McpServerConfig): McpPublicServer {
+  const { env, ...safe } = config;
+  return { ...safe, envKeys: Object.keys(env ?? {}) };
+}
+
+function validateMcpServer(value: unknown): McpServerConfig & { preserveEnv?: boolean } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'MCP server config must be an object');
+  const body = value as Record<string, unknown>;
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) throw new HttpError(400, 'name must match [A-Za-z0-9_-]{1,32}');
+  if (body.transport !== 'stdio' && body.transport !== 'sse') throw new HttpError(400, 'transport must be stdio or sse');
+  const command = typeof body.command === 'string' ? body.command.trim() : '';
+  const url = typeof body.url === 'string' ? body.url.trim() : '';
+  if (body.transport === 'stdio' && !command) throw new HttpError(400, 'stdio transport requires command');
+  if (body.transport === 'sse') {
+    let parsed: URL;
+    try { parsed = new URL(url); }
+    catch { throw new HttpError(400, 'sse transport requires a valid url'); }
+    if (!['http:', 'https:'].includes(parsed.protocol)) throw new HttpError(400, 'sse url must use http or https');
+  }
+  if (body.args !== undefined && (!Array.isArray(body.args) || !body.args.every((arg) => typeof arg === 'string'))) {
+    throw new HttpError(400, 'args must be an array of strings');
+  }
+  if (body.env !== undefined && (!body.env || typeof body.env !== 'object' || Array.isArray(body.env)
+    || !Object.entries(body.env as Record<string, unknown>).every(([key, item]) => key.trim() && typeof item === 'string'))) {
+    throw new HttpError(400, 'env must be an object with non-empty keys and string values');
+  }
+  if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be boolean');
+  if (body.preserveEnv !== undefined && typeof body.preserveEnv !== 'boolean') throw new HttpError(400, 'preserveEnv must be boolean');
+  return {
+    name,
+    transport: body.transport,
+    ...(body.transport === 'stdio' ? { command } : { url }),
+    ...(body.args !== undefined ? { args: [...body.args as string[]] } : {}),
+    ...(body.env !== undefined ? { env: { ...body.env as Record<string, string> } } : {}),
+    enabled: body.enabled !== false,
+    ...(body.preserveEnv === true ? { preserveEnv: true } : {}),
+  };
+}
+
 async function attachmentContext(files: unknown, uploadsDirectory: string): Promise<string> {
   if (files === undefined) return '';
   if (!Array.isArray(files) || files.length > MAX_FILES_PER_MESSAGE) throw new HttpError(400, `files must contain at most ${MAX_FILES_PER_MESSAGE} uploads`);
@@ -222,6 +271,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const skillLoader = options.skillLoader ?? new SkillLoader();
   const knowledgeDirectory = resolve(options.knowledgeDirectory ?? taiweiPaths.knowledge);
   const ragIndexPath = resolve(options.ragIndexPath ?? taiweiPaths.ragIndex);
+  const mcpConfigPath = resolve(options.mcpConfigPath ?? taiweiPaths.mcp);
+  let mcpInitialized = false;
   const buildKnowledgeIndex = options.buildKnowledgeIndex ?? (async () => buildIndex(createEmbedder(await configState.load())));
   const searchKnowledge = options.searchKnowledge ?? (async (query: string, limit: number) => retrieve(query, limit, createEmbedder(await configState.load())));
   const authEnabled = options.auth?.enabled ?? false;
@@ -231,6 +282,23 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const log = options.log ?? console.log;
   const modelState: GatewayModelState = options.modelState ?? { getCurrentModel, resolveModels, setCurrentModel };
   const contextWindowFor = options.contextWindow ?? (async (model: string) => resolveContextWindow(await loadConfig(), model));
+  const requireMcpBridge = () => {
+    if (!options.mcpBridge) throw new HttpError(503, 'MCP bridge is unavailable');
+    return options.mcpBridge;
+  };
+  const mcpSnapshot = async (reload = false) => {
+    const bridge = requireMcpBridge();
+    if (reload || !mcpInitialized) {
+      await bridge.reload();
+      mcpInitialized = true;
+    }
+    const servers = await loadMcpConfig(mcpConfigPath);
+    return { servers: servers.map(publicMcpServer), statuses: bridge.list() };
+  };
+  const saveMcpServers = async (servers: McpServerConfig[]) => {
+    await mkdir(dirname(mcpConfigPath), { recursive: true });
+    await writeFile(mcpConfigPath, `${JSON.stringify(servers, null, 2)}\n`, 'utf8');
+  };
   return createServer(async (request, response) => {
     const started = Date.now();
     const method = request.method ?? 'GET';
@@ -394,6 +462,58 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         runner.configure(config.hooks, config.hookTimeoutSeconds, workspace);
         const execution = await runner.test(body.command.trim(), body.event as HookEvent, sampleHookFields(body.event as HookEvent, workspace));
         json(response, 200, execution);
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/mcp') {
+        json(response, 200, await mcpSnapshot());
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/mcp/reload') {
+        json(response, 200, await mcpSnapshot(true));
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/mcp/test') {
+        const body = await readJson(request) as { name?: unknown };
+        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) throw new HttpError(400, 'name must match [A-Za-z0-9_-]{1,32}');
+        const server = (await loadMcpConfig(mcpConfigPath)).find((item) => item.name === name);
+        if (!server) throw new HttpError(404, `MCP server not found: ${name}`);
+        json(response, 200, await requireMcpBridge().test(server));
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/mcp') {
+        const body = await readJson(request);
+        const incoming = validateMcpServer(body);
+        const servers = await loadMcpConfig(mcpConfigPath);
+        const index = servers.findIndex((item) => item.name === incoming.name);
+        const existing = index >= 0 ? servers[index] : undefined;
+        const envProvided = Object.prototype.hasOwnProperty.call(body, 'env');
+        const submittedEnv = incoming.env ?? {};
+        let env: Record<string, string> | undefined;
+        if (existing) {
+          if (!envProvided || (Object.keys(submittedEnv).length === 0 && existing.env)) env = existing.env;
+          else if (incoming.preserveEnv) env = { ...existing.env, ...submittedEnv };
+          else env = submittedEnv;
+        } else if (envProvided) env = submittedEnv;
+        const { preserveEnv: _preserveEnv, env: _incomingEnv, ...safeIncoming } = incoming;
+        const next: McpServerConfig = { ...safeIncoming, ...(env ? { env } : {}) };
+        if (index >= 0) servers[index] = next;
+        else servers.push(next);
+        await saveMcpServers(servers);
+        json(response, index >= 0 ? 200 : 201, await mcpSnapshot(true));
+        return;
+      }
+      if (method === 'DELETE' && pathname === '/api/mcp') {
+        const url = new URL(request.url ?? '/', 'http://localhost');
+        const name = (url.searchParams.get('name') ?? '').trim();
+        if (!name) throw new HttpError(400, 'name is required');
+        const servers = await loadMcpConfig(mcpConfigPath);
+        const index = servers.findIndex((item) => item.name === name);
+        if (index < 0) throw new HttpError(404, `MCP server not found: ${name}`);
+        servers.splice(index, 1);
+        await saveMcpServers(servers);
+        const snapshot = await mcpSnapshot(true);
+        json(response, 200, { ok: true, ...snapshot });
         return;
       }
       if (method === 'GET' && pathname === '/api/skills') {

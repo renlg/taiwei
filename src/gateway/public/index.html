@@ -33,6 +33,7 @@
       <nav class="sidebar-sections" aria-label="资源管理">
         <button class="sidebar-section-button" id="skills-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">✦</span><span class="sidebar-label">技能</span></button>
         <button class="sidebar-section-button" id="knowledge-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">▤</span><span class="sidebar-label">知识库</span></button>
+        <button class="sidebar-section-button" id="mcp-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⌘</span><span class="sidebar-label">MCP</span></button>
       </nav>
       <div class="history-heading"><span>历史会话</span><span id="session-count">0</span></div>
       <nav class="session-list" id="session-list" aria-label="历史会话"></nav>
@@ -218,6 +219,34 @@
         <h3>文件</h3>
         <div class="resource-list knowledge-files" id="knowledge-files"></div>
       </section>
+    </div>
+  </dialog>
+  <dialog class="modal management-modal" id="mcp-modal">
+    <div class="modal-card management-card mcp-card">
+      <header>
+        <div><h2>MCP</h2><p>管理外部 Model Context Protocol 服务器</p></div>
+        <button class="icon-button" id="mcp-close" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="mcp-actions">
+        <button class="primary-button" id="mcp-reload" type="button">重载连接</button>
+        <button class="secondary-button" id="mcp-add" type="button">添加服务器</button>
+      </div>
+      <div class="management-error" id="mcp-error" role="alert"></div>
+      <div class="resource-list mcp-list" id="mcp-list" aria-label="MCP 服务器列表"></div>
+      <form class="mcp-editor" id="mcp-form" hidden>
+        <div class="mcp-editor-heading"><div><h3 id="mcp-form-title">添加服务器</h3><p>环境变量密钥不会从网关回显。</p></div><button class="icon-button" id="mcp-form-close" type="button" aria-label="关闭表单">×</button></div>
+        <div class="mcp-form-grid">
+          <label>名称<input id="mcp-name" maxlength="32" pattern="[A-Za-z0-9_-]{1,32}" autocomplete="off" required placeholder="filesystem"></label>
+          <label>Transport<select id="mcp-transport"><option value="stdio">stdio</option><option value="sse">SSE</option></select></label>
+          <label class="mcp-wide" id="mcp-command-field">Command<input id="mcp-command" autocomplete="off" placeholder="npx"></label>
+          <label class="mcp-wide" id="mcp-url-field" hidden>URL<input id="mcp-url" type="url" autocomplete="off" placeholder="http://127.0.0.1:3000/sse"></label>
+          <label class="mcp-wide">Args<input id="mcp-args" autocomplete="off" placeholder="-y, @modelcontextprotocol/server-filesystem, /path"></label>
+          <label class="mcp-wide">环境变量<textarea id="mcp-env" rows="5" spellcheck="false" placeholder="API_KEY=value&#10;REGION=us-west-2"></textarea><small>每行一个 key=value；编辑时 *** 表示保留原值，留空也会保留。</small></label>
+          <label class="mcp-enabled"><input id="mcp-enabled" type="checkbox" checked> 启用此服务器</label>
+        </div>
+        <div class="mcp-form-error" id="mcp-form-error" role="alert"></div>
+        <footer><button class="secondary-button" id="mcp-cancel" type="button">取消</button><button class="primary-button" id="mcp-save" type="submit">保存并重载</button></footer>
+      </form>
     </div>
   </dialog>
   <div class="toast" id="toast" role="status"></div>

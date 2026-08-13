@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -49,6 +49,15 @@ class ConfirmingChat implements ChatBridge {
   stop(): boolean { return true; }
 }
 
+class MockMcpBridge {
+  reloads = 0;
+  async reload(): Promise<void> { this.reloads += 1; }
+  list(): Array<{ name: string; connected: boolean; detail: string }> {
+    return [{ name: 'alpha', connected: true, detail: '2 tools' }];
+  }
+  async test(): Promise<{ connected: boolean; detail: string }> { return { connected: true, detail: '2 tools' }; }
+}
+
 test('gateway serves health, static UI, and streamed SSE events', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-test-'));
   await writeFile(join(directory, 'index.html'), '<!doctype html><title>taiwei test</title><img src="/logo.png?v={{ASSET_VERSION}}">');
@@ -96,7 +105,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=7/);
+    assert.match(pageBody, /logo\.png\?v=8/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -242,6 +251,73 @@ test('gateway lists skills and safely manages knowledge files', async () => {
     assert.equal(deleted.status, 200);
     assert.deepEqual(await deleted.json(), { ok: true });
     assert.equal((await fetch(`${baseUrl}/api/knowledge?path=${encodeURIComponent('notes.txt')}`, { method: 'DELETE' })).status, 404);
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('gateway MCP API validates, updates, redacts env values, preserves secrets, and deletes configs', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-mcp-test-'));
+  const mcpConfigPath = join(directory, 'mcp.json');
+  await writeFile(mcpConfigPath, JSON.stringify([{
+    name: 'alpha', transport: 'stdio', command: 'node', args: ['server.js'], env: { API_TOKEN: 'top-secret' }, enabled: true,
+  }], null, 2));
+  const mcpBridge = new MockMcpBridge();
+  const server = createGatewayServer({
+    chat: new MockChat(),
+    sessions: new SessionStore(join(directory, 'sessions')),
+    uploadsDirectory: join(directory, 'uploads'),
+    mcpConfigPath,
+    mcpBridge,
+    log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const post = (body: unknown) => fetch(`${baseUrl}/api/mcp`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  try {
+    const listedResponse = await fetch(`${baseUrl}/api/mcp`);
+    assert.equal(listedResponse.status, 200);
+    const listedText = await listedResponse.text();
+    assert.doesNotMatch(listedText, /top-secret/);
+    const listed = JSON.parse(listedText) as { servers: Array<{ name: string; envKeys: string[]; env?: unknown }>; statuses: unknown[] };
+    assert.deepEqual(listed.servers, [{ name: 'alpha', transport: 'stdio', command: 'node', args: ['server.js'], enabled: true, envKeys: ['API_TOKEN'] }]);
+    assert.equal('env' in listed.servers[0], false);
+    assert.equal(mcpBridge.reloads, 1);
+
+    assert.equal((await post({ transport: 'stdio', command: 'node' })).status, 400);
+    assert.equal((await post({ name: 'invalid transport', transport: 'websocket' })).status, 400);
+    assert.equal((await post({ name: 'missing_command', transport: 'stdio' })).status, 400);
+
+    const preserved = await post({ name: 'alpha', transport: 'stdio', command: 'bun', env: {}, enabled: false });
+    assert.equal(preserved.status, 200);
+    let stored = JSON.parse(await readFile(mcpConfigPath, 'utf8')) as Array<{ name: string; command: string; env?: Record<string, string>; enabled: boolean }>;
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0].command, 'bun');
+    assert.equal(stored[0].enabled, false);
+    assert.deepEqual(stored[0].env, { API_TOKEN: 'top-secret' });
+
+    const replaced = await post({ name: 'alpha', transport: 'sse', url: 'https://example.test/sse', env: { REGION: 'west' }, enabled: true });
+    assert.equal(replaced.status, 200);
+    stored = JSON.parse(await readFile(mcpConfigPath, 'utf8'));
+    assert.equal(stored.length, 1);
+    assert.equal((stored[0] as unknown as { transport: string }).transport, 'sse');
+    assert.deepEqual(stored[0].env, { REGION: 'west' });
+
+    const tested = await fetch(`${baseUrl}/api/mcp/test`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'alpha' }),
+    });
+    assert.deepEqual(await tested.json(), { connected: true, detail: '2 tools' });
+
+    assert.equal((await fetch(`${baseUrl}/api/mcp?name=missing`, { method: 'DELETE' })).status, 404);
+    const deleted = await fetch(`${baseUrl}/api/mcp?name=alpha`, { method: 'DELETE' });
+    assert.equal(deleted.status, 200);
+    const deletedBody = await deleted.json() as { ok: boolean; servers: unknown[] };
+    assert.equal(deletedBody.ok, true);
+    assert.deepEqual(deletedBody.servers, []);
+    assert.deepEqual(JSON.parse(await readFile(mcpConfigPath, 'utf8')), []);
   } finally {
     await closeGateway(server);
     await rm(directory, { recursive: true, force: true });

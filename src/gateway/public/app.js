@@ -65,6 +65,28 @@ const elements = {
   knowledgeResultsSection: $('#knowledge-results-section'),
   knowledgeResults: $('#knowledge-results'),
   knowledgeFiles: $('#knowledge-files'),
+  mcpOpen: $('#mcp-open'),
+  mcpModal: $('#mcp-modal'),
+  mcpClose: $('#mcp-close'),
+  mcpError: $('#mcp-error'),
+  mcpReload: $('#mcp-reload'),
+  mcpAdd: $('#mcp-add'),
+  mcpList: $('#mcp-list'),
+  mcpForm: $('#mcp-form'),
+  mcpFormTitle: $('#mcp-form-title'),
+  mcpFormClose: $('#mcp-form-close'),
+  mcpFormError: $('#mcp-form-error'),
+  mcpName: $('#mcp-name'),
+  mcpTransport: $('#mcp-transport'),
+  mcpCommandField: $('#mcp-command-field'),
+  mcpCommand: $('#mcp-command'),
+  mcpUrlField: $('#mcp-url-field'),
+  mcpUrl: $('#mcp-url'),
+  mcpArgs: $('#mcp-args'),
+  mcpEnv: $('#mcp-env'),
+  mcpEnabled: $('#mcp-enabled'),
+  mcpCancel: $('#mcp-cancel'),
+  mcpSave: $('#mcp-save'),
   workspaceInput: $('#workspace-input'),
   workspaceResolved: $('#workspace-resolved'),
   workspaceLabel: $('#workspace-label'),
@@ -101,6 +123,9 @@ const state = {
   workspace: '',
   settingsRemember: 'off',
   confirmations: new Map(),
+  mcpServers: [],
+  mcpStatuses: [],
+  editingMcp: null,
 };
 
 function escapeHtml(value) {
@@ -232,7 +257,7 @@ async function openSettings() {
 }
 
 function closeResourcePanels(except) {
-  for (const modal of [elements.skillsModal, elements.knowledgeModal]) {
+  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal]) {
     if (modal !== except && modal.open) modal.close();
   }
 }
@@ -345,6 +370,144 @@ async function openKnowledge() {
   if (!elements.knowledgeModal.open) elements.knowledgeModal.showModal();
   elements.body.classList.remove('sidebar-open');
   await loadKnowledge();
+}
+
+function mcpStatusText(server, status) {
+  if (!server.enabled || status?.detail === 'disabled') return { kind: 'disabled', text: '⏸ 已禁用' };
+  if (status?.connected) {
+    const count = status.detail.match(/^(\d+) tools$/)?.[1];
+    return { kind: 'connected', text: `✓ 已连接${count === undefined ? '' : ` · ${count} 个工具`}` };
+  }
+  return { kind: 'failed', text: `✗ ${status?.detail || '未连接'}` };
+}
+
+function mcpPayload(server, enabled = server.enabled) {
+  return {
+    name: server.name,
+    transport: server.transport,
+    ...(server.transport === 'stdio' ? { command: server.command } : { url: server.url }),
+    ...(server.args ? { args: server.args } : {}),
+    env: {},
+    preserveEnv: true,
+    enabled,
+  };
+}
+
+function renderMcp(data) {
+  state.mcpServers = data.servers || [];
+  state.mcpStatuses = data.statuses || [];
+  if (!state.mcpServers.length) {
+    renderResourceEmpty(elements.mcpList, '未配置 MCP 服务器, 点击「添加服务器」接入');
+    return;
+  }
+  elements.mcpList.replaceChildren();
+  for (const server of state.mcpServers) {
+    const status = state.mcpStatuses.find((item) => item.name === server.name);
+    const card = document.createElement('article'); card.className = 'mcp-server';
+    const top = document.createElement('div'); top.className = 'mcp-server-top';
+    const main = document.createElement('div'); main.className = 'mcp-server-main';
+    const name = document.createElement('strong'); name.className = 'mcp-server-name'; name.textContent = server.name;
+    const badge = document.createElement('span'); badge.className = 'mcp-transport-badge'; badge.textContent = server.transport;
+    main.append(name, badge);
+    const toggleLabel = document.createElement('label'); toggleLabel.className = 'mcp-switch'; toggleLabel.title = server.enabled ? '点击禁用' : '点击启用';
+    const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = server.enabled; toggle.setAttribute('aria-label', `${server.enabled ? '禁用' : '启用'} ${server.name}`);
+    const toggleTrack = document.createElement('span'); toggleLabel.append(toggle, toggleTrack); top.append(main, toggleLabel);
+    const endpointValue = server.transport === 'stdio' ? [server.command, ...(server.args || [])].filter(Boolean).join(' ') : server.url || '';
+    const endpoint = document.createElement('code'); endpoint.className = 'mcp-server-endpoint'; endpoint.textContent = endpointValue; endpoint.title = endpointValue;
+    const statusLine = document.createElement('div');
+    const renderedStatus = mcpStatusText(server, status); statusLine.className = `mcp-status ${renderedStatus.kind}`; statusLine.textContent = renderedStatus.text;
+    const actions = document.createElement('div'); actions.className = 'mcp-server-actions';
+    const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'mcp-action'; edit.textContent = '编辑';
+    const test = document.createElement('button'); test.type = 'button'; test.className = 'mcp-action'; test.textContent = '测试连接';
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'mcp-action danger'; remove.textContent = '删除';
+    actions.append(edit, test, remove); card.append(top, endpoint, statusLine, actions); elements.mcpList.append(card);
+    toggle.addEventListener('change', async () => {
+      toggle.disabled = true; elements.mcpError.textContent = '';
+      try { renderMcp(await requestJson('/api/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(mcpPayload(server, toggle.checked)) })); }
+      catch (error) { toggle.checked = !toggle.checked; toggle.disabled = false; elements.mcpError.textContent = error.message; }
+    });
+    edit.addEventListener('click', () => openMcpForm(server));
+    test.addEventListener('click', async () => {
+      test.disabled = true; test.textContent = '测试中…'; statusLine.className = 'mcp-status'; statusLine.textContent = '正在建立独立连接…';
+      try {
+        const result = await requestJson('/api/mcp/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: server.name }) });
+        const display = mcpStatusText({ ...server, enabled: true }, result);
+        statusLine.className = `mcp-status ${display.kind}`; statusLine.textContent = display.text;
+      } catch (error) { statusLine.className = 'mcp-status failed'; statusLine.textContent = `✗ ${error.message}`; }
+      finally { test.disabled = false; test.textContent = '测试连接'; }
+    });
+    remove.addEventListener('click', async () => {
+      if (!confirm(`确定删除 MCP 服务器「${server.name}」吗？`)) return;
+      remove.disabled = true; elements.mcpError.textContent = '';
+      try {
+        const result = await requestJson(`/api/mcp?name=${encodeURIComponent(server.name)}`, { method: 'DELETE' });
+        renderMcp(result); closeMcpForm(); showToast(`已删除 ${server.name}`);
+      } catch (error) { remove.disabled = false; elements.mcpError.textContent = error.message; }
+    });
+  }
+}
+
+async function loadMcp() {
+  elements.mcpError.textContent = '';
+  renderResourceEmpty(elements.mcpList, '加载中…');
+  try { renderMcp(await requestJson('/api/mcp')); }
+  catch (error) { elements.mcpError.textContent = error.message; renderResourceEmpty(elements.mcpList, 'MCP 服务器加载失败'); }
+}
+
+async function openMcp() {
+  closeResourcePanels(elements.mcpModal);
+  closeMcpForm();
+  if (!elements.mcpModal.open) elements.mcpModal.showModal();
+  elements.body.classList.remove('sidebar-open');
+  await loadMcp();
+}
+
+function updateMcpTransportFields() {
+  const stdio = elements.mcpTransport.value === 'stdio';
+  elements.mcpCommandField.hidden = !stdio;
+  elements.mcpUrlField.hidden = stdio;
+  elements.mcpCommand.required = stdio;
+  elements.mcpUrl.required = !stdio;
+}
+
+function openMcpForm(server) {
+  state.editingMcp = server || null;
+  elements.mcpFormTitle.textContent = server ? `编辑 ${server.name}` : '添加服务器';
+  elements.mcpFormError.textContent = '';
+  elements.mcpName.value = server?.name || '';
+  elements.mcpName.readOnly = Boolean(server);
+  elements.mcpTransport.value = server?.transport || 'stdio';
+  elements.mcpCommand.value = server?.command || '';
+  elements.mcpUrl.value = server?.url || '';
+  elements.mcpArgs.value = (server?.args || []).join(', ');
+  elements.mcpEnv.value = (server?.envKeys || []).map((key) => `${key}=***`).join('\n');
+  elements.mcpEnabled.checked = server?.enabled !== false;
+  elements.mcpForm.hidden = false;
+  updateMcpTransportFields();
+  elements.mcpName.focus();
+}
+
+function closeMcpForm() {
+  state.editingMcp = null;
+  elements.mcpForm.hidden = true;
+  elements.mcpFormError.textContent = '';
+}
+
+function parseMcpEnv(value) {
+  const env = {};
+  let preserveEnv = Boolean(state.editingMcp);
+  for (const rawLine of value.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const separator = line.indexOf('=');
+    if (separator < 1) throw new Error(`环境变量格式无效：${line}`);
+    const key = line.slice(0, separator).trim();
+    const item = line.slice(separator + 1).trim();
+    if (!key) throw new Error(`环境变量 key 不能为空：${line}`);
+    if (item === '***') { preserveEnv = true; continue; }
+    env[key] = item;
+  }
+  return { env, preserveEnv };
 }
 
 function renderKnowledgeResults(results) {
@@ -1092,9 +1255,47 @@ elements.skillsOpen.addEventListener('click', openSkills);
 elements.skillsClose.addEventListener('click', () => elements.skillsModal.close());
 elements.knowledgeOpen.addEventListener('click', openKnowledge);
 elements.knowledgeClose.addEventListener('click', () => elements.knowledgeModal.close());
-for (const modal of [elements.skillsModal, elements.knowledgeModal]) {
+elements.mcpOpen.addEventListener('click', openMcp);
+elements.mcpClose.addEventListener('click', () => elements.mcpModal.close());
+for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal]) {
   modal.addEventListener('click', (event) => { if (event.target === modal) modal.close(); });
 }
+elements.mcpModal.addEventListener('close', closeMcpForm);
+elements.mcpAdd.addEventListener('click', () => openMcpForm());
+elements.mcpFormClose.addEventListener('click', closeMcpForm);
+elements.mcpCancel.addEventListener('click', closeMcpForm);
+elements.mcpTransport.addEventListener('change', updateMcpTransportFields);
+elements.mcpReload.addEventListener('click', async () => {
+  elements.mcpError.textContent = '';
+  elements.mcpReload.disabled = true;
+  elements.mcpReload.textContent = '重载中…';
+  try { renderMcp(await requestJson('/api/mcp/reload', { method: 'POST' })); showToast('MCP 连接已重载'); }
+  catch (error) { elements.mcpError.textContent = error.message; }
+  finally { elements.mcpReload.disabled = false; elements.mcpReload.textContent = '重载连接'; }
+});
+elements.mcpForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  elements.mcpFormError.textContent = '';
+  if (!elements.mcpForm.reportValidity()) return;
+  try {
+    const transport = elements.mcpTransport.value;
+    const args = elements.mcpArgs.value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
+    const { env, preserveEnv } = parseMcpEnv(elements.mcpEnv.value);
+    const payload = {
+      name: elements.mcpName.value.trim(),
+      transport,
+      ...(transport === 'stdio' ? { command: elements.mcpCommand.value.trim() } : { url: elements.mcpUrl.value.trim() }),
+      args,
+      env,
+      preserveEnv,
+      enabled: elements.mcpEnabled.checked,
+    };
+    elements.mcpSave.disabled = true; elements.mcpSave.textContent = '保存中…';
+    const result = await requestJson('/api/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+    renderMcp(result); closeMcpForm(); showToast(`已保存 ${payload.name}`);
+  } catch (error) { elements.mcpFormError.textContent = error.message; }
+  finally { elements.mcpSave.disabled = false; elements.mcpSave.textContent = '保存并重载'; }
+});
 elements.knowledgeUpload.addEventListener('click', () => elements.knowledgeFileInput.click());
 elements.knowledgeFileInput.addEventListener('change', async () => {
   const [file] = elements.knowledgeFileInput.files;

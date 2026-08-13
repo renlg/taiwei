@@ -1,5 +1,5 @@
 import type { ToolRegistry } from '../tools/registry.js';
-import { connectServer, loadMcpConfig, type McpConnection } from './client.js';
+import { connectServer, loadMcpConfig, type McpConnection, type McpServerConfig } from './client.js';
 
 function safeName(value: string): string { return value.replace(/[^A-Za-z0-9_-]/g, '_'); }
 
@@ -34,5 +34,16 @@ export class McpBridge {
   }
 
   list(): Array<{ name: string; connected: boolean; detail: string }> { return [...this.statuses]; }
+  async test(config: McpServerConfig): Promise<{ connected: boolean; detail: string }> {
+    let connection: McpConnection | undefined;
+    try {
+      connection = await connectServer(config);
+      return { connected: true, detail: `${connection.toolNames.length} tools` };
+    } catch (error) {
+      return { connected: false, detail: (error as Error).message };
+    } finally {
+      await connection?.client.close().catch(() => {});
+    }
+  }
   async close(): Promise<void> { await Promise.allSettled(this.connections.map((connection) => connection.client.close())); }
 }
