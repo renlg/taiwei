@@ -63,11 +63,11 @@ Ctrl+C cancels an active LLM request or tool. Scheduled turns wait for an active
 
 ### Local web chat
 
-Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The gateway streams answer tokens and tool activity into a plain browser UI. Stop cancels the current LLM request or tool through the same cooperative interrupt mechanism as the CLI.
+Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The polished browser UI streams answer tokens and tool activity live, supports dark and light themes, and includes a sidebar for creating, switching, and deleting conversations. Stop cancels the current LLM request or tool through the same cooperative interrupt mechanism as the CLI.
 
-The v1.1 gateway uses one in-memory conversation shared by clients connected to that server process. Conversation history survives between turns, but resets when the gateway restarts; browser refresh does not clear the server-side conversation. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
+Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so history and agent context survive browser refreshes and gateway restarts. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
 
-Health checks are available at `GET /api/health`.
+Health checks are available at `GET /api/health`. Session management is exposed locally through `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`, and the optional `sessionId` field on `POST /api/chat`.
 
 ## State and extensions
 
@@ -82,6 +82,7 @@ rag-index.json    generated BM25 index
 knowledge/        .md and .txt knowledge documents
 skills/           <name>/SKILL.md skills
 plugins/          <name>/plugin.js plugins
+sessions/         durable web chat conversations
 ```
 
 ### Skills
