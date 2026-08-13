@@ -112,6 +112,8 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
   await writeFile(join(directory, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   const mock = new MockChat();
   const sessions = new SessionStore(join(directory, 'sessions'));
+  const indexedSessions: Array<{ id: string; source?: string; model?: string }> = [];
+  const indexedMessages: Array<{ sessionId: string; role: string; toolName?: string | null }> = [];
   let currentModel = 'good';
   const modelState: GatewayModelState = {
     getCurrentModel: async () => currentModel,
@@ -125,6 +127,10 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     contextWindow: async () => 1_000,
     publicDirectory: directory,
     uploadsDirectory: join(directory, 'uploads'),
+    history: {
+      upsertSession: async (session) => { indexedSessions.push(session); },
+      appendMessage: async (message) => { indexedMessages.push(message); },
+    },
     log: () => {},
   });
   const port = await listenGateway(server, '127.0.0.1', 0);
@@ -219,6 +225,14 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.match(mock.messages[0], /local attachment contents/);
     assert.equal(persisted.messages[1].toolCalls?.length, 1);
     assert.deepEqual(persisted.usage, { promptTokens: 10, completionTokens: 2, totalTokens: 12, contextWindow: 1_000, model: 'free' });
+    assert.equal(indexedSessions[0]?.id, created.id);
+    assert.equal(indexedSessions[0]?.source, 'gateway');
+    assert.equal(indexedSessions[0]?.model, 'free');
+    assert.deepEqual(indexedMessages.map(({ role, toolName }) => ({ role, toolName })), [
+      { role: 'user', toolName: undefined },
+      { role: 'assistant', toolName: undefined },
+      { role: 'tool', toolName: 'read' },
+    ]);
 
     const secondChat = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: 'again', sessionId: created.id }),

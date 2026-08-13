@@ -20,6 +20,8 @@ import { writeTool } from './tools/impl/write.js';
 import { ToolRegistry } from './tools/registry.js';
 import { CommandSecurity, type ConfirmationHandler } from './security/commands.js';
 import { HookRunner } from './hooks/runner.js';
+import { historyTools } from './tools/impl/history.js';
+import { importHistoryIfEmpty } from './history/db.js';
 
 export class TaiweiApp {
   config!: TaiweiConfig;
@@ -43,7 +45,9 @@ export class TaiweiApp {
     const workspace = resolveWorkspaceDir(this.config);
     await mkdir(workspace, { recursive: true });
     this.hooks = new HookRunner(this.config.hooks, this.config.hookTimeoutSeconds, workspace);
-    for (const tool of [bashTool, readTool, writeTool, searchTool, ragSearchTool, createLoadSkillTool(this.skills), ...createMemoryTools(this.memory)]) this.registry.register(tool);
+    for (const tool of [bashTool, readTool, writeTool, searchTool, ragSearchTool, ...historyTools, createLoadSkillTool(this.skills), ...createMemoryTools(this.memory)]) this.registry.register(tool);
+    // history.db is a rebuildable index. A missing/unsupported SQLite runtime must never block chat startup.
+    await importHistoryIfEmpty().catch(() => {});
     if (options.external !== false) {
       await this.plugins.reload();
       await this.mcp.reload();

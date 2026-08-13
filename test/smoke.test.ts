@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,6 +23,8 @@ import { runAgentTurn } from '../src/agent/loop.js';
 import { MemoryStore } from '../src/memory/store.js';
 import { SkillLoader } from '../src/skills/loader.js';
 import { createLoadSkillTool } from '../src/tools/impl/skill.js';
+import { appendMessage, closeHistoryDatabases, getSession, HistoryUnavailableError, listSessions, searchMessages, upsertSession } from '../src/history/db.js';
+import { createHistoryTools } from '../src/tools/impl/history.js';
 
 const emptyHooks = (): HookCommands => ({ beforeMessage: [], beforeLLM: [], afterLLM: [], beforeTool: [], afterTool: [] });
 
@@ -190,6 +192,52 @@ test('tool registry dispatches registered tools and reports unknown tools', asyn
   assert.deepEqual(registry.list(), []);
   assert.equal(registry.list({ includeDisabled: true }).length, 1);
   assert.deepEqual(JSON.parse(await registry.dispatch('add', { a: 2, b: 3 }, { cwd: process.cwd() })), { error: 'Tool "add" is disabled' });
+});
+
+test('history database searches Chinese text, falls back for short queries, sorts sessions, and limits messages', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-history-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  try {
+    await upsertSession({ id: 'older', title: '龙虾计划', source: 'cli', model: 'test-model', createdAt: 100, updatedAt: 100 });
+    await appendMessage({ sessionId: 'older', role: 'user', content: '我们之前讨论了龙虾计划和中文检索', timestamp: 200 });
+    await appendMessage({ sessionId: 'older', role: 'assistant', content: '先建立历史数据库', timestamp: 300 });
+    await appendMessage({ sessionId: 'older', role: 'tool', content: '完成索引', toolName: 'write_file', timestamp: 400 });
+    assert.equal(await appendMessage({ sessionId: 'older', role: 'tool', content: '完成索引', toolName: 'write_file', timestamp: 400 }), false);
+    await upsertSession({ id: 'newer', title: '最近会话', source: 'gateway', createdAt: 500, updatedAt: 500 });
+
+    assert.equal((await stat(join(directory, 'history.db'))).isFile(), true);
+    assert.equal((await searchMessages('龙虾计划'))[0]?.sessionId, 'older');
+    assert.equal((await searchMessages('龙虾'))[0]?.sessionId, 'older');
+    assert.deepEqual((await listSessions()).map((session) => session.sessionId), ['newer', 'older']);
+
+    const session = await getSession('older', 2);
+    assert.equal(session?.messageCount, 3);
+    assert.deepEqual(session?.messages.map((message) => [message.role, message.toolName]), [
+      ['assistant', null], ['tool', 'write_file'],
+    ]);
+  } finally {
+    await closeHistoryDatabases();
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('history tools report the required error when node:sqlite is unavailable', async () => {
+  const unavailable = async (): Promise<never> => { throw new HistoryUnavailableError(); };
+  const registry = new ToolRegistry();
+  for (const tool of createHistoryTools({
+    searchMessages: unavailable,
+    listSessions: unavailable,
+    getSession: unavailable,
+  })) registry.register(tool);
+  for (const [name, args] of [
+    ['session_search', { query: 'old' }], ['session_list', {}], ['session_get', { sessionId: 'missing' }],
+  ] as const) {
+    assert.deepEqual(JSON.parse(await registry.dispatch(name, args, { cwd: process.cwd() })), {
+      error: 'history db unavailable (requires Node >= 22.13)',
+    });
+  }
 });
 
 test('skill loader omits disabled skills from list and load', async () => {

@@ -9,6 +9,8 @@ import { resolveModels, setCurrentModel } from '../config/model.js';
 import { expandHome, saveConfig } from '../config/config.js';
 import { mkdir, stat } from 'node:fs/promises';
 import type { ConfirmationHandler } from '../security/commands.js';
+import { randomUUID } from 'node:crypto';
+import { appendMessage, getSession, listSessions, rebuildHistoryDb, searchMessages, upsertSession } from '../history/db.js';
 
 const color = {
   cyan: (text: string) => `\x1b[36m${text}\x1b[0m`,
@@ -30,6 +32,7 @@ const HELP = `Commands:
   /mcp list|reload              Manage MCP connections
   /memory show|clear            Manage persistent memory
   /rag index|search <query>     Index or search local knowledge
+  /history list|search|get ...  Query or rebuild conversation history
   /plugin list|reload           Manage plugins
 
 Quote arguments containing spaces, for example:
@@ -138,6 +141,22 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
       else throw new Error('Usage: /rag index | /rag search <query>');
       break;
     }
+    case '/history': {
+      if (action === 'list') {
+        const sessions = await listSessions(Number(args[0] ?? 10));
+        output(sessions.length ? sessions.map((session) => `${session.sessionId} ${session.source} ${session.messageCount} ${new Date(session.updatedAt).toLocaleString()} — ${session.title}`).join('\n') : 'No history sessions.');
+      } else if (action === 'search' && args.length) {
+        const results = await searchMessages(args.join(' '));
+        output(results.length ? results.map((result) => `${result.sessionId} ${new Date(result.timestamp).toLocaleString()} — ${result.title}\n${result.snippet}`).join('\n\n') : 'No history matches.');
+      } else if (action === 'get' && args[0]) {
+        const session = await getSession(args[0], Number(args[1] ?? 50));
+        output(session ? JSON.stringify(session, null, 2) : `History session not found: ${args[0]}`);
+      } else if (action === 'rebuild') {
+        const imported = await rebuildHistoryDb();
+        output(`[taiwei] Rebuilt history index from ${imported} gateway sessions.`);
+      } else throw new Error('Usage: /history list [limit] | /history search <query> | /history get <id> [maxMessages] | /history rebuild');
+      break;
+    }
     case '/plugin': {
       if (action === 'reload') { await app.plugins.reload(); output('[taiwei] Plugins reloaded.'); }
       else if (action === 'list') { const statuses = app.plugins.list(); output(statuses.length ? statuses.map((item) => `${item.error ? 'error' : 'loaded'} ${item.name} — ${item.error ?? `${item.tools} tools, ${item.skills} skills`}`).join('\n') : 'No plugins installed.'); }
@@ -159,6 +178,9 @@ export async function runRepl(app: TaiweiApp): Promise<void> {
   let closing = false;
   let commandQueue: Promise<void> = Promise.resolve();
   let confirming = false;
+  const historySessionId = randomUUID();
+  const historyCreatedAt = Date.now();
+  let historyTitle = '';
   const confirmDanger: ConfirmationHandler = (request) => new Promise((resolve) => {
     confirming = true;
     const level = request.level === 'warn' ? 'warning' : 'DANGER';
@@ -191,6 +213,27 @@ export async function runRepl(app: TaiweiApp): Promise<void> {
           process.stdout.write(color.dim('assistant> '));
           await app.run(line, { stream: true, confirmDanger });
           process.stdout.write('\n');
+          try {
+            let start = -1;
+            for (let index = app.context.messages.length - 1; index >= 0; index -= 1) {
+              const message = app.context.messages[index];
+              if (message?.role === 'user' && message.content === line) { start = index; break; }
+            }
+            const turnMessages = start < 0 ? [] : app.context.messages.slice(start);
+            const now = Date.now();
+            historyTitle ||= `${Array.from(line.replace(/\s+/g, ' ').trim()).slice(0, 20).join('')}${Array.from(line).length > 20 ? '…' : ''}`;
+            await upsertSession({
+              id: historySessionId, title: historyTitle, source: 'cli', model: app.config.model,
+              createdAt: historyCreatedAt, updatedAt: now,
+            });
+            for (const [index, message] of turnMessages.entries()) {
+              await appendMessage({
+                sessionId: historySessionId, role: message.role, content: message.content ?? '',
+                toolName: message.role === 'tool' ? message.name : undefined,
+                timestamp: now + index / 1_000,
+              });
+            }
+          } catch { /* History indexing is optional and must not affect the REPL turn. */ }
         }
       } catch (error) {
         if ((error as Error).name === 'AbortError') output('\n[taiwei] Turn cancelled.');

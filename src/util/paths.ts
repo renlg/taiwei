@@ -13,6 +13,7 @@ export interface TaiweiPaths {
   ragIndex: string;
   plugins: string;
   sessions: string;
+  historyDb: string;
   gatewaySessions: string;
   loginLocks: string;
   uploads: string;
@@ -31,6 +32,7 @@ export function getPaths(): TaiweiPaths {
     ragIndex: join(home, 'rag-index.json'),
     plugins: join(home, 'plugins'),
     sessions: join(home, 'sessions'),
+    historyDb: join(home, 'history.db'),
     gatewaySessions: join(home, 'gateway-sessions.json'),
     loginLocks: join(home, 'login-locks.json'),
     uploads: join(home, 'uploads'),

@@ -22,6 +22,12 @@ import { createEmbedder } from '../rag/embedding.js';
 import { loadMcpConfig, type McpServerConfig } from '../mcp/client.js';
 import { ToolRegistry, type ToolConfigSchema } from '../tools/registry.js';
 import type { Skill } from '../skills/loader.js';
+import { appendMessage as appendHistoryMessage, upsertSession as upsertHistorySession, type HistoryMessageInput, type HistorySessionMeta } from '../history/db.js';
+
+export interface GatewayHistoryIndex {
+  upsertSession(meta: HistorySessionMeta): Promise<void>;
+  appendMessage(message: HistoryMessageInput): Promise<unknown>;
+}
 
 export interface GatewayModelState {
   getCurrentModel(): Promise<string>;
@@ -56,6 +62,8 @@ export interface GatewayServerOptions {
     test(config: McpServerConfig): Promise<{ connected: boolean; detail: string }>;
   };
   mcpConfigPath?: string;
+  /** Defaults to the real history index for the normal SessionStore; custom stores may inject their own index. */
+  history?: GatewayHistoryIndex | false;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
@@ -286,6 +294,10 @@ async function attachmentContext(files: unknown, uploadsDirectory: string): Prom
 export function createGatewayServer(options: GatewayServerOptions): Server {
   const publicDirectory = options.publicDirectory ?? DEFAULT_PUBLIC_DIRECTORY;
   const sessions = options.sessions ?? new SessionStore();
+  const historyIndex: GatewayHistoryIndex | false = options.history ?? (options.sessions ? false : {
+    upsertSession: upsertHistorySession,
+    appendMessage: appendHistoryMessage,
+  });
   const authSessions = options.authSessions ?? new AuthSessionStore();
   const loginLocks = options.loginLocks ?? new LoginLockStore();
   const confirmations = options.confirmations ?? new ConfirmationBroker();
@@ -855,6 +867,28 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         }
         session.updatedAt = new Date().toISOString();
         await sessions.save(session);
+        if (historyIndex) {
+          try {
+            await historyIndex.upsertSession({
+              id: session.id, title: session.title, source: 'gateway', model: session.usage?.model,
+              createdAt: session.createdAt, updatedAt: session.updatedAt,
+            });
+            for (const storedMessage of session.messages) {
+              await historyIndex.appendMessage({
+                sessionId: session.id, role: storedMessage.role, content: storedMessage.content,
+                timestamp: storedMessage.timestamp,
+              });
+              for (const tool of storedMessage.toolCalls ?? []) {
+                await historyIndex.appendMessage({
+                  sessionId: session.id, role: 'tool', content: tool.result ?? '', toolName: tool.name,
+                  timestamp: storedMessage.timestamp,
+                });
+              }
+            }
+          } catch (error) {
+            log(`[taiwei] history index update skipped: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
         completed = true;
         response.end();
         return;
