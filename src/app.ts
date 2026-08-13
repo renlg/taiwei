@@ -1,6 +1,6 @@
 import { AgentContext } from './agent/context.js';
 import { InterruptManager, TurnQueue } from './agent/interrupt.js';
-import { runAgentTurn } from './agent/loop.js';
+import { runAgentTurn, type AgentEvent } from './agent/loop.js';
 import { loadConfig, type TaiweiConfig } from './config/config.js';
 import { CronJobStore, type CronJob } from './cron/jobs.js';
 import { CronScheduler } from './cron/scheduler.js';
@@ -39,7 +39,7 @@ export class TaiweiApp {
     if (options.scheduler !== false) await this.scheduler.start();
   }
 
-  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean } = {}): Promise<string> {
+  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void } = {}): Promise<string> {
     return this.turns.run(async () => {
       const signal = this.interrupt.beginTurn();
       try {
@@ -47,6 +47,7 @@ export class TaiweiApp {
           signal,
           retainConversation: options.retainConversation,
           onText: options.stream ? (text) => process.stdout.write(text) : undefined,
+          onEvent: options.onEvent,
         });
       } finally { this.interrupt.endTurn(); }
     });

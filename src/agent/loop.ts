@@ -9,7 +9,14 @@ export interface RunTurnOptions {
   onText?: (text: string) => void;
   cwd?: string;
   retainConversation?: boolean;
+  onEvent?: (event: AgentEvent) => void;
 }
+
+export type AgentEvent =
+  | { type: 'token'; text: string }
+  | { type: 'tool'; name: string; args: Record<string, unknown> }
+  | { type: 'tool_result'; name: string; result: string }
+  | { type: 'done'; text: string };
 
 export async function runAgentTurn(
   prompt: string,
@@ -28,16 +35,26 @@ export async function runAgentTurn(
       messages: [{ role: 'system', content: await context.systemPrompt() }, ...conversation],
       tools: registry.list().map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters })),
       signal: options.signal, timeoutMs: config.requestTimeoutMs,
-      onText: (text) => { fullText += text; options.onText?.(text); },
+      onText: (text) => {
+        fullText += text;
+        options.onText?.(text);
+        options.onEvent?.({ type: 'token', text });
+      },
     });
     conversation.push({ role: 'assistant', content: result.content || null, ...(result.toolCalls.length ? { tool_calls: result.toolCalls } : {}) });
-    if (!result.toolCalls.length) return fullText || result.content;
+    if (!result.toolCalls.length) {
+      const text = fullText || result.content;
+      options.onEvent?.({ type: 'done', text });
+      return text;
+    }
     for (const call of result.toolCalls) {
       let args: Record<string, unknown> = {};
       let output: string;
       try { args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>; }
       catch (error) { output = JSON.stringify({ error: `Invalid tool arguments: ${(error as Error).message}` }); }
+      options.onEvent?.({ type: 'tool', name: call.function.name, args });
       output ??= await registry.dispatch(call.function.name, args, { signal: options.signal, cwd: options.cwd ?? process.cwd() });
+      options.onEvent?.({ type: 'tool_result', name: call.function.name, result: output });
       conversation.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: output });
     }
   }
