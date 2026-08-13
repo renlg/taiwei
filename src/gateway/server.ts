@@ -1,8 +1,10 @@
 import { readFile } from 'node:fs/promises';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ChatBridge } from './chat.js';
+import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
 import { SessionStore, type SessionToolCall } from './sessions.js';
 import { openSse, sendSse } from './sse.js';
 
@@ -12,13 +14,42 @@ export interface GatewayServerOptions {
   sessions?: SessionStore;
   model?: string;
   log?: (message: string) => void;
+  auth?: { enabled: boolean; username: string; password: string };
+  authSessions?: AuthSessionStore;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
 
-function json(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+const LOGIN_WINDOW_MS = 10 * 60 * 1_000;
+const MAX_LOGIN_FAILURES = 5;
+
+function json(response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers });
   response.end(JSON.stringify(body));
+}
+
+function constantTimeEqual(actual: string, expected: string): boolean {
+  const left = createHash('sha256').update(actual).digest();
+  const right = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(left, right);
+}
+
+function requestToken(request: IncomingMessage): string | undefined {
+  const authorization = request.headers.authorization;
+  if (authorization?.startsWith('Bearer ')) return authorization.slice(7).trim() || undefined;
+  const cookies = request.headers.cookie?.split(';') ?? [];
+  for (const cookie of cookies) {
+    const [name, ...parts] = cookie.trim().split('=');
+    if (name === 'taiwei_token') {
+      try { return decodeURIComponent(parts.join('=')); }
+      catch { return undefined; }
+    }
+  }
+  return undefined;
+}
+
+function sessionCookie(token: string, maxAge = Math.floor(AUTH_SESSION_TTL_MS / 1_000)): string {
+  return `taiwei_token=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {
@@ -37,7 +68,13 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
 export function createGatewayServer(options: GatewayServerOptions): Server {
   const publicDirectory = options.publicDirectory ?? DEFAULT_PUBLIC_DIRECTORY;
   const sessions = options.sessions ?? new SessionStore();
+  const authSessions = options.authSessions ?? new AuthSessionStore();
+  const authEnabled = options.auth?.enabled ?? false;
+  if (authEnabled && !options.auth?.password) {
+    throw new Error('Gateway auth is enabled but no password is set. Set auth.password in ~/.taiwei/config.json or TAIWEI_AUTH_PASSWORD.');
+  }
   const log = options.log ?? console.log;
+  const loginFailures = new Map<string, { count: number; windowStartedAt: number }>();
   return createServer(async (request, response) => {
     const started = Date.now();
     const method = request.method ?? 'GET';
@@ -48,8 +85,53 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         json(response, 200, { ok: true });
         return;
       }
+      if (method === 'POST' && pathname === '/api/login') {
+        if (!authEnabled) {
+          json(response, 404, { error: 'Authentication is disabled' });
+          return;
+        }
+        const ip = request.socket.remoteAddress ?? 'unknown';
+        const now = Date.now();
+        const failures = loginFailures.get(ip);
+        if (failures && now - failures.windowStartedAt < LOGIN_WINDOW_MS && failures.count >= MAX_LOGIN_FAILURES) {
+          log(`[taiwei] Warning: login rate limit reached for ${ip}`);
+          json(response, 429, { error: 'Too many login attempts. Try again later.' });
+          return;
+        }
+        const body = await readJson(request) as { username?: unknown; password?: unknown };
+        const valid = typeof body?.username === 'string'
+          && typeof body?.password === 'string'
+          && constantTimeEqual(body.username, options.auth?.username ?? '')
+          && constantTimeEqual(body.password, options.auth?.password ?? '');
+        if (!valid) {
+          const active = failures && now - failures.windowStartedAt < LOGIN_WINDOW_MS
+            ? failures : { count: 0, windowStartedAt: now };
+          active.count += 1;
+          loginFailures.set(ip, active);
+          json(response, 401, { error: 'Invalid username or password' });
+          return;
+        }
+        loginFailures.delete(ip);
+        const token = await authSessions.create(body.username as string);
+        json(response, 200, { token }, { 'set-cookie': sessionCookie(token) });
+        return;
+      }
+      let authenticatedToken: string | undefined;
+      if (authEnabled && pathname.startsWith('/api/')) {
+        authenticatedToken = requestToken(request);
+        const authenticated = authenticatedToken ? await authSessions.authenticate(authenticatedToken) : undefined;
+        if (!authenticated) {
+          json(response, 401, { error: 'unauthorized' });
+          return;
+        }
+      }
+      if (method === 'POST' && pathname === '/api/logout') {
+        if (authenticatedToken) await authSessions.delete(authenticatedToken);
+        json(response, 200, { ok: true }, { 'set-cookie': sessionCookie('', 0) });
+        return;
+      }
       if (method === 'GET' && pathname === '/api/info') {
-        json(response, 200, { model: options.model ?? 'OpenAI compatible' });
+        json(response, 200, { model: options.model ?? 'OpenAI compatible', authEnabled });
         return;
       }
       if (method === 'GET' && pathname === '/api/sessions') {

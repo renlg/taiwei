@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { TaiweiApp } from './app.js';
 import { runOnce } from './cli/once.js';
 import { runRepl } from './cli/repl.js';
-import { initializeConfig } from './config/config.js';
+import { initializeConfig, validateGatewayAuth } from './config/config.js';
+import { AuthSessionStore } from './gateway/auth.js';
 import { AgentChatBridge } from './gateway/chat.js';
 import { closeGateway, createGatewayServer, listenGateway } from './gateway/server.js';
 import { ensureTaiweiHome } from './util/paths.js';
@@ -38,13 +39,21 @@ async function main(): Promise<void> {
     const serve = args[0] === 'serve';
     await app.initialize({ scheduler: args.length === 0 });
     if (serve) {
+      validateGatewayAuth(app.config);
       let port = app.config.gateway.port;
       if (args.length > 1) {
         if (args.length !== 3 || args[1] !== '--port') throw new Error('Usage: taiwei serve [--port N]');
         port = Number(args[2]);
         if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error('Gateway port must be an integer between 0 and 65535');
       }
-      const server = createGatewayServer({ chat: new AgentChatBridge(app), model: app.config.model });
+      const authSessions = new AuthSessionStore();
+      await authSessions.initialize();
+      const server = createGatewayServer({
+        chat: new AgentChatBridge(app),
+        model: app.config.model,
+        auth: app.config.auth,
+        authSessions,
+      });
       const boundPort = await listenGateway(server, app.config.gateway.host, port);
       console.log(`[taiwei] Gateway listening at http://${app.config.gateway.host}:${boundPort}`);
       await new Promise<void>((resolve) => {

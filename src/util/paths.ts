@@ -13,6 +13,7 @@ export interface TaiweiPaths {
   ragIndex: string;
   plugins: string;
   sessions: string;
+  gatewaySessions: string;
 }
 
 export function getPaths(): TaiweiPaths {
@@ -28,6 +29,7 @@ export function getPaths(): TaiweiPaths {
     ragIndex: join(home, 'rag-index.json'),
     plugins: join(home, 'plugins'),
     sessions: join(home, 'sessions'),
+    gatewaySessions: join(home, 'gateway-sessions.json'),
   };
 }
 

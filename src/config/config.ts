@@ -11,6 +11,11 @@ export interface TaiweiConfig {
     host: string;
     port: number;
   };
+  auth: {
+    enabled: boolean;
+    username: string;
+    password: string;
+  };
 }
 
 export const DEFAULT_CONFIG: TaiweiConfig = {
@@ -22,6 +27,11 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   gateway: {
     host: '127.0.0.1',
     port: 8688,
+  },
+  auth: {
+    enabled: false,
+    username: 'admin',
+    password: '',
   },
 };
 
@@ -40,9 +50,13 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     ...DEFAULT_CONFIG,
     ...stored,
     gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
+    auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
     apiKey: process.env.TAIWEI_API_KEY ?? stored.apiKey ?? DEFAULT_CONFIG.apiKey,
     baseUrl: process.env.TAIWEI_BASE_URL ?? stored.baseUrl ?? DEFAULT_CONFIG.baseUrl,
     model: process.env.TAIWEI_MODEL ?? stored.model ?? DEFAULT_CONFIG.model,
+    ...(process.env.TAIWEI_AUTH_PASSWORD !== undefined
+      ? { auth: { ...DEFAULT_CONFIG.auth, ...stored.auth, password: process.env.TAIWEI_AUTH_PASSWORD } }
+      : {}),
   };
 }
 
@@ -55,13 +69,24 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
   const paths = await ensureTaiweiHome();
   try {
     const stored = JSON.parse(await readFile(paths.config, 'utf8')) as Partial<TaiweiConfig>;
-    const config = { ...DEFAULT_CONFIG, ...stored, gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway } };
+    const config = {
+      ...DEFAULT_CONFIG,
+      ...stored,
+      gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
+      auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
+    };
     await saveConfig(config);
     return config;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     await saveConfig(DEFAULT_CONFIG);
     return { ...DEFAULT_CONFIG };
+  }
+}
+
+export function validateGatewayAuth(config: TaiweiConfig): void {
+  if (config.auth.enabled && !config.auth.password) {
+    throw new Error('Gateway auth is enabled but no password is set. Set auth.password in ~/.taiwei/config.json or TAIWEI_AUTH_PASSWORD.');
   }
 }
 
