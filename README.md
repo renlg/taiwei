@@ -1,45 +1,144 @@
 # taiwei
 
-参考 [opencode](https://github.com/sst/opencode) 与 [OpenClaw](https://github.com/openclaw/openclaw) 设计的 **主动 Agent CLI** —— 一个终端里的自主 AI 助手。
+`taiwei` is a proactive, terminal-only AI agent inspired by opencode and OpenClaw. It supports streamed OpenAI-compatible models, tool calls, skills, scheduled autonomous turns, MCP servers, durable memory, local RAG, and plugins—without a web UI or daemon.
 
-支持工具调用、技能（Skill）、定时任务（Cron）、MCP、记忆（Memory）、RAG 知识库，并且**能主动发起对话/打断提醒**（proactive）。
+## Install and initialize
 
-## 特性
-
-- 🖥️ 纯 CLI（交互式 REPL + 一次性执行 `taiwei "任务"`）
-- 🔧 工具调用循环：LLM → 工具 → 结果回填 → 继续，直到完成
-- 🎓 Skill 技能系统：`SKILL.md`（YAML frontmatter + Markdown），按需加载注入
-- ⏰ 定时任务：cron 表达式 + 间隔触发，到点主动运行
-- 🔌 MCP 支持：连接外部 MCP Server（stdio / SSE）
-- 🧠 记忆：持久化记忆，跨会话保留
-- 📚 RAG：本地知识库检索增强生成
-- 🧩 可扩展：工具/技能/插件均可扩展
-- ⚡ 主动打断：定时任务到点主动通知；Ctrl+C 优雅中断
-
-## 快速开始
+Requires Node.js 20 or newer.
 
 ```bash
 npm install
 npm run build
-taiwei --help
-taiwei                      # 交互式模式
-taiwei "帮我总结这个仓库"     # 一次性模式
+./bin/taiwei --init
 ```
 
-## 配置
+Edit `~/.taiwei/config.json`, or set environment variables:
 
-配置文件位于 `~/.taiwei/`：
+```json
+{
+  "model": "gpt-4.1-mini",
+  "baseUrl": "https://api.openai.com/v1",
+  "apiKey": "",
+  "maxTurns": 50,
+  "requestTimeoutMs": 120000
+}
+```
+
+`TAIWEI_API_KEY`, `TAIWEI_BASE_URL`, and `TAIWEI_MODEL` override the file. `TAIWEI_HOME` can override the state directory (useful for isolated environments).
+
+## Usage
 
 ```bash
-~/.taiwei/config.json      # 模型、API、工具配置
-~/.taiwei/memory.md        # 持久化记忆
-~/.taiwei/skills/          # 技能目录
-~/.taiwei/cron.json        # 定时任务
-~/.taiwei/mcp.json         # MCP Server 配置
-~/.taiwei/knowledge/       # RAG 知识库文档
+./bin/taiwei                         # interactive REPL
+./bin/taiwei "summarize this repo"   # one-shot agent turn
+./bin/taiwei --help
+./bin/taiwei --version
 ```
 
-## 技术栈
+The REPL commands are:
 
-- TypeScript + Node.js（>= 20）
-- 零或极少运行时依赖（优先 Node 内置 API）
+```text
+/help  /exit  /stop  /clear  /model <name>
+/skill list|load|unload ...
+/cron list|add|remove|pause|resume ...
+/mcp list|reload
+/memory show|clear
+/rag index|search ...
+/plugin list|reload
+```
+
+Cron arguments that contain spaces should be quoted:
+
+```text
+/cron add status "every 1h" "Review this repository and summarize its status"
+```
+
+Ctrl+C cancels an active LLM request or tool. Scheduled turns wait for an active interactive turn to finish, run in a fresh conversation, then print a notification banner in the REPL.
+
+## State and extensions
+
+All durable state lives in `~/.taiwei/`:
+
+```text
+config.json       model and provider settings
+cron.json         scheduled jobs
+mcp.json          MCP server definitions
+memory.md         durable agent memory
+rag-index.json    generated BM25 index
+knowledge/        .md and .txt knowledge documents
+skills/           <name>/SKILL.md skills
+plugins/          <name>/plugin.js plugins
+```
+
+### Skills
+
+A skill uses simple YAML frontmatter followed by Markdown:
+
+```markdown
+---
+name: reviewer
+description: Review code carefully.
+---
+
+Check correctness, security, and maintainability.
+```
+
+### MCP
+
+`mcp.json` is an array. Both stdio and legacy HTTP SSE transports are supported through the official MCP SDK:
+
+```json
+[
+  {
+    "name": "files",
+    "transport": "stdio",
+    "command": "node",
+    "args": ["/path/to/server.js"],
+    "env": {},
+    "enabled": true
+  },
+  {
+    "name": "remote",
+    "transport": "sse",
+    "url": "https://example.test/sse",
+    "enabled": false
+  }
+]
+```
+
+MCP tools are exposed as `mcp_<server>_<tool>`.
+
+### Plugins
+
+Each `~/.taiwei/plugins/<directory>/plugin.js` may be ESM or CommonJS and exports `{ name, tools?, skills?, init? }`. Tool entries use the same shape as built-in tools: `{ name, description, parameters, execute(args, context) }`.
+
+```js
+export default {
+  name: 'example',
+  tools: [{
+    name: 'hello',
+    description: 'Return a greeting',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => 'hello from a plugin'
+  }],
+  skills: [{
+    name: 'friendly',
+    description: 'Use a friendly voice.',
+    body: 'Be warm and direct.'
+  }],
+  async init({ home }) {
+    // Optional startup hook.
+  }
+};
+```
+
+Plugin tools receive a `plugin_<plugin>_` prefix. Reloading plugins removes previously registered plugin-prefixed tools before loading the current files.
+
+## Development
+
+```bash
+npm run build
+npm test
+```
+
+The runtime dependencies are limited to `@modelcontextprotocol/sdk` and `cron-parser`.
