@@ -42,6 +42,7 @@ test('config initializes with defaults and honors environment overrides', async 
     assert.equal(config.compressThreshold, 0.7);
     assert.equal(resolveCompressThreshold({ ...config, compressThreshold: 0 }), 0.7);
     assert.equal(config.maxTurns, 50);
+    assert.equal(config.autoLoadSkills, true);
     assert.equal(config.auth.enabled, false);
     assert.equal(config.auth.username, 'admin');
     assert.equal(config.auth.password, 'environment-secret');

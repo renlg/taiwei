@@ -24,6 +24,11 @@ export class AgentChatBridge implements ChatBridge {
     const context = new AgentContext(this.app.memory, this.app.skills);
     context.setMessages(history);
     for (const skill of this.app.context.listActiveSkills()) context.activateSkill(skill);
+    if (this.app.config.autoLoadSkills !== false) {
+      try {
+        for (const skill of await this.app.skills.list()) context.activateSkill(skill);
+      } catch { /* Missing or unreadable skills must never block a web chat turn. */ }
+    }
     try {
       try { context.setRetrievedContext(renderRetrievedContext(await retrieve(message))); }
       catch { /* RAG is optional and must never block a web chat turn. */ }

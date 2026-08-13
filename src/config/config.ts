@@ -25,6 +25,7 @@ export interface TaiweiConfig {
   requestTimeoutMs: number;
   hookTimeoutSeconds: number;
   hooks: HookCommands;
+  autoLoadSkills?: boolean;
   skillsDisabled?: string[];
   tools?: Record<string, ToolSettings>;
   gateway: {
@@ -65,6 +66,7 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
     beforeTool: [],
     afterTool: [],
   },
+  autoLoadSkills: true,
   gateway: {
     host: '127.0.0.1',
     port: 8688,
@@ -127,6 +129,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...stored } as TaiweiConfig),
     hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
     hooks: normalizeHooks(stored.hooks),
+    autoLoadSkills: stored.autoLoadSkills ?? DEFAULT_CONFIG.autoLoadSkills,
     skillsDisabled: normalizeStringList(stored.skillsDisabled),
     tools: normalizeToolSettings(stored.tools),
     gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },

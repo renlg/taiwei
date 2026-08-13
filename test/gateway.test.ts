@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import type { AgentEvent } from '../src/agent/loop.js';
 import { AuthSessionStore } from '../src/gateway/auth.js';
-import type { ChatBridge, ChatSink } from '../src/gateway/chat.js';
+import { AgentChatBridge, type ChatBridge, type ChatSink } from '../src/gateway/chat.js';
 import { LOGIN_COOLDOWN_MS, LoginLockStore } from '../src/gateway/login-locks.js';
 import { closeGateway, createGatewayServer, listenGateway } from '../src/gateway/server.js';
 import { SessionStore } from '../src/gateway/sessions.js';
@@ -15,6 +15,10 @@ import { DEFAULT_CONFIG, type TaiweiConfig } from '../src/config/config.js';
 import { hashPassword, isScryptPassword } from '../src/config/password.js';
 import { HookRunner } from '../src/hooks/runner.js';
 import { ToolRegistry } from '../src/tools/registry.js';
+import { AgentContext } from '../src/agent/context.js';
+import { MemoryStore } from '../src/memory/store.js';
+import { SkillLoader } from '../src/skills/loader.js';
+import type { TaiweiApp } from '../src/app.js';
 
 class MockChat implements ChatBridge {
   stopped = false;
@@ -58,6 +62,43 @@ class MockMcpBridge {
   }
   async test(): Promise<{ connected: boolean; detail: string }> { return { connected: true, detail: '2 tools' }; }
 }
+
+test('gateway chat auto-loads only enabled skills by default and honors autoLoadSkills=false', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-auto-skills-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  await mkdir(join(directory, 'skills', 'enabled'), { recursive: true });
+  await mkdir(join(directory, 'skills', 'disabled'), { recursive: true });
+  await writeFile(join(directory, 'skills', 'enabled', 'SKILL.md'), '---\nname: enabled\ndescription: Enabled skill\n---\n\nEnabled');
+  await writeFile(join(directory, 'skills', 'disabled', 'SKILL.md'), '---\nname: disabled\ndescription: Disabled skill\n---\n\nDisabled');
+  try {
+    const skills = new SkillLoader(['disabled']);
+    const memory = new MemoryStore();
+    let capturedSkills: string[] = [];
+    const makeApp = (autoLoadSkills: boolean) => ({
+      config: { ...structuredClone(DEFAULT_CONFIG), autoLoadSkills },
+      memory,
+      skills,
+      context: new AgentContext(memory, skills),
+      run: async (_message: string, options: { context?: AgentContext }) => {
+        capturedSkills = options.context?.listActiveSkills().map((skill) => skill.name) ?? [];
+        return 'done';
+      },
+      interrupt: { cancel: () => false },
+    }) as unknown as TaiweiApp;
+    const sink: ChatSink = { event: () => {}, error: (error) => { throw error; } };
+
+    await new AgentChatBridge(makeApp(true)).run('hello', sink);
+    assert.deepEqual(capturedSkills, ['enabled']);
+
+    capturedSkills = [];
+    await new AgentChatBridge(makeApp(false)).run('hello', sink);
+    assert.deepEqual(capturedSkills, []);
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test('gateway serves health, static UI, and streamed SSE events', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-test-'));

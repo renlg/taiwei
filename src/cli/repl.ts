@@ -150,6 +150,11 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
 }
 
 export async function runRepl(app: TaiweiApp): Promise<void> {
+  if (app.config.autoLoadSkills !== false) {
+    try {
+      for (const skill of await app.skills.list()) app.context.activateSkill(skill);
+    } catch { /* Skill discovery is optional and must not prevent the REPL from starting. */ }
+  }
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: color.cyan('taiwei> ') });
   let closing = false;
   let commandQueue: Promise<void> = Promise.resolve();
