@@ -52,7 +52,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 
 .login-screen { min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 50% 0, var(--accent-soft), transparent 38%), var(--bg); }
 .login-card { width: min(100%, 390px); padding: 34px; border: 1px solid var(--border-strong); border-radius: 22px; background: var(--surface-soft); box-shadow: var(--shadow); backdrop-filter: blur(18px); }
-.login-mark { width: 62px; height: 62px; display: grid; place-items: center; margin: 0 auto 18px; border: 1px solid var(--border-strong); border-radius: 20px; background: linear-gradient(145deg, var(--accent-soft), var(--surface)); font-size: 31px; }
+.login-mark { display: block; width: 80px; height: 80px; object-fit: contain; margin: 0 auto 18px; border: 1px solid var(--border-strong); border-radius: 20%; box-shadow: 0 10px 30px rgba(0, 0, 0, .22); }
 .login-card h1 { margin: 0 0 7px; text-align: center; font-size: 24px; letter-spacing: -.03em; }
 .login-card > p { margin: 0 0 27px; color: var(--muted); text-align: center; font-size: 13px; }
 .login-card label { display: block; margin: 14px 0 7px; color: var(--muted); font-size: 12px; font-weight: 650; }
@@ -66,7 +66,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 .sidebar { position: relative; z-index: 30; display: flex; min-width: 0; flex-direction: column; padding: 18px 14px 14px; background: var(--sidebar); border-right: 1px solid var(--border); transition: width .25s, transform .25s, padding .25s, background .25s; }
 .brand-row { height: 40px; display: flex; align-items: center; justify-content: space-between; margin: 0 7px 19px; }
 .brand { display: flex; gap: 10px; align-items: center; color: var(--text); text-decoration: none; font-size: 18px; font-weight: 760; letter-spacing: -.02em; }
-.brand-mark { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 10px; background: linear-gradient(145deg, var(--accent-soft), transparent); box-shadow: inset 0 0 0 1px var(--border); }
+.brand-mark { display: block; width: 32px; height: 32px; flex: 0 0 auto; object-fit: contain; border: 1px solid var(--border); border-radius: 20%; box-shadow: 0 3px 10px rgba(0, 0, 0, .2); }
 .icon-button { width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border: 1px solid transparent; border-radius: 11px; color: var(--muted); background: transparent; cursor: pointer; transition: .18s; }
 .icon-button:hover { color: var(--text); background: var(--surface-hover); border-color: var(--border); }
 .sidebar-close { display: none; font-size: 25px; }
@@ -158,7 +158,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 
 .welcome { width: min(760px, calc(100% - 36px)); min-height: 100%; margin: 0 auto; padding: 8vh 0 60px; text-align: center; animation: fade-in .4s both; }
 .welcome.hidden { display: none; }
-.welcome-mark { width: 62px; height: 62px; display: grid; place-items: center; margin: 0 auto 19px; border: 1px solid var(--border-strong); border-radius: 20px; background: linear-gradient(145deg, var(--accent-soft), var(--surface)); box-shadow: var(--shadow); font-size: 31px; }
+.welcome-mark { display: block; width: 104px; height: 104px; object-fit: contain; margin: 0 auto 19px; border: 1px solid var(--border-strong); border-radius: 20%; box-shadow: var(--shadow); }
 .welcome h2 { margin: 0 0 8px; font-size: clamp(24px, 4vw, 34px); letter-spacing: -.035em; }
 .welcome > p { max-width: 520px; margin: 0 auto 35px; color: var(--muted); font-size: 14px; line-height: 1.7; }
 .prompt-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 11px; text-align: left; }
