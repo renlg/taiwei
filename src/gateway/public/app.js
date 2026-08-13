@@ -96,11 +96,17 @@ const elements = {
   workspaceInput: $('#workspace-input'),
   workspaceResolved: $('#workspace-resolved'),
   workspaceLabel: $('#workspace-label'),
+  workspaceSettings: $('.workspace-settings'),
+  workspaceToggle: $('#workspace-toggle'),
+  workspaceStatus: $('#workspace-status'),
   securityEnabled: $('#security-enabled'),
   securityTimeout: $('#security-timeout'),
   securityRemember: $('#security-remember'),
   patternList: $('#pattern-list'),
   patternAdd: $('#pattern-add'),
+  securitySettings: $('.security-settings'),
+  securityToggle: $('#security-toggle'),
+  securityStatus: $('#security-status'),
   hooksSettings: $('.hooks-settings'),
   hooksToggle: $('#hooks-toggle'),
   hooksStatus: $('#hooks-status'),
@@ -138,6 +144,8 @@ const state = {
   tools: [],
 };
 
+const WORKSPACE_OPEN_STORAGE_KEY = 'taiwei-settings-workspace-open';
+const SECURITY_OPEN_STORAGE_KEY = 'taiwei-settings-security-open';
 const HOOKS_OPEN_STORAGE_KEY = 'taiwei-settings-hooks-open';
 
 function escapeHtml(value) {
@@ -230,9 +238,26 @@ function addPatternRow(value = '') {
   remove.className = 'pattern-remove';
   remove.textContent = '×';
   remove.setAttribute('aria-label', '删除规则');
-  remove.addEventListener('click', () => row.remove());
+  remove.addEventListener('click', () => {
+    row.remove();
+    updateSecurityStatus();
+  });
   row.append(input, remove);
   elements.patternList.append(row);
+  updateSecurityStatus();
+}
+
+function updateWorkspaceStatus() {
+  elements.workspaceStatus.textContent = elements.workspaceInput.value.trim() === '~/workspace' ? '默认 ~/workspace' : '已设置';
+}
+
+function updateSecurityStatus() {
+  if (!elements.securityEnabled.checked) {
+    elements.securityStatus.textContent = '未开启';
+    return;
+  }
+  const count = elements.patternList.querySelectorAll('.pattern-row').length;
+  elements.securityStatus.textContent = `已开启 · ${count} 条规则`;
 }
 
 function updateHooksStatus() {
@@ -241,15 +266,16 @@ function updateHooksStatus() {
   elements.hooksStatus.textContent = count ? `${count} 条命令` : '未配置';
 }
 
-function setHooksOpen(open, remember = false) {
-  elements.hooksSettings.classList.toggle('is-open', open);
-  elements.hooksToggle.setAttribute('aria-expanded', String(open));
-  if (remember) localStorage.setItem(HOOKS_OPEN_STORAGE_KEY, String(open));
+function setSettingsCollapseOpen(section, toggle, storageKey, open, remember = false) {
+  section.classList.toggle('is-open', open);
+  toggle.setAttribute('aria-expanded', String(open));
+  if (remember) localStorage.setItem(storageKey, String(open));
 }
 
 function renderSettings(settings) {
   elements.workspaceInput.value = settings.workspace.dir;
   elements.workspaceResolved.textContent = `解析为 ${settings.workspace.resolvedDir}`;
+  updateWorkspaceStatus();
   elements.workspaceLabel.textContent = settings.workspace.resolvedDir;
   elements.workspaceLabel.title = `当前工作区：${settings.workspace.resolvedDir}`;
   elements.securityEnabled.checked = settings.security.enabled;
@@ -258,6 +284,7 @@ function renderSettings(settings) {
   state.settingsRemember = settings.security.remember;
   elements.patternList.replaceChildren();
   settings.security.patterns.forEach(addPatternRow);
+  updateSecurityStatus();
   elements.hookTimeout.value = settings.hookTimeoutSeconds;
   elements.hookFields.querySelectorAll('[data-hook-event]').forEach((textarea) => {
     textarea.value = (settings.hooks?.[textarea.dataset.hookEvent] || []).join('\n');
@@ -276,9 +303,11 @@ async function openSettings() {
   elements.settingsError.textContent = '';
   try {
     await loadSettings();
-    setHooksOpen(localStorage.getItem(HOOKS_OPEN_STORAGE_KEY) === 'true');
+    setSettingsCollapseOpen(elements.workspaceSettings, elements.workspaceToggle, WORKSPACE_OPEN_STORAGE_KEY, localStorage.getItem(WORKSPACE_OPEN_STORAGE_KEY) === 'true');
+    setSettingsCollapseOpen(elements.securitySettings, elements.securityToggle, SECURITY_OPEN_STORAGE_KEY, localStorage.getItem(SECURITY_OPEN_STORAGE_KEY) === 'true');
+    setSettingsCollapseOpen(elements.hooksSettings, elements.hooksToggle, HOOKS_OPEN_STORAGE_KEY, localStorage.getItem(HOOKS_OPEN_STORAGE_KEY) === 'true');
     elements.settingsModal.showModal();
-    elements.workspaceInput.focus();
+    elements.workspaceToggle.focus();
   } catch (error) { showToast(error.message); }
 }
 
@@ -1470,9 +1499,18 @@ elements.knowledgeSearchForm.addEventListener('submit', async (event) => {
   finally { button.disabled = false; button.textContent = '搜索'; }
 });
 elements.patternAdd.addEventListener('click', () => addPatternRow());
-elements.hooksToggle.addEventListener('click', () => {
-  setHooksOpen(elements.hooksToggle.getAttribute('aria-expanded') !== 'true', true);
+elements.workspaceToggle.addEventListener('click', () => {
+  setSettingsCollapseOpen(elements.workspaceSettings, elements.workspaceToggle, WORKSPACE_OPEN_STORAGE_KEY, elements.workspaceToggle.getAttribute('aria-expanded') !== 'true', true);
 });
+elements.securityToggle.addEventListener('click', () => {
+  setSettingsCollapseOpen(elements.securitySettings, elements.securityToggle, SECURITY_OPEN_STORAGE_KEY, elements.securityToggle.getAttribute('aria-expanded') !== 'true', true);
+});
+elements.hooksToggle.addEventListener('click', () => {
+  setSettingsCollapseOpen(elements.hooksSettings, elements.hooksToggle, HOOKS_OPEN_STORAGE_KEY, elements.hooksToggle.getAttribute('aria-expanded') !== 'true', true);
+});
+elements.workspaceInput.addEventListener('input', updateWorkspaceStatus);
+elements.securityEnabled.addEventListener('change', updateSecurityStatus);
+elements.patternList.addEventListener('input', updateSecurityStatus);
 elements.hookFields.addEventListener('input', updateHooksStatus);
 elements.settingsForm.addEventListener('submit', async (event) => {
   event.preventDefault();

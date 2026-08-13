@@ -148,28 +148,43 @@
   <dialog class="modal settings-modal" id="settings-modal">
     <form class="modal-card settings-card" id="settings-form" method="dialog">
       <header><div><h2>设置</h2><p>工作区、Hooks 与命令安全策略</p></div><button class="icon-button" id="settings-close" type="button" aria-label="关闭">×</button></header>
-      <section>
-        <h3>工作区</h3>
-        <label for="workspace-input">默认工具目录</label>
-        <input id="workspace-input" autocomplete="off" placeholder="~/workspace" required>
-        <small id="workspace-resolved"></small>
-      </section>
-      <section>
-        <div class="setting-row"><div><h3>危险命令确认</h3><small>默认规则始终生效；下方规则会追加。</small></div><label class="switch"><input id="security-enabled" type="checkbox"><span></span></label></div>
-        <label for="security-timeout">确认超时（秒）</label>
-        <input id="security-timeout" type="number" min="1" max="3600" required>
-        <label for="security-remember">默认记住方式</label>
-        <select id="security-remember"><option value="off">不记住</option><option value="session">本次会话</option><option value="permanent">永久</option></select>
-        <div class="patterns-heading"><label>自定义正则规则</label><button class="small-button" id="pattern-add" type="button">+ 添加</button></div>
-        <div class="pattern-list" id="pattern-list"></div>
-      </section>
-      <section class="hooks-settings">
-        <button class="hooks-toggle" id="hooks-toggle" type="button" aria-expanded="false" aria-controls="hooks-content">
-          <span class="hooks-toggle-title"><span class="hooks-chevron" aria-hidden="true">▸</span><span class="hooks-heading">Hooks</span></span>
-          <small class="hooks-status" id="hooks-status">未配置</small>
+      <section class="settings-collapse workspace-settings">
+        <button class="settings-collapse-toggle" id="workspace-toggle" type="button" aria-expanded="false" aria-controls="workspace-content">
+          <span class="settings-collapse-title"><span class="settings-collapse-chevron" aria-hidden="true">▸</span><span class="settings-collapse-heading">工作区</span></span>
+          <small class="settings-collapse-status" id="workspace-status">默认 ~/workspace</small>
         </button>
-        <div class="hooks-content" id="hooks-content">
-          <div class="hooks-content-inner">
+        <div class="settings-collapse-content" id="workspace-content">
+          <div class="settings-collapse-content-inner">
+            <label for="workspace-input">默认工具目录</label>
+            <input id="workspace-input" autocomplete="off" placeholder="~/workspace" required>
+            <small id="workspace-resolved"></small>
+          </div>
+        </div>
+      </section>
+      <section class="settings-collapse security-settings">
+        <button class="settings-collapse-toggle" id="security-toggle" type="button" aria-expanded="false" aria-controls="security-content">
+          <span class="settings-collapse-title"><span class="settings-collapse-chevron" aria-hidden="true">▸</span><span class="settings-collapse-heading">危险命令确认</span></span>
+          <small class="settings-collapse-status" id="security-status">未开启</small>
+        </button>
+        <div class="settings-collapse-content" id="security-content">
+          <div class="settings-collapse-content-inner">
+            <div class="setting-row"><small>默认规则始终生效；下方规则会追加。</small><label class="switch"><input id="security-enabled" type="checkbox"><span></span></label></div>
+            <label for="security-timeout">确认超时（秒）</label>
+            <input id="security-timeout" type="number" min="1" max="3600" required>
+            <label for="security-remember">默认记住方式</label>
+            <select id="security-remember"><option value="off">不记住</option><option value="session">本次会话</option><option value="permanent">永久</option></select>
+            <div class="patterns-heading"><label>自定义正则规则</label><button class="small-button" id="pattern-add" type="button">+ 添加</button></div>
+            <div class="pattern-list" id="pattern-list"></div>
+          </div>
+        </div>
+      </section>
+      <section class="settings-collapse hooks-settings">
+        <button class="settings-collapse-toggle" id="hooks-toggle" type="button" aria-expanded="false" aria-controls="hooks-content">
+          <span class="settings-collapse-title"><span class="settings-collapse-chevron" aria-hidden="true">▸</span><span class="settings-collapse-heading">Hooks</span></span>
+          <small class="settings-collapse-status" id="hooks-status">未配置</small>
+        </button>
+        <div class="settings-collapse-content" id="hooks-content">
+          <div class="settings-collapse-content-inner">
             <small>每行一个 shell 命令；相对路径以工作区为基准。</small>
             <label for="hook-timeout">Hook 超时（秒）</label>
             <input id="hook-timeout" type="number" min="1" max="3600" required>

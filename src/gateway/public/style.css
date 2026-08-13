@@ -129,18 +129,18 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 .pattern-row input { min-width: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .pattern-remove { width: 34px; height: 34px; flex: none; border: 0; border-radius: 8px; color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, transparent); cursor: pointer; }
 .modal-error { min-height: 17px; color: var(--danger); font-size: 11px; }
-.modal-card section.hooks-settings { margin-top: 16px; padding: 0; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-soft); }
-.hooks-toggle { width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px; border: 0; color: var(--text); background: transparent; cursor: pointer; text-align: left; transition: background .18s; }
-.hooks-toggle:hover { background: var(--surface-hover); }
-.hooks-toggle-title { display: flex; align-items: center; gap: 8px; }
-.hooks-heading { font-size: 13px; font-weight: 700; }
-.hooks-chevron { width: 12px; color: var(--muted); font-size: 12px; transform-origin: center; transition: transform .22s ease; }
-.hooks-toggle[aria-expanded="true"] .hooks-chevron { transform: rotate(90deg); }
-.hooks-status { flex: none; color: var(--muted); font-weight: 600; }
-.hooks-content { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows .25s ease, visibility 0s linear .25s; }
-.hooks-settings.is-open .hooks-content { grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows .25s ease, visibility 0s; }
-.hooks-content-inner { min-height: 0; padding: 0 14px; overflow: hidden; border-top: 1px solid transparent; transition: padding .25s ease, border-color .25s ease; }
-.hooks-settings.is-open .hooks-content-inner { padding-top: 13px; padding-bottom: 14px; border-color: var(--border); }
+.modal-card section.settings-collapse { margin-top: 16px; padding: 0; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-soft); }
+.settings-collapse-toggle { width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px; border: 0; color: var(--text); background: transparent; cursor: pointer; text-align: left; transition: background .18s; }
+.settings-collapse-toggle:hover { background: var(--surface-hover); }
+.settings-collapse-title { display: flex; align-items: center; gap: 8px; }
+.settings-collapse-heading { font-size: 13px; font-weight: 700; }
+.settings-collapse-chevron { width: 12px; color: var(--muted); font-size: 12px; transform-origin: center; transition: transform .22s ease; }
+.settings-collapse-toggle[aria-expanded="true"] .settings-collapse-chevron { transform: rotate(90deg); }
+.settings-collapse-status { flex: none; color: var(--muted); font-weight: 600; }
+.settings-collapse-content { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows .25s ease, visibility 0s linear .25s; }
+.settings-collapse.is-open .settings-collapse-content { grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows .25s ease, visibility 0s; }
+.settings-collapse-content-inner { min-height: 0; padding: 0 14px; overflow: hidden; border-top: 1px solid transparent; transition: padding .25s ease, border-color .25s ease; }
+.settings-collapse.is-open .settings-collapse-content-inner { padding-top: 13px; padding-bottom: 14px; border-color: var(--border); }
 .hook-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; margin-top: 8px; }
 .hook-fields label { min-width: 0; margin-top: 4px; font: 10.5px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .hook-fields textarea { display: block; min-height: 58px; margin-top: 5px; resize: vertical; font: 10.5px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
