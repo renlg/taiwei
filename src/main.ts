@@ -50,7 +50,6 @@ async function main(): Promise<void> {
       await authSessions.initialize();
       const server = createGatewayServer({
         chat: new AgentChatBridge(app),
-        model: app.config.model,
         auth: app.config.auth,
         authSessions,
       });

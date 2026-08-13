@@ -10,6 +10,7 @@ export interface RunTurnOptions {
   cwd?: string;
   retainConversation?: boolean;
   onEvent?: (event: AgentEvent) => void;
+  getModel?: () => Promise<string>;
 }
 
 export type AgentEvent =
@@ -30,8 +31,9 @@ export async function runAgentTurn(
   let fullText = '';
   for (let turn = 0; turn < config.maxTurns; turn += 1) {
     if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
+    const model = options.getModel ? await options.getModel() : config.model;
     const result = await streamChat({
-      baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model,
+      baseUrl: config.baseUrl, apiKey: config.apiKey, model,
       messages: [{ role: 'system', content: await context.systemPrompt() }, ...conversation],
       tools: registry.list().map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters })),
       signal: options.signal, timeoutMs: config.requestTimeoutMs,

@@ -9,6 +9,7 @@ import type { ChatBridge, ChatSink } from '../src/gateway/chat.js';
 import { closeGateway, createGatewayServer, listenGateway } from '../src/gateway/server.js';
 import { SessionStore } from '../src/gateway/sessions.js';
 import type { ChatMessage } from '../src/llm/client.js';
+import type { GatewayModelState } from '../src/gateway/server.js';
 
 class MockChat implements ChatBridge {
   stopped = false;
@@ -36,13 +37,30 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
   await writeFile(join(directory, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   const mock = new MockChat();
   const sessions = new SessionStore(join(directory, 'sessions'));
-  const server = createGatewayServer({ chat: mock, sessions, model: 'test-model', publicDirectory: directory, log: () => {} });
+  let currentModel = 'good';
+  const modelState: GatewayModelState = {
+    getCurrentModel: async () => currentModel,
+    resolveModels: async () => ({ models: ['good', 'free'], current: currentModel, source: 'config' }),
+    setCurrentModel: async (model) => { currentModel = model; },
+  };
+  const server = createGatewayServer({ chat: mock, sessions, modelState, publicDirectory: directory, log: () => {} });
   const port = await listenGateway(server, '127.0.0.1', 0);
   const baseUrl = `http://127.0.0.1:${port}`;
   try {
     const health = await fetch(`${baseUrl}/api/health`);
     assert.equal(health.status, 200);
     assert.deepEqual(await health.json(), { ok: true });
+
+    assert.deepEqual(await (await fetch(`${baseUrl}/api/models`)).json(), { models: ['good', 'free'], current: 'good' });
+    const switched = await fetch(`${baseUrl}/api/model`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'free' }),
+    });
+    assert.deepEqual(await switched.json(), { ok: true, current: 'free' });
+    assert.deepEqual(await (await fetch(`${baseUrl}/api/model`)).json(), { current: 'free' });
+    const unknown = await fetch(`${baseUrl}/api/model`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'missing' }),
+    });
+    assert.equal(unknown.status, 400);
 
     const page = await fetch(baseUrl);
     assert.equal(page.status, 200);
@@ -123,6 +141,7 @@ test('gateway authenticates API requests and preserves tokens across restarts', 
   try {
     assert.equal((await fetch(`${baseUrl}/api/health`)).status, 200);
     assert.equal((await fetch(`${baseUrl}/api/sessions`)).status, 401);
+    assert.equal((await fetch(`${baseUrl}/api/models`)).status, 401);
 
     const wrong = await fetch(`${baseUrl}/api/login`, {
       method: 'POST', headers: { 'content-type': 'application/json' },

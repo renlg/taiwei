@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,9 @@ import { ToolRegistry } from '../src/tools/registry.js';
 import { streamChat } from '../src/llm/client.js';
 import { PluginLoader } from '../src/plugins/loader.js';
 import { chunkText } from '../src/rag/index.js';
+import { getCurrentModel, resolveModels, setCurrentModel } from '../src/config/model.js';
+import { handleModelCommand } from '../src/cli/repl.js';
+import type { TaiweiApp } from '../src/app.js';
 
 test('config initializes with defaults and honors environment overrides', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-test-'));
@@ -41,6 +44,47 @@ test('gateway auth validation rejects an enabled empty password', () => {
     gateway: { host: '127.0.0.1', port: 0 },
     auth: { enabled: true, username: 'admin', password: '' },
   }), /auth\.password.*TAIWEI_AUTH_PASSWORD/);
+});
+
+test('model state falls back when upstream is unavailable and persists switches', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-model-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  const oldModel = process.env.TAIWEI_MODEL;
+  process.env.TAIWEI_HOME = directory;
+  delete process.env.TAIWEI_MODEL;
+  try {
+    await writeFile(join(directory, 'config.json'), JSON.stringify({ model: 'good', baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'secret' }));
+    assert.deepEqual(await resolveModels(), { models: ['good'], current: 'good', source: 'fallback' });
+    await setCurrentModel('free');
+    assert.equal(await getCurrentModel(), 'free');
+    const stored = JSON.parse(await readFile(join(directory, 'config.json'), 'utf8')) as { model: string; baseUrl: string };
+    assert.equal(stored.model, 'free');
+    assert.equal(stored.baseUrl, 'http://127.0.0.1:1/v1');
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    if (oldModel === undefined) delete process.env.TAIWEI_MODEL; else process.env.TAIWEI_MODEL = oldModel;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('REPL model command lists candidates, switches, and rejects unknown names', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-repl-model-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  const oldModel = process.env.TAIWEI_MODEL;
+  process.env.TAIWEI_HOME = directory;
+  delete process.env.TAIWEI_MODEL;
+  try {
+    await writeFile(join(directory, 'config.json'), JSON.stringify({ model: 'good', models: ['good', 'free'] }));
+    const app = { config: await loadConfig() } as TaiweiApp;
+    assert.equal(await handleModelCommand(app), 'Current model: good\nAvailable models:\n* good\n  free');
+    assert.equal(await handleModelCommand(app, 'free'), '[taiwei] Model set to free.');
+    assert.equal((JSON.parse(await readFile(join(directory, 'config.json'), 'utf8')) as { model: string }).model, 'free');
+    await assert.rejects(handleModelCommand(app, 'missing'), /Unknown model: missing.*Available models/s);
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    if (oldModel === undefined) delete process.env.TAIWEI_MODEL; else process.env.TAIWEI_MODEL = oldModel;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('tool registry dispatches registered tools and reports unknown tools', async () => {

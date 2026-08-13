@@ -7,12 +7,19 @@ import type { ChatBridge } from './chat.js';
 import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
 import { SessionStore, type SessionToolCall } from './sessions.js';
 import { openSse, sendSse } from './sse.js';
+import { getCurrentModel, resolveModels, setCurrentModel, type ModelListResult } from '../config/model.js';
+
+export interface GatewayModelState {
+  getCurrentModel(): Promise<string>;
+  resolveModels(): Promise<ModelListResult>;
+  setCurrentModel(name: string): Promise<unknown>;
+}
 
 export interface GatewayServerOptions {
   chat: ChatBridge;
   publicDirectory?: string;
   sessions?: SessionStore;
-  model?: string;
+  modelState?: GatewayModelState;
   log?: (message: string) => void;
   auth?: { enabled: boolean; username: string; password: string };
   authSessions?: AuthSessionStore;
@@ -87,6 +94,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
     throw new Error('Gateway auth is enabled but no password is set. Set auth.password in ~/.taiwei/config.json or TAIWEI_AUTH_PASSWORD.');
   }
   const log = options.log ?? console.log;
+  const modelState: GatewayModelState = options.modelState ?? { getCurrentModel, resolveModels, setCurrentModel };
   const loginFailures = new Map<string, { count: number; windowStartedAt: number }>();
   return createServer(async (request, response) => {
     const started = Date.now();
@@ -144,7 +152,33 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'GET' && pathname === '/api/info') {
-        json(response, 200, { model: options.model ?? 'OpenAI compatible', authEnabled });
+        json(response, 200, { model: await modelState.getCurrentModel(), authEnabled });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/models') {
+        const listed = await modelState.resolveModels();
+        json(response, 200, { models: listed.models, current: listed.current });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/model') {
+        json(response, 200, { current: await modelState.getCurrentModel() });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/model') {
+        const body = await readJson(request) as { model?: unknown };
+        if (typeof body?.model !== 'string' || !body.model.trim()) {
+          json(response, 400, { error: 'model must be a non-empty string' });
+          return;
+        }
+        const model = body.model.trim();
+        const listed = await modelState.resolveModels();
+        const known = listed.models.includes(model) || model === listed.current;
+        if (!known && listed.source !== 'fallback') {
+          json(response, 400, { error: `Unknown model: ${model}`, models: listed.models });
+          return;
+        }
+        await modelState.setCurrentModel(model);
+        json(response, 200, { ok: true, current: model });
         return;
       }
       if (method === 'GET' && pathname === '/api/sessions') {

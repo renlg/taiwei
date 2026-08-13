@@ -5,7 +5,7 @@ import { nextRun } from '../cron/scheduler.js';
 import { renderRetrievedContext } from '../rag/prompt.js';
 import { buildIndex } from '../rag/index.js';
 import { retrieve } from '../rag/retrieve.js';
-import { setModel } from '../config/config.js';
+import { resolveModels, setCurrentModel } from '../config/model.js';
 
 const color = {
   cyan: (text: string) => `\x1b[36m${text}\x1b[0m`,
@@ -18,7 +18,7 @@ const HELP = `Commands:
   /exit                         Exit taiwei
   /stop                         Cancel the active turn
   /clear                        Clear conversation history
-  /model <name>                 Change and persist the model
+  /model [name]                 List models or change the current model
   /skill list|load|unload ...   Manage active skills
   /cron list                    List scheduled jobs
   /cron add <name> <schedule> <prompt>
@@ -50,6 +50,22 @@ function tokenize(input: string): string[] {
 
 function output(message: string): void { process.stdout.write(`${message}\n`); }
 
+export async function handleModelCommand(app: TaiweiApp, name?: string): Promise<string> {
+  const available = await resolveModels();
+  if (!name) {
+    const lines = available.models.map((model) => `${model === available.current ? '*' : ' '} ${model}`);
+    if (!available.models.includes(available.current)) lines.unshift(`* ${available.current}`);
+    return `Current model: ${available.current}\nAvailable models:\n${lines.join('\n')}`;
+  }
+  const model = name.trim();
+  const known = available.models.includes(model) || model === available.current;
+  if (!known && available.source !== 'fallback') {
+    throw new Error(`Unknown model: ${model}. Available models:\n${available.models.join('\n')}`);
+  }
+  app.config = await setCurrentModel(model);
+  return `[taiwei] Model set to ${model}.`;
+}
+
 async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promise<boolean> {
   const [rawCommand, action, ...args] = tokenize(line);
   const command = rawCommand?.toLowerCase();
@@ -59,8 +75,7 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
     case '/stop': output(app.interrupt.cancel() ? '[taiwei] Cancelling active turn…' : '[taiwei] No active turn.'); break;
     case '/clear': app.context.clear(); output('[taiwei] Conversation cleared.'); break;
     case '/model': {
-      if (!action) throw new Error('Usage: /model <name>');
-      app.config = await setModel(action); output(`[taiwei] Model set to ${action}.`); break;
+      output(await handleModelCommand(app, action)); break;
     }
     case '/skill': {
       const pluginSkills = app.plugins.skills();

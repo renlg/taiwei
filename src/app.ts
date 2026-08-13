@@ -2,6 +2,7 @@ import { AgentContext } from './agent/context.js';
 import { InterruptManager, TurnQueue } from './agent/interrupt.js';
 import { runAgentTurn, type AgentEvent } from './agent/loop.js';
 import { loadConfig, type TaiweiConfig } from './config/config.js';
+import { getCurrentModel } from './config/model.js';
 import { CronJobStore, type CronJob } from './cron/jobs.js';
 import { CronScheduler } from './cron/scheduler.js';
 import { McpBridge } from './mcp/bridge.js';
@@ -43,11 +44,13 @@ export class TaiweiApp {
     return this.turns.run(async () => {
       const signal = this.interrupt.beginTurn();
       try {
+        this.config = await loadConfig();
         return await runAgentTurn(prompt, options.context ?? this.context, this.registry, this.config, {
           signal,
           retainConversation: options.retainConversation,
           onText: options.stream ? (text) => process.stdout.write(text) : undefined,
           onEvent: options.onEvent,
+          getModel: getCurrentModel,
         });
       } finally { this.interrupt.endTurn(); }
     });
@@ -57,7 +60,8 @@ export class TaiweiApp {
     const result = await this.turns.run(async () => {
       const cronContext = new AgentContext(this.memory, this.skills);
       try {
-        return await runAgentTurn(job.prompt, cronContext, this.registry, this.config, { retainConversation: false });
+        this.config = await loadConfig();
+        return await runAgentTurn(job.prompt, cronContext, this.registry, this.config, { retainConversation: false, getModel: getCurrentModel });
       } catch (error) { return `Error: ${(error as Error).message}`; }
     });
     const summary = result.replace(/\s+/g, ' ').trim().slice(0, 500) || '(no text response)';

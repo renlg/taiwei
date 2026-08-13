@@ -3,6 +3,7 @@ import { ensureTaiweiHome } from '../util/paths.js';
 
 export interface TaiweiConfig {
   model: string;
+  models?: string[];
   baseUrl: string;
   apiKey: string;
   maxTurns: number;
@@ -88,11 +89,4 @@ export function validateGatewayAuth(config: TaiweiConfig): void {
   if (config.auth.enabled && !config.auth.password) {
     throw new Error('Gateway auth is enabled but no password is set. Set auth.password in ~/.taiwei/config.json or TAIWEI_AUTH_PASSWORD.');
   }
-}
-
-export async function setModel(model: string): Promise<TaiweiConfig> {
-  const config = await loadConfig();
-  config.model = model;
-  await saveConfig(config);
-  return config;
 }
