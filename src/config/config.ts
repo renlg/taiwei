@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { ensureTaiweiHome } from '../util/paths.js';
+import { HOOK_EVENTS, type HookCommands } from '../hooks/runner.js';
 
 export type SecurityRememberMode = 'off' | 'session' | 'permanent';
 
@@ -14,6 +15,8 @@ export interface TaiweiConfig {
   apiKey: string;
   maxTurns: number;
   requestTimeoutMs: number;
+  hookTimeoutSeconds: number;
+  hooks: HookCommands;
   gateway: {
     host: string;
     port: number;
@@ -42,6 +45,14 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   apiKey: '',
   maxTurns: 50,
   requestTimeoutMs: 120_000,
+  hookTimeoutSeconds: 10,
+  hooks: {
+    beforeMessage: [],
+    beforeLLM: [],
+    afterLLM: [],
+    beforeTool: [],
+    afterTool: [],
+  },
   gateway: {
     host: '127.0.0.1',
     port: 8688,
@@ -94,6 +105,8 @@ export async function loadConfig(): Promise<TaiweiConfig> {
   return {
     ...DEFAULT_CONFIG,
     ...stored,
+    hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
+    hooks: normalizeHooks(stored.hooks),
     gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
     auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
     workspace: { ...DEFAULT_CONFIG.workspace, ...stored.workspace },
@@ -124,6 +137,8 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
     const config = {
       ...DEFAULT_CONFIG,
       ...stored,
+      hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
+      hooks: normalizeHooks(stored.hooks),
       gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
       auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
       workspace: { ...DEFAULT_CONFIG.workspace, ...stored.workspace },
@@ -141,12 +156,26 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
     await saveConfig(DEFAULT_CONFIG);
     return {
       ...DEFAULT_CONFIG,
+      hooks: normalizeHooks(),
       gateway: { ...DEFAULT_CONFIG.gateway },
       auth: { ...DEFAULT_CONFIG.auth },
       workspace: { ...DEFAULT_CONFIG.workspace },
       security: { ...DEFAULT_CONFIG.security, patterns: [], approvedPatterns: [] },
     };
   }
+}
+
+function normalizeHooks(value?: Partial<HookCommands>): HookCommands {
+  return Object.fromEntries(HOOK_EVENTS.map((event) => [
+    event,
+    Array.isArray(value?.[event]) ? value[event]!.filter((command): command is string => typeof command === 'string' && Boolean(command.trim())) : [],
+  ])) as unknown as HookCommands;
+}
+
+function normalizeHookTimeout(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 1
+    ? Math.min(3600, Math.floor(value))
+    : DEFAULT_CONFIG.hookTimeoutSeconds;
 }
 
 export function validateGatewayAuth(config: TaiweiConfig): void {

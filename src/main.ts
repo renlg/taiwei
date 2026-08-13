@@ -55,6 +55,7 @@ async function main(): Promise<void> {
         auth: app.config.auth,
         authSessions,
         loginLocks,
+        hooks: app.hooks,
       });
       const boundPort = await listenGateway(server, app.config.gateway.host, port);
       console.log(`[taiwei] Gateway listening at http://${app.config.gateway.host}:${boundPort}`);

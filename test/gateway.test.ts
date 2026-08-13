@@ -12,6 +12,7 @@ import { SessionStore } from '../src/gateway/sessions.js';
 import type { ChatMessage } from '../src/llm/client.js';
 import type { GatewayModelState } from '../src/gateway/server.js';
 import { DEFAULT_CONFIG, type TaiweiConfig } from '../src/config/config.js';
+import { HookRunner } from '../src/hooks/runner.js';
 
 class MockChat implements ChatBridge {
   stopped = false;
@@ -94,7 +95,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=5/);
+    assert.match(pageBody, /logo\.png\?v=6/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -187,6 +188,8 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
 test('gateway settings persist workspace/security changes and confirmation pauses until approval', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-settings-test-'));
   const workspace = join(directory, 'new-workspace');
+  const hookScript = join(directory, 'test-hook.cjs');
+  await writeFile(hookScript, `process.stdin.resume(); process.stdin.on('end', () => process.stdout.write(JSON.stringify({ extraContext: 'tested' })));`);
   let config = structuredClone(DEFAULT_CONFIG) as TaiweiConfig;
   const configState = {
     load: async () => structuredClone(config),
@@ -207,13 +210,26 @@ test('gateway settings persist workspace/security changes and confirmation pause
       body: JSON.stringify({
         workspace: { dir: workspace },
         security: { enabled: true, timeoutSeconds: 15, remember: 'session', patterns: ['deploy\\s+prod'] },
+        hooks: { beforeMessage: [], beforeLLM: [], afterLLM: [`node ${JSON.stringify(hookScript)}`], beforeTool: [], afterTool: [] },
+        hookTimeoutSeconds: 12,
       }),
     });
     assert.equal(saved.status, 200);
     assert.equal(config.workspace.dir, workspace);
     assert.deepEqual(config.security.patterns, ['deploy\\s+prod']);
     assert.equal(config.security.timeoutSeconds, 15);
+    assert.equal(config.hookTimeoutSeconds, 12);
+    assert.equal(config.hooks.afterLLM.length, 1);
     assert.equal((await stat(workspace)).isDirectory(), true);
+
+    const hookTest = await fetch(`${baseUrl}/api/hooks/test`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ event: 'afterLLM', command: config.hooks.afterLLM[0] }),
+    });
+    assert.equal(hookTest.status, 200);
+    const hookResult = await hookTest.json() as { exitCode: number; response?: { extraContext?: string } };
+    assert.equal(hookResult.exitCode, 0);
+    assert.equal(hookResult.response?.extraContext, 'tested');
 
     const session = await (await fetch(`${baseUrl}/api/sessions`, { method: 'POST' })).json() as { id: string };
     const chat = await fetch(`${baseUrl}/api/chat`, {
@@ -229,6 +245,40 @@ test('gateway settings persist workspace/security changes and confirmation pause
     const stream = await chat.text();
     assert.match(stream, /event: confirm\ndata: \{"id":"confirmation-1","command":"shutdown -h now"/);
     assert.match(stream, /event: done\ndata: \{"text":"approved"/);
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('beforeMessage hook blocks gateway chat before persistence and agent execution', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-before-message-hook-test-'));
+  const script = join(directory, 'block-message.cjs');
+  await writeFile(script, `let input = ''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { const payload = JSON.parse(input); process.stdout.write(JSON.stringify({ block: payload.message === 'blocked', reason: 'message policy' })); });`);
+  const config = structuredClone(DEFAULT_CONFIG) as TaiweiConfig;
+  config.workspace.dir = directory;
+  config.hooks.beforeMessage = [`node ${JSON.stringify(script)}`];
+  const chat = new MockChat();
+  const sessions = new SessionStore(join(directory, 'sessions'));
+  const server = createGatewayServer({
+    chat,
+    sessions,
+    uploadsDirectory: join(directory, 'uploads'),
+    hooks: new HookRunner(config.hooks, config.hookTimeoutSeconds, directory, () => {}),
+    configState: { load: async () => structuredClone(config), save: async () => {} },
+    log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  try {
+    const session = await (await fetch(`http://127.0.0.1:${port}/api/sessions`, { method: 'POST' })).json() as { id: string };
+    const response = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: 'blocked', sessionId: session.id }),
+    });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: 'message policy', blockedByHook: true });
+    assert.equal(chat.messages.length, 0);
+    const stored = await sessions.get(session.id);
+    assert.equal(stored?.messages.length, 0);
   } finally {
     await closeGateway(server);
     await rm(directory, { recursive: true, force: true });
@@ -258,6 +308,7 @@ test('gateway authenticates API requests and preserves tokens across restarts', 
     assert.equal((await fetch(`${baseUrl}/api/sessions`)).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/models`)).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/settings`)).status, 401);
+    assert.equal((await fetch(`${baseUrl}/api/hooks/test`, { method: 'POST' })).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/confirm`, { method: 'POST' })).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/upload`, { method: 'POST', headers: { 'x-file-name': 'private.txt' }, body: 'private' })).status, 401);
 

@@ -54,14 +54,11 @@ const elements = {
   securityRemember: $('#security-remember'),
   patternList: $('#pattern-list'),
   patternAdd: $('#pattern-add'),
-  confirmModal: $('#confirm-modal'),
-  confirmReason: $('#confirm-reason'),
-  confirmWorkspace: $('#confirm-workspace'),
-  confirmCommand: $('#confirm-command'),
-  confirmRemember: $('#confirm-remember'),
-  confirmCountdown: $('#confirm-countdown'),
-  confirmApprove: $('#confirm-approve'),
-  confirmReject: $('#confirm-reject'),
+  hookTimeout: $('#hook-timeout'),
+  hookFields: $('#hook-fields'),
+  hookTestEvent: $('#hook-test-event'),
+  hookTest: $('#hook-test'),
+  hookTestResult: $('#hook-test-result'),
   sidebarToggle: $('#sidebar-toggle'),
   sidebarClose: $('#sidebar-close'),
   scrim: $('#mobile-scrim'),
@@ -84,9 +81,7 @@ const state = {
   attachments: [],
   workspace: '',
   settingsRemember: 'off',
-  confirmationQueue: [],
-  activeConfirmation: null,
-  confirmationTimer: 0,
+  confirmations: new Map(),
 };
 
 function escapeHtml(value) {
@@ -195,6 +190,11 @@ function renderSettings(settings) {
   state.settingsRemember = settings.security.remember;
   elements.patternList.replaceChildren();
   settings.security.patterns.forEach(addPatternRow);
+  elements.hookTimeout.value = settings.hookTimeoutSeconds;
+  elements.hookFields.querySelectorAll('[data-hook-event]').forEach((textarea) => {
+    textarea.value = (settings.hooks?.[textarea.dataset.hookEvent] || []).join('\n');
+  });
+  elements.hookTestResult.textContent = '';
 }
 
 async function loadSettings() {
@@ -212,47 +212,99 @@ async function openSettings() {
   } catch (error) { showToast(error.message); }
 }
 
-function showNextConfirmation() {
-  if (state.activeConfirmation || !state.confirmationQueue.length) return;
-  const request = state.confirmationQueue.shift();
-  state.activeConfirmation = request;
-  elements.confirmReason.textContent = request.reason;
-  elements.confirmWorkspace.textContent = `工作区：${request.workspace}`;
-  elements.confirmCommand.textContent = request.command;
-  elements.confirmRemember.value = state.settingsRemember;
+function enqueueConfirmation(request, answerView) {
+  if (!answerView.stack.querySelector('.bubble')?.textContent && !answerView.stack.querySelector('.tool-list')) answerView.row.remove();
+  const row = document.createElement('div');
+  row.className = 'message-row confirmation-row';
+  row.dataset.confirmationId = request.id;
+  const card = document.createElement('section');
+  card.className = 'confirmation-card pending';
+  const heading = document.createElement('header');
+  heading.innerHTML = '<span class="confirmation-icon" aria-hidden="true">⚠️</span><div><h3>危险命令确认</h3><p></p></div>';
+  heading.querySelector('p').textContent = request.reason || '此命令需要你的确认';
+  const workspace = document.createElement('div');
+  workspace.className = 'confirmation-workspace';
+  workspace.textContent = `工作区：${request.workspace || ''}`;
+  const commandWrap = document.createElement('div');
+  commandWrap.className = 'confirmation-command-wrap';
+  const command = document.createElement('pre');
+  command.className = 'confirmation-command';
+  command.textContent = request.command;
+  const copy = document.createElement('button');
+  copy.type = 'button'; copy.className = 'confirmation-copy'; copy.textContent = '复制';
+  copy.addEventListener('click', () => copyText(request.command, copy));
+  commandWrap.append(command, copy);
+  const controls = document.createElement('div');
+  controls.className = 'confirmation-controls';
+  const rememberLabel = document.createElement('label');
+  rememberLabel.className = 'confirmation-remember';
+  const remember = document.createElement('input');
+  remember.type = 'checkbox';
+  const rememberText = document.createElement('span'); rememberText.textContent = '记住选择';
+  const rememberMode = document.createElement('select');
+  rememberMode.innerHTML = '<option value="session">本次会话</option><option value="permanent">永久</option>';
+  rememberMode.value = state.settingsRemember === 'permanent' ? 'permanent' : 'session';
+  remember.checked = state.settingsRemember !== 'off';
+  rememberMode.disabled = !remember.checked;
+  remember.addEventListener('change', () => { rememberMode.disabled = !remember.checked; });
+  rememberLabel.append(remember, rememberText, rememberMode);
+  const countdown = document.createElement('span');
+  countdown.className = 'confirmation-countdown';
+  controls.append(rememberLabel, countdown);
+  const actions = document.createElement('footer');
+  const reject = document.createElement('button');
+  reject.type = 'button'; reject.className = 'secondary-button danger-button'; reject.textContent = '拒绝';
+  const approve = document.createElement('button');
+  approve.type = 'button'; approve.className = 'primary-button'; approve.textContent = '允许运行';
+  actions.append(reject, approve);
+  const status = document.createElement('div');
+  status.className = 'confirmation-status';
+  card.append(heading, workspace, commandWrap, controls, actions, status);
+  row.append(card);
+  elements.messages.append(row);
   const deadline = Date.now() + Number(request.timeoutSeconds || 60) * 1000;
   const updateCountdown = () => {
     const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-    elements.confirmCountdown.textContent = `${remaining} 秒后自动拒绝`;
-    if (!remaining) decideConfirmation(false);
+    countdown.textContent = `剩余 ${remaining}s`;
+    if (!remaining) decideConfirmation(request.id, false, 'timeout');
   };
+  state.confirmations.set(request.id, { request, card, timer: 0, remember, rememberMode });
   updateCountdown();
-  state.confirmationTimer = setInterval(updateCountdown, 1000);
-  elements.confirmModal.showModal();
-  elements.confirmReject.focus();
+  const pending = state.confirmations.get(request.id);
+  if (pending) pending.timer = setInterval(updateCountdown, 1000);
+  reject.addEventListener('click', () => decideConfirmation(request.id, false));
+  approve.addEventListener('click', () => decideConfirmation(request.id, true));
+  autoScroll(true);
 }
 
-function enqueueConfirmation(request) {
-  state.confirmationQueue.push(request);
-  showNextConfirmation();
-}
-
-async function decideConfirmation(approve) {
-  const request = state.activeConfirmation;
-  if (!request) return;
-  state.activeConfirmation = null;
-  clearInterval(state.confirmationTimer);
-  if (elements.confirmModal.open) elements.confirmModal.close();
+async function decideConfirmation(id, approve, outcome = approve ? 'approved' : 'rejected') {
+  const pending = state.confirmations.get(id);
+  if (!pending || !pending.card.classList.contains('pending')) return;
+  clearInterval(pending.timer);
+  pending.card.classList.remove('pending');
+  pending.card.classList.add(outcome);
+  pending.card.querySelector('.confirmation-controls').hidden = true;
+  pending.card.querySelector('footer').hidden = true;
+  const status = pending.card.querySelector('.confirmation-status');
+  status.textContent = outcome === 'approved' ? '✓ 已允许' : outcome === 'timeout' ? '已超时（自动拒绝）' : '✕ 已拒绝';
+  state.confirmations.delete(id);
   try {
     await requestJson('/api/confirm', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id: request.id, approve, remember: approve ? elements.confirmRemember.value : 'off' }),
+      body: JSON.stringify({ id, approve, remember: approve && pending.remember.checked ? pending.rememberMode.value : 'off' }),
     });
   } catch (error) {
-    if (error.status !== 404) showToast(error.message);
+    if (error.status === 404) {
+      pending.card.classList.remove('approved', 'rejected');
+      pending.card.classList.add('timeout');
+      status.textContent = '已超时（自动拒绝）';
+    } else showToast(error.message);
   }
-  showNextConfirmation();
+}
+
+async function rejectPendingConfirmations() {
+  await Promise.all([...state.confirmations.keys()].map((id) => decideConfirmation(id, false)));
 }
 
 async function copyText(text, button) {
@@ -700,9 +752,10 @@ async function submit(message, files = []) {
   const userMessage = { role: 'user', content: message, timestamp: new Date().toISOString() };
   addMessage(userMessage, { forceScroll: true });
   const assistantMessage = { role: 'assistant', content: '', timestamp: new Date().toISOString(), toolCalls: [] };
-  const answerView = addMessage(assistantMessage, { streaming: true, forceScroll: true });
+  let answerView = addMessage(assistantMessage, { streaming: true, forceScroll: true });
   const toolViews = [];
   let answer = '';
+  let segmentText = '';
   let serverError = '';
   let usageCheckpoint = 0;
   state.controller = new AbortController();
@@ -736,8 +789,10 @@ async function submit(message, files = []) {
         const item = parseEvent(block);
         if (!item) continue;
         if (item.event === 'token') {
-          answer += item.data.text || '';
-          updateAssistant(answerView, answer);
+          const text = item.data.text || '';
+          answer += text;
+          segmentText += text;
+          updateAssistant(answerView, segmentText);
           const estimatedTokens = Math.ceil(Math.max(0, answer.length - usageCheckpoint) / 4);
           renderUsage({
             ...state.usage,
@@ -764,7 +819,10 @@ async function submit(message, files = []) {
             target.details.querySelector('.tool-detail').textContent = `${JSON.stringify(target.call.args, null, 2)}\n\n结果\n${item.data.result}`;
           }
         } else if (item.event === 'confirm') {
-          enqueueConfirmation(item.data);
+          if (segmentText || answerView.stack.querySelector('.tool-list')) finalizeAssistant(answerView, segmentText);
+          enqueueConfirmation(item.data, answerView);
+          segmentText = '';
+          answerView = addMessage({ role: 'assistant', content: '', timestamp: new Date().toISOString(), toolCalls: [] }, { streaming: true, forceScroll: true });
         } else if (item.event === 'usage') {
           state.usage = {
             promptTokens: item.data.promptTokens || 0,
@@ -778,33 +836,35 @@ async function submit(message, files = []) {
           usageCheckpoint = answer.length;
           renderUsage();
         } else if (item.event === 'done') {
-          answer = item.data.text || answer;
+          const finalAnswer = item.data.text || answer;
+          if (!answer && finalAnswer) segmentText = finalAnswer;
+          answer = finalAnswer;
           if (item.data.sessionId) state.current.id = item.data.sessionId;
-          finalizeAssistant(answerView, answer);
+          finalizeAssistant(answerView, segmentText);
         } else if (item.event === 'error') serverError = item.data.message || '未知错误';
       }
       if (done) break;
     }
     if (serverError) {
-      if (!answer) answerView.row.remove();
-      else finalizeAssistant(answerView, answer);
+      if (!segmentText && !answerView.stack.querySelector('.tool-list')) answerView.row.remove();
+      else finalizeAssistant(answerView, segmentText);
       addMessage({ role: 'assistant', content: `发生错误：${serverError}`, status: 'error', timestamp: new Date().toISOString() }, { forceScroll: true });
       setStatus('error', '出错了');
     } else {
-      finalizeAssistant(answerView, answer);
+      finalizeAssistant(answerView, segmentText);
       setStatus('idle', '就绪');
     }
   } catch (error) {
     if (error.name === 'AbortError') {
-      finalizeAssistant(answerView, answer);
+      finalizeAssistant(answerView, segmentText);
       const stopped = document.createElement('div');
       stopped.className = 'stop-note';
       stopped.textContent = '⏹ 已停止';
       answerView.stack.insertBefore(stopped, answerView.meta);
       setStatus('idle', '已停止');
     } else {
-      if (!answer) answerView.row.remove();
-      else finalizeAssistant(answerView, answer);
+      if (!segmentText && !answerView.stack.querySelector('.tool-list')) answerView.row.remove();
+      else finalizeAssistant(answerView, segmentText);
       addMessage({ role: 'assistant', content: `连接失败：${error.message}`, status: 'error', timestamp: new Date().toISOString() }, { forceScroll: true });
       setStatus('error', '连接失败');
     }
@@ -868,10 +928,9 @@ elements.input.addEventListener('keydown', (event) => {
   }
 });
 
-elements.stop.addEventListener('click', () => {
+elements.stop.addEventListener('click', async () => {
   if (!state.controller) return;
-  state.confirmationQueue = [];
-  if (state.activeConfirmation) decideConfirmation(false);
+  void rejectPendingConfirmations();
   authenticatedFetch('/api/stop', { method: 'POST' }).catch(() => {});
   state.controller.abort();
 });
@@ -883,6 +942,10 @@ elements.settingsForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   elements.settingsError.textContent = '';
   const patterns = [...elements.patternList.querySelectorAll('input')].map((input) => input.value.trim()).filter(Boolean);
+  const hooks = Object.fromEntries([...elements.hookFields.querySelectorAll('[data-hook-event]')].map((textarea) => [
+    textarea.dataset.hookEvent,
+    textarea.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+  ]));
   try {
     const result = await requestJson('/api/settings', {
       method: 'POST',
@@ -895,6 +958,8 @@ elements.settingsForm.addEventListener('submit', async (event) => {
           remember: elements.securityRemember.value,
           patterns,
         },
+        hooks,
+        hookTimeoutSeconds: Number(elements.hookTimeout.value),
       }),
     });
     elements.workspaceLabel.textContent = result.workspace.resolvedDir;
@@ -905,6 +970,26 @@ elements.settingsForm.addEventListener('submit', async (event) => {
     showToast('设置已保存');
   } catch (error) { elements.settingsError.textContent = error.message; }
 });
+elements.hookTest.addEventListener('click', async () => {
+  const event = elements.hookTestEvent.value;
+  const textarea = elements.hookFields.querySelector(`[data-hook-event="${event}"]`);
+  const command = textarea.value.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  elements.hookTestResult.textContent = '';
+  if (!command) { elements.hookTestResult.textContent = '请先为该事件填写至少一条命令。'; return; }
+  elements.hookTest.disabled = true;
+  elements.hookTest.textContent = '测试中…';
+  try {
+    const result = await requestJson('/api/hooks/test', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event, command }),
+    });
+    elements.hookTestResult.textContent = [
+      `exit: ${result.exitCode === null ? 'null' : result.exitCode}${result.timedOut ? ' (timeout)' : ''}`,
+      result.stdout ? `stdout:\n${result.stdout}` : '',
+      result.stderr ? `stderr:\n${result.stderr}` : '',
+    ].filter(Boolean).join('\n');
+  } catch (error) { elements.hookTestResult.textContent = error.message; }
+  finally { elements.hookTest.disabled = false; elements.hookTest.textContent = '测试首条命令'; }
+});
 elements.settingsReset.addEventListener('click', async () => {
   try {
     await requestJson('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ resetSecurity: true }) });
@@ -912,9 +997,6 @@ elements.settingsReset.addEventListener('click', async () => {
     showToast('安全设置已重置');
   } catch (error) { elements.settingsError.textContent = error.message; }
 });
-elements.confirmApprove.addEventListener('click', () => decideConfirmation(true));
-elements.confirmReject.addEventListener('click', () => decideConfirmation(false));
-elements.confirmModal.addEventListener('cancel', (event) => { event.preventDefault(); decideConfirmation(false); });
 
 elements.chat.addEventListener('scroll', () => {
   const distance = elements.chat.scrollHeight - elements.chat.scrollTop - elements.chat.clientHeight;
@@ -990,8 +1072,7 @@ elements.loginForm.addEventListener('submit', async (event) => {
 
 elements.logout.addEventListener('click', async () => {
   if (state.controller) {
-    state.confirmationQueue = [];
-    if (state.activeConfirmation) await decideConfirmation(false);
+    await rejectPendingConfirmations();
     state.controller.abort();
     state.controller = null;
   }

@@ -13,6 +13,7 @@ import { DEFAULT_CONFIG, expandHome, loadConfig, resolveContextWindow, resolveWo
 import { getPaths } from '../util/paths.js';
 import { DEFAULT_DANGER_PATTERNS } from '../security/commands.js';
 import { ConfirmationBroker } from './confirmations.js';
+import { HOOK_EVENTS, HookRunner, type HookCommands, type HookEvent } from '../hooks/runner.js';
 
 export interface GatewayModelState {
   getCurrentModel(): Promise<string>;
@@ -33,10 +34,11 @@ export interface GatewayServerOptions {
   uploadsDirectory?: string;
   confirmations?: ConfirmationBroker;
   configState?: { load(): Promise<TaiweiConfig>; save(config: TaiweiConfig): Promise<void> };
+  hooks?: HookRunner;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '5';
+const STATIC_ASSET_VERSION = '6';
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -258,6 +260,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             approvedPatterns: config.security.approvedPatterns,
             defaultPatterns: DEFAULT_DANGER_PATTERNS,
           },
+          hooks: config.hooks,
+          hookTimeoutSeconds: config.hookTimeoutSeconds,
         });
         return;
       }
@@ -265,6 +269,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const body = await readJson(request) as {
           workspace?: { dir?: unknown };
           security?: { enabled?: unknown; patterns?: unknown; timeoutSeconds?: unknown; remember?: unknown };
+          hooks?: unknown;
+          hookTimeoutSeconds?: unknown;
           resetSecurity?: unknown;
         };
         const config = await configState.load();
@@ -303,12 +309,34 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             config.security.patterns = patterns;
           }
         }
+        if (body.hookTimeoutSeconds !== undefined) {
+          const timeout = Number(body.hookTimeoutSeconds);
+          if (!Number.isInteger(timeout) || timeout < 1 || timeout > 3600) throw new HttpError(400, 'hookTimeoutSeconds must be an integer from 1 to 3600');
+          config.hookTimeoutSeconds = timeout;
+        }
+        if (body.hooks !== undefined) config.hooks = validateHooks(body.hooks);
         await configState.save(config);
+        options.hooks?.configure(config.hooks, config.hookTimeoutSeconds, resolveWorkspaceDir(config));
         json(response, 200, {
           ok: true,
           workspace: { dir: config.workspace.dir, resolvedDir: resolveWorkspaceDir(config) },
           security: config.security,
+          hooks: config.hooks,
+          hookTimeoutSeconds: config.hookTimeoutSeconds,
         });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/hooks/test') {
+        const body = await readJson(request) as { event?: unknown; command?: unknown };
+        if (!HOOK_EVENTS.includes(body.event as HookEvent)) throw new HttpError(400, 'event must be a supported hook event');
+        if (typeof body.command !== 'string' || !body.command.trim()) throw new HttpError(400, 'command must be a non-empty string');
+        const config = await configState.load();
+        const workspace = resolveWorkspaceDir(config);
+        await mkdir(workspace, { recursive: true });
+        const runner = options.hooks ?? new HookRunner(config.hooks, config.hookTimeoutSeconds, workspace, log);
+        runner.configure(config.hooks, config.hookTimeoutSeconds, workspace);
+        const execution = await runner.test(body.command.trim(), body.event as HookEvent, sampleHookFields(body.event as HookEvent, workspace));
+        json(response, 200, execution);
         return;
       }
       if (method === 'POST' && pathname === '/api/confirm') {
@@ -406,6 +434,17 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           return;
         }
         const message = body.message.trim();
+        const config = await configState.load();
+        const workspace = resolveWorkspaceDir(config);
+        await mkdir(workspace, { recursive: true });
+        if (options.hooks) {
+          options.hooks.configure(config.hooks, config.hookTimeoutSeconds, workspace);
+          const gate = await options.hooks.run('beforeMessage', { sessionId: session.id, message });
+          if (gate.block) {
+            json(response, 403, { error: gate.reason ?? 'Message blocked by hook', blockedByHook: true });
+            return;
+          }
+        }
         const agentMessage = `${message}${await attachmentContext(body.files, uploadsDirectory)}`;
         const history = sessions.toChatHistory(session);
         const activeModel = await modelState.getCurrentModel();
@@ -451,7 +490,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             sendSse(response, 'confirm', request);
             return confirmations.wait(request);
           },
-        }, history);
+        }, history, session.id);
         const content = finalText ?? answer;
         if (finalText !== undefined || content || toolCalls.length || turnError) {
           const stopped = turnError?.message === 'Turn cancelled';
@@ -492,6 +531,26 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       else { sendSse(response, 'error', { message: (error as Error).message }); response.end(); }
     }
   });
+}
+
+function validateHooks(value: unknown): HookCommands {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'hooks must be an object');
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(HOOK_EVENTS.map((event) => {
+    const commands = record[event];
+    if (!Array.isArray(commands) || !commands.every((command) => typeof command === 'string')) {
+      throw new HttpError(400, `hooks.${event} must be an array of command strings`);
+    }
+    return [event, commands.map((command) => command.trim()).filter(Boolean)];
+  })) as unknown as HookCommands;
+}
+
+function sampleHookFields(event: HookEvent, workspace: string): Record<string, unknown> {
+  if (event === 'beforeMessage') return { sessionId: 'test-session', message: 'Hook test message' };
+  if (event === 'beforeLLM') return { sessionId: 'test-session', model: 'test-model', messagesCount: 1, lastMessagePreview: 'Hook test message' };
+  if (event === 'afterLLM') return { sessionId: 'test-session', model: 'test-model', contentPreview: 'Hook test response', usage: { promptTokens: 10, completionTokens: 5 } };
+  if (event === 'beforeTool') return { sessionId: 'test-session', tool: 'bash', args: { command: 'echo hook-test' }, cwd: workspace };
+  return { sessionId: 'test-session', tool: 'bash', args: { command: 'echo hook-test' }, ok: true, resultPreview: 'hook-test' };
 }
 
 export async function listenGateway(server: Server, host: string, port: number): Promise<number> {

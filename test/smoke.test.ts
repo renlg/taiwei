@@ -14,6 +14,9 @@ import { getCurrentModel, resolveModels, setCurrentModel } from '../src/config/m
 import { handleModelCommand } from '../src/cli/repl.js';
 import type { TaiweiApp } from '../src/app.js';
 import { detectDanger } from '../src/security/commands.js';
+import { HookRunner, type HookCommands } from '../src/hooks/runner.js';
+
+const emptyHooks = (): HookCommands => ({ beforeMessage: [], beforeLLM: [], afterLLM: [], beforeTool: [], afterTool: [] });
 
 test('config initializes with defaults and honors environment overrides', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-test-'));
@@ -47,6 +50,7 @@ test('config initializes with defaults and honors environment overrides', async 
 test('gateway auth validation rejects an enabled empty password', () => {
   assert.throws(() => validateGatewayAuth({
     model: 'test', baseUrl: 'http://localhost', apiKey: '', maxTurns: 1, requestTimeoutMs: 1,
+    hookTimeoutSeconds: 10, hooks: emptyHooks(),
     gateway: { host: '127.0.0.1', port: 0 },
     auth: { enabled: true, username: 'admin', password: '' },
     workspace: { dir: '~/workspace' },
@@ -138,6 +142,38 @@ test('tool registry dispatches registered tools and reports unknown tools', asyn
   });
   assert.equal(await registry.dispatch('add', { a: 2, b: 3 }, { cwd: process.cwd() }), '5');
   assert.match(await registry.dispatch('missing', {}, { cwd: process.cwd() }), /Unknown tool/);
+});
+
+test('hook runner sends lifecycle payload JSON on stdin and parses stdout JSON', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-hook-runner-test-'));
+  const script = join(directory, 'hook.cjs');
+  await writeFile(script, `let input = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { const payload = JSON.parse(input); process.stdout.write(JSON.stringify({ extraContext: payload.event + ':' + payload.workspace + ':' + payload.message })); });`);
+  const hooks = emptyHooks();
+  hooks.beforeMessage = [`node ${JSON.stringify(script)}`];
+  const runner = new HookRunner(hooks, 10, directory, () => {});
+  try {
+    const result = await runner.run('beforeMessage', { sessionId: 'session-1', message: 'hello' });
+    assert.equal(result.extraContext, `beforeMessage:${directory}:hello`);
+    assert.equal(result.executions[0]?.exitCode, 0);
+    assert.equal(result.executions[0]?.response?.extraContext, `beforeMessage:${directory}:hello`);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('beforeTool hook can block execution before the tool runs', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-hook-tool-test-'));
+  const script = join(directory, 'block.cjs');
+  await writeFile(script, `process.stdin.resume(); process.stdin.on('end', () => process.stdout.write(JSON.stringify({ block: true, reason: 'policy denied' })));`);
+  const hooks = emptyHooks();
+  hooks.beforeTool = [`node ${JSON.stringify(script)}`];
+  const runner = new HookRunner(hooks, 10, directory, () => {});
+  let executed = false;
+  const registry = new ToolRegistry();
+  registry.register({ name: 'danger', description: 'test', parameters: { type: 'object' }, execute: () => { executed = true; return 'ran'; } });
+  try {
+    const result = await registry.dispatch('danger', { value: 1 }, { cwd: directory, hooks: runner, sessionId: 'session-2' });
+    assert.equal(executed, false);
+    assert.deepEqual(JSON.parse(result), { error: '用户拒绝了该命令的执行', blockedByHook: 'policy denied' });
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test('cron schedule parser handles intervals and cron expressions', () => {

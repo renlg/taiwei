@@ -5,6 +5,7 @@ import type { TokenUsage } from '../llm/client.js';
 import { toOpenAITool } from '../llm/tools.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ConfirmationHandler } from '../security/commands.js';
+import type { HookRunner } from '../hooks/runner.js';
 
 export interface RunTurnOptions {
   signal?: AbortSignal;
@@ -15,6 +16,8 @@ export interface RunTurnOptions {
   getModel?: () => Promise<string>;
   confirmDanger?: ConfirmationHandler;
   authorizeCommand?: (command: string, cwd: string, handler?: ConfirmationHandler, signal?: AbortSignal) => Promise<boolean>;
+  hooks?: HookRunner;
+  sessionId?: string;
 }
 
 export type AgentEvent =
@@ -37,9 +40,16 @@ export async function runAgentTurn(
   for (let turn = 0; turn < config.maxTurns; turn += 1) {
     if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
     const model = options.getModel ? await options.getModel() : config.model;
+    const systemPrompt = await context.systemPrompt(options.cwd);
+    const lastMessage = conversation.at(-1);
+    const lastMessagePreview = typeof lastMessage?.content === 'string' ? lastMessage.content.slice(0, 500) : '';
+    const beforeLLM = await options.hooks?.run('beforeLLM', {
+      sessionId: options.sessionId, model, messagesCount: conversation.length,
+      lastMessagePreview,
+    });
     const result = await streamChat({
       baseUrl: config.baseUrl, apiKey: config.apiKey, model,
-      messages: [{ role: 'system', content: await context.systemPrompt(options.cwd) }, ...conversation],
+      messages: [{ role: 'system', content: beforeLLM?.extraContext ? `${systemPrompt}\n\n${beforeLLM.extraContext}` : systemPrompt }, ...conversation],
       tools: registry.list().map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters })),
       signal: options.signal, timeoutMs: config.requestTimeoutMs,
       onText: (text) => {
@@ -47,6 +57,10 @@ export async function runAgentTurn(
         options.onText?.(text);
         options.onEvent?.({ type: 'token', text });
       },
+    });
+    await options.hooks?.run('afterLLM', {
+      sessionId: options.sessionId, model, contentPreview: result.content.slice(0, 500),
+      ...(result.usage ? { usage: { promptTokens: result.usage.promptTokens, completionTokens: result.usage.completionTokens } } : {}),
     });
     if (result.usage) options.onEvent?.({ type: 'usage', usage: result.usage, model });
     conversation.push({ role: 'assistant', content: result.content || null, ...(result.toolCalls.length ? { tool_calls: result.toolCalls } : {}) });
@@ -68,6 +82,8 @@ export async function runAgentTurn(
         authorizeCommand: options.authorizeCommand
           ? (command, commandCwd) => options.authorizeCommand!(command, commandCwd, options.confirmDanger, options.signal)
           : undefined,
+        hooks: options.hooks,
+        sessionId: options.sessionId,
       });
       options.onEvent?.({ type: 'tool_result', name: call.function.name, result: output });
       conversation.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: output });

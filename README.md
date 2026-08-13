@@ -24,6 +24,14 @@ Edit `~/.taiwei/config.json`, or set environment variables:
   "apiKey": "",
   "maxTurns": 50,
   "requestTimeoutMs": 120000,
+  "hookTimeoutSeconds": 10,
+  "hooks": {
+    "beforeMessage": [],
+    "beforeLLM": [],
+    "afterLLM": [],
+    "beforeTool": [],
+    "afterTool": []
+  },
   "gateway": {
     "host": "127.0.0.1",
     "port": 8688
@@ -92,7 +100,7 @@ Run `/model` to list the models configured in the `models` array and mark the cu
 
 Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The polished browser UI streams answer tokens and tool activity live, supports dark and light themes, includes a model switcher and local file attachments in the message composer, and provides a sidebar for creating, switching, and deleting conversations. Stop cancels the current LLM request or tool through the same cooperative interrupt mechanism as the CLI.
 
-The subtle sidebar label shows the resolved workspace. The gear button opens settings for the workspace and dangerous-command policy. `GET /api/settings` reads these values and `POST /api/settings` validates and persists updates to `~/.taiwei/config.json`; both follow the normal gateway authentication policy.
+The subtle sidebar label shows the resolved workspace. The gear button opens settings for the workspace, lifecycle hooks, and dangerous-command policy. `GET /api/settings` reads these values and `POST /api/settings` validates and persists updates to `~/.taiwei/config.json`; both follow the normal gateway authentication policy. The Hooks section also runs a selected event's first command against a sample payload through `POST /api/hooks/test`.
 
 Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so history and agent context survive browser refreshes and gateway restarts. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
 
@@ -113,7 +121,26 @@ event: confirm
 data: {"id":"...","command":"...","reason":"...","pattern":"...","level":"danger|warn","workspace":"/resolved/path","timeoutSeconds":60}
 ```
 
-The browser queues these prompts and shows one copyable command at a time. It answers through authenticated `POST /api/confirm` with `{"id":"...","approve":true|false,"remember":"off|session|permanent"}`. A missing answer is rejected after `security.timeoutSeconds`. Rejection returns `用户拒绝了该命令的执行` to the model so it can choose a safer approach. Interactive CLI turns prompt with `y/N`; one-shot and unattended cron turns auto-reject because no confirmer is available. Set `security.enabled` to `false` to bypass confirmation.
+The browser renders each prompt as an interactive card inside the chat stream, so multiple pending confirmations can remain visible together. It answers through authenticated `POST /api/confirm` with `{"id":"...","approve":true|false,"remember":"off|session|permanent"}`. A missing answer is rejected after `security.timeoutSeconds`, and the card updates in place to show allowed, rejected, or timed-out state. Rejection returns `用户拒绝了该命令的执行` to the model so it can choose a safer approach. Interactive CLI turns prompt with `y/N`; one-shot and unattended cron turns auto-reject because no confirmer is available. Set `security.enabled` to `false` to bypass confirmation.
+
+#### Lifecycle hooks
+
+Hooks are zero-dependency shell extension points configured as one command per array entry. Commands run with `process.env.SHELL || /bin/sh` using `-lc`, from the configured workspace (so relative paths resolve there and the shell expands `~`). For example:
+
+```json
+{
+  "hookTimeoutSeconds": 10,
+  "hooks": {
+    "beforeMessage": ["./hooks/check-message.sh"],
+    "beforeLLM": ["node ./hooks/add-context.js"],
+    "afterLLM": [],
+    "beforeTool": [],
+    "afterTool": []
+  }
+}
+```
+
+Every hook receives one JSON object on stdin with `event`, Unix-millisecond `timestamp`, resolved `workspace`, optional `sessionId`, and event-specific fields. Valid JSON object stdout is interpreted as a response. `beforeMessage` and `beforeTool` may return `{"block":true,"reason":"..."}`; `beforeLLM` may return `{"extraContext":"..."}`, applied only to that provider call. Other stdout is logged and ignored. Hooks time out after `hookTimeoutSeconds` (10 seconds by default); timeout, spawn errors, non-zero exits, invalid stdout, and stderr are isolated and logged without crashing the turn. The same runner powers gateway, REPL, and one-shot turns.
 
 Remembered approvals are keyed by the exact regex rule that matched, never by the raw command. `session` lasts for the taiwei process; `permanent` records that matched rule in `security.approvedPatterns`. The settings reset action clears custom and remembered rules and restores enabled/60 seconds/off. Because approvals apply to a rule class, keep custom expressions narrowly scoped.
 

@@ -141,7 +141,7 @@
   </div>
   <dialog class="modal settings-modal" id="settings-modal">
     <form class="modal-card settings-card" id="settings-form" method="dialog">
-      <header><div><h2>设置</h2><p>工作区与命令安全策略</p></div><button class="icon-button" id="settings-close" type="button" aria-label="关闭">×</button></header>
+      <header><div><h2>设置</h2><p>工作区、Hooks 与命令安全策略</p></div><button class="icon-button" id="settings-close" type="button" aria-label="关闭">×</button></header>
       <section>
         <h3>工作区</h3>
         <label for="workspace-input">默认工具目录</label>
@@ -157,19 +157,26 @@
         <div class="patterns-heading"><label>自定义正则规则</label><button class="small-button" id="pattern-add" type="button">+ 添加</button></div>
         <div class="pattern-list" id="pattern-list"></div>
       </section>
+      <section class="hooks-settings">
+        <h3>Hooks</h3>
+        <small>每行一个 shell 命令；相对路径以工作区为基准。</small>
+        <label for="hook-timeout">Hook 超时（秒）</label>
+        <input id="hook-timeout" type="number" min="1" max="3600" required>
+        <div class="hook-fields" id="hook-fields">
+          <label>beforeMessage<textarea data-hook-event="beforeMessage" rows="2" placeholder="/path/to/script.sh"></textarea></label>
+          <label>beforeLLM<textarea data-hook-event="beforeLLM" rows="2" placeholder="node /path/to/hook.js"></textarea></label>
+          <label>afterLLM<textarea data-hook-event="afterLLM" rows="2"></textarea></label>
+          <label>beforeTool<textarea data-hook-event="beforeTool" rows="2"></textarea></label>
+          <label>afterTool<textarea data-hook-event="afterTool" rows="2"></textarea></label>
+        </div>
+        <div class="hook-test-row">
+          <select id="hook-test-event" aria-label="选择要测试的 Hook"><option>beforeMessage</option><option>beforeLLM</option><option>afterLLM</option><option>beforeTool</option><option>afterTool</option></select>
+          <button class="small-button" id="hook-test" type="button">测试首条命令</button>
+        </div>
+        <pre class="hook-test-result" id="hook-test-result" aria-live="polite"></pre>
+      </section>
       <div class="modal-error" id="settings-error" role="alert"></div>
       <footer><button class="secondary-button" id="settings-reset" type="button">重置安全默认值</button><button class="primary-button" id="settings-save" type="submit">保存设置</button></footer>
-    </form>
-  </dialog>
-  <dialog class="modal confirm-modal" id="confirm-modal">
-    <form class="modal-card confirm-card" method="dialog">
-      <header><div><h2>⚠ 危险命令确认</h2><p id="confirm-reason"></p></div></header>
-      <div class="confirm-workspace" id="confirm-workspace"></div>
-      <pre class="confirm-command" id="confirm-command"></pre>
-      <label for="confirm-remember">记住此次规则选择</label>
-      <select id="confirm-remember"><option value="off">不记住</option><option value="session">本次会话内记住</option><option value="permanent">永久记住</option></select>
-      <div class="confirm-countdown" id="confirm-countdown"></div>
-      <footer><button class="secondary-button danger-button" id="confirm-reject" type="button">拒绝</button><button class="primary-button" id="confirm-approve" type="button">允许运行</button></footer>
     </form>
   </dialog>
   <div class="toast" id="toast" role="status"></div>
