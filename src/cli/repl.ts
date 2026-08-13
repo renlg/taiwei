@@ -6,6 +6,9 @@ import { renderRetrievedContext } from '../rag/prompt.js';
 import { buildIndex } from '../rag/index.js';
 import { retrieve } from '../rag/retrieve.js';
 import { resolveModels, setCurrentModel } from '../config/model.js';
+import { expandHome, saveConfig } from '../config/config.js';
+import { mkdir, stat } from 'node:fs/promises';
+import type { ConfirmationHandler } from '../security/commands.js';
 
 const color = {
   cyan: (text: string) => `\x1b[36m${text}\x1b[0m`,
@@ -19,6 +22,7 @@ const HELP = `Commands:
   /stop                         Cancel the active turn
   /clear                        Clear conversation history
   /model [name]                 List models or change the current model
+  /workspace <path>             Change the default tool working directory
   /skill list|load|unload ...   Manage active skills
   /cron list                    List scheduled jobs
   /cron add <name> <schedule> <prompt>
@@ -75,6 +79,17 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
     case '/clear': app.context.clear(); output('[taiwei] Conversation cleared.'); break;
     case '/model': {
       output(await handleModelCommand(app, action)); break;
+    }
+    case '/workspace': {
+      const path = [action, ...args].filter(Boolean).join(' ').trim();
+      if (!path) throw new Error('Usage: /workspace <path>');
+      const resolved = expandHome(path);
+      await mkdir(resolved, { recursive: true });
+      if (!(await stat(resolved)).isDirectory()) throw new Error('Workspace path is not a directory');
+      app.config.workspace.dir = path;
+      await saveConfig(app.config);
+      output(`[taiwei] Workspace set to ${resolved}.`);
+      break;
     }
     case '/skill': {
       const pluginSkills = app.plugins.skills();
@@ -138,6 +153,16 @@ export async function runRepl(app: TaiweiApp): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: color.cyan('taiwei> ') });
   let closing = false;
   let commandQueue: Promise<void> = Promise.resolve();
+  let confirming = false;
+  const confirmDanger: ConfirmationHandler = (request) => new Promise((resolve) => {
+    confirming = true;
+    const level = request.level === 'warn' ? 'warning' : 'DANGER';
+    rl.question(`\n[taiwei] ${level}: ${request.reason}\nWorkspace: ${request.workspace}\nCommand: ${request.command}\nAllow this command? [y/N] `, (answer) => {
+      confirming = false;
+      const approve = /^(?:y|yes)$/i.test(answer.trim());
+      resolve({ approve, ...(approve ? { remember: app.config.security.remember } : {}) });
+    });
+  });
   output(`${color.cyan('taiwei')} ${color.dim(`model: ${app.config.model}`)} — type /help for commands`);
   const redraw = (text: string) => { process.stdout.write(`\n${text}\n`); if (!closing) rl.prompt(true); };
   app.interrupt.on('notification', ({ title, message }) => redraw(color.yellow(`[taiwei] ⏰ ${title}: ${message}`)));
@@ -147,6 +172,7 @@ export async function runRepl(app: TaiweiApp): Promise<void> {
     else { output('\n[taiwei] Use /exit or Ctrl+D to quit.'); rl.prompt(); }
   });
   rl.on('line', (raw) => {
+    if (confirming) return;
     const line = raw.trim();
     if (!line) { rl.prompt(); return; }
     if (line === '/stop' && app.interrupt.active) {
@@ -158,7 +184,7 @@ export async function runRepl(app: TaiweiApp): Promise<void> {
         if (line.startsWith('/')) await handleCommand(app, line, rl);
         else {
           process.stdout.write(color.dim('assistant> '));
-          await app.run(line, { stream: true });
+          await app.run(line, { stream: true, confirmDanger });
           process.stdout.write('\n');
         }
       } catch (error) {

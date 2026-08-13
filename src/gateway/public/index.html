@@ -33,7 +33,10 @@
       <div class="history-heading"><span>历史会话</span><span id="session-count">0</span></div>
       <nav class="session-list" id="session-list" aria-label="历史会话"></nav>
       <div class="sidebar-footer">
-        <div class="local-status"><span class="local-dot"></span><span class="sidebar-label">本地安全运行</span></div>
+        <div class="sidebar-runtime">
+          <div class="local-status"><span class="local-dot"></span><span class="sidebar-label">本地安全运行</span></div>
+          <div class="workspace-label sidebar-label" id="workspace-label" title="当前工作区"></div>
+        </div>
       </div>
     </aside>
     <div class="mobile-scrim" id="mobile-scrim"></div>
@@ -50,6 +53,7 @@
           </div>
         </div>
         <div class="topbar-actions">
+          <button class="icon-button" id="settings-open" type="button" aria-label="设置" title="设置">⚙</button>
           <button class="icon-button" id="theme-toggle" type="button" aria-label="切换主题">☾</button>
           <div class="user-menu" id="user-menu">
             <button class="user-trigger" id="user-trigger" type="button" aria-haspopup="menu" aria-expanded="false" hidden>
@@ -135,6 +139,39 @@
       </div>
     </main>
   </div>
+  <dialog class="modal settings-modal" id="settings-modal">
+    <form class="modal-card settings-card" id="settings-form" method="dialog">
+      <header><div><h2>设置</h2><p>工作区与命令安全策略</p></div><button class="icon-button" id="settings-close" type="button" aria-label="关闭">×</button></header>
+      <section>
+        <h3>工作区</h3>
+        <label for="workspace-input">默认工具目录</label>
+        <input id="workspace-input" autocomplete="off" placeholder="~/workspace" required>
+        <small id="workspace-resolved"></small>
+      </section>
+      <section>
+        <div class="setting-row"><div><h3>危险命令确认</h3><small>默认规则始终生效；下方规则会追加。</small></div><label class="switch"><input id="security-enabled" type="checkbox"><span></span></label></div>
+        <label for="security-timeout">确认超时（秒）</label>
+        <input id="security-timeout" type="number" min="1" max="3600" required>
+        <label for="security-remember">默认记住方式</label>
+        <select id="security-remember"><option value="off">不记住</option><option value="session">本次会话</option><option value="permanent">永久</option></select>
+        <div class="patterns-heading"><label>自定义正则规则</label><button class="small-button" id="pattern-add" type="button">+ 添加</button></div>
+        <div class="pattern-list" id="pattern-list"></div>
+      </section>
+      <div class="modal-error" id="settings-error" role="alert"></div>
+      <footer><button class="secondary-button" id="settings-reset" type="button">重置安全默认值</button><button class="primary-button" id="settings-save" type="submit">保存设置</button></footer>
+    </form>
+  </dialog>
+  <dialog class="modal confirm-modal" id="confirm-modal">
+    <form class="modal-card confirm-card" method="dialog">
+      <header><div><h2>⚠ 危险命令确认</h2><p id="confirm-reason"></p></div></header>
+      <div class="confirm-workspace" id="confirm-workspace"></div>
+      <pre class="confirm-command" id="confirm-command"></pre>
+      <label for="confirm-remember">记住此次规则选择</label>
+      <select id="confirm-remember"><option value="off">不记住</option><option value="session">本次会话内记住</option><option value="permanent">永久记住</option></select>
+      <div class="confirm-countdown" id="confirm-countdown"></div>
+      <footer><button class="secondary-button danger-button" id="confirm-reject" type="button">拒绝</button><button class="primary-button" id="confirm-approve" type="button">允许运行</button></footer>
+    </form>
+  </dialog>
   <div class="toast" id="toast" role="status"></div>
   <script type="module" src="/app.js?v={{ASSET_VERSION}}"></script>
 </body>

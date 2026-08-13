@@ -4,6 +4,7 @@ import { streamChat } from '../llm/client.js';
 import type { TokenUsage } from '../llm/client.js';
 import { toOpenAITool } from '../llm/tools.js';
 import type { ToolRegistry } from '../tools/registry.js';
+import type { ConfirmationHandler } from '../security/commands.js';
 
 export interface RunTurnOptions {
   signal?: AbortSignal;
@@ -12,6 +13,8 @@ export interface RunTurnOptions {
   retainConversation?: boolean;
   onEvent?: (event: AgentEvent) => void;
   getModel?: () => Promise<string>;
+  confirmDanger?: ConfirmationHandler;
+  authorizeCommand?: (command: string, cwd: string, handler?: ConfirmationHandler, signal?: AbortSignal) => Promise<boolean>;
 }
 
 export type AgentEvent =
@@ -36,7 +39,7 @@ export async function runAgentTurn(
     const model = options.getModel ? await options.getModel() : config.model;
     const result = await streamChat({
       baseUrl: config.baseUrl, apiKey: config.apiKey, model,
-      messages: [{ role: 'system', content: await context.systemPrompt() }, ...conversation],
+      messages: [{ role: 'system', content: await context.systemPrompt(options.cwd) }, ...conversation],
       tools: registry.list().map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters })),
       signal: options.signal, timeoutMs: config.requestTimeoutMs,
       onText: (text) => {
@@ -58,7 +61,14 @@ export async function runAgentTurn(
       try { args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>; }
       catch (error) { output = JSON.stringify({ error: `Invalid tool arguments: ${(error as Error).message}` }); }
       options.onEvent?.({ type: 'tool', name: call.function.name, args });
-      output ??= await registry.dispatch(call.function.name, args, { signal: options.signal, cwd: options.cwd ?? process.cwd() });
+      const cwd = options.cwd ?? process.cwd();
+      output ??= await registry.dispatch(call.function.name, args, {
+        signal: options.signal,
+        cwd,
+        authorizeCommand: options.authorizeCommand
+          ? (command, commandCwd) => options.authorizeCommand!(command, commandCwd, options.confirmDanger, options.signal)
+          : undefined,
+      });
       options.onEvent?.({ type: 'tool_result', name: call.function.name, result: output });
       conversation.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: output });
     }

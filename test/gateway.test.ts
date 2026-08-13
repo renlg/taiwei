@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -11,6 +11,7 @@ import { closeGateway, createGatewayServer, listenGateway } from '../src/gateway
 import { SessionStore } from '../src/gateway/sessions.js';
 import type { ChatMessage } from '../src/llm/client.js';
 import type { GatewayModelState } from '../src/gateway/server.js';
+import { DEFAULT_CONFIG, type TaiweiConfig } from '../src/config/config.js';
 
 class MockChat implements ChatBridge {
   stopped = false;
@@ -31,6 +32,19 @@ class MockChat implements ChatBridge {
   }
 
   stop(): boolean { this.stopped = true; return true; }
+}
+
+class ConfirmingChat implements ChatBridge {
+  async run(_message: string, sink: ChatSink): Promise<void> {
+    if (!sink.confirm) throw new Error('Confirmation sink is unavailable');
+    const decision = await sink.confirm({
+      id: 'confirmation-1', command: 'shutdown -h now', reason: 'system power command',
+      pattern: '\\bshutdown\\b', level: 'danger', workspace: '/tmp/workspace', timeoutSeconds: 5,
+    });
+    sink.event({ type: 'done', text: decision.approve ? 'approved' : 'rejected' });
+  }
+
+  stop(): boolean { return true; }
 }
 
 test('gateway serves health, static UI, and streamed SSE events', async () => {
@@ -80,7 +94,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=4/);
+    assert.match(pageBody, /logo\.png\?v=5/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -170,6 +184,57 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
   }
 });
 
+test('gateway settings persist workspace/security changes and confirmation pauses until approval', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-settings-test-'));
+  const workspace = join(directory, 'new-workspace');
+  let config = structuredClone(DEFAULT_CONFIG) as TaiweiConfig;
+  const configState = {
+    load: async () => structuredClone(config),
+    save: async (value: TaiweiConfig) => { config = structuredClone(value); },
+  };
+  const server = createGatewayServer({
+    chat: new ConfirmingChat(),
+    sessions: new SessionStore(join(directory, 'sessions')),
+    uploadsDirectory: join(directory, 'uploads'),
+    configState,
+    log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    const saved = await fetch(`${baseUrl}/api/settings`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspace: { dir: workspace },
+        security: { enabled: true, timeoutSeconds: 15, remember: 'session', patterns: ['deploy\\s+prod'] },
+      }),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(config.workspace.dir, workspace);
+    assert.deepEqual(config.security.patterns, ['deploy\\s+prod']);
+    assert.equal(config.security.timeoutSeconds, 15);
+    assert.equal((await stat(workspace)).isDirectory(), true);
+
+    const session = await (await fetch(`${baseUrl}/api/sessions`, { method: 'POST' })).json() as { id: string };
+    const chat = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'danger', sessionId: session.id }),
+    });
+    assert.equal(chat.status, 200);
+    const approval = await fetch(`${baseUrl}/api/confirm`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'confirmation-1', approve: true, remember: 'session' }),
+    });
+    assert.equal(approval.status, 200);
+    const stream = await chat.text();
+    assert.match(stream, /event: confirm\ndata: \{"id":"confirmation-1","command":"shutdown -h now"/);
+    assert.match(stream, /event: done\ndata: \{"text":"approved"/);
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('gateway authenticates API requests and preserves tokens across restarts', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-auth-test-'));
   await writeFile(join(directory, 'index.html'), '<!doctype html><title>taiwei auth test</title>');
@@ -192,6 +257,8 @@ test('gateway authenticates API requests and preserves tokens across restarts', 
     assert.equal((await fetch(`${baseUrl}/api/health`)).status, 200);
     assert.equal((await fetch(`${baseUrl}/api/sessions`)).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/models`)).status, 401);
+    assert.equal((await fetch(`${baseUrl}/api/settings`)).status, 401);
+    assert.equal((await fetch(`${baseUrl}/api/confirm`, { method: 'POST' })).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/upload`, { method: 'POST', headers: { 'x-file-name': 'private.txt' }, body: 'private' })).status, 401);
 
     const wrong = await fetch(`${baseUrl}/api/login`, {

@@ -89,8 +89,45 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 .session-item:hover .session-delete, .session-delete:focus-visible { opacity: 1; }
 .session-delete:hover { color: var(--danger); background: rgba(240, 109, 117, .12); }
 .sidebar-footer { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 9px; margin: 11px 8px 0; color: var(--faint); font-size: 12px; border-top: 1px solid var(--border); padding-top: 13px; }
+.sidebar-runtime { min-width: 0; }
 .local-status { min-width: 0; display: flex; align-items: center; gap: 9px; }
 .local-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 12%, transparent); }
+.workspace-label { max-width: 220px; margin: 7px 0 0 16px; overflow: hidden; font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+.modal { width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; padding: 20px; border: 0; color: var(--text); background: transparent; }
+.modal::backdrop { background: rgba(4, 6, 10, .65); backdrop-filter: blur(5px); }
+.modal[open] { display: grid; place-items: center; }
+.modal-card { width: min(560px, calc(100vw - 28px)); max-height: min(760px, calc(100dvh - 32px)); padding: 22px; overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 18px; color: var(--text); background: var(--surface); box-shadow: var(--shadow); }
+.modal-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 19px; }
+.modal-card h2, .modal-card h3, .modal-card p { margin: 0; }
+.modal-card h2 { font-size: 19px; }
+.modal-card h3 { font-size: 13px; }
+.modal-card header p, .modal-card small { color: var(--faint); font-size: 11px; line-height: 1.5; }
+.modal-card section { padding: 16px 0; border-top: 1px solid var(--border); }
+.modal-card label { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 11px; font-weight: 650; }
+.modal-card input:not([type="checkbox"]), .modal-card select { width: 100%; min-height: 40px; padding: 8px 11px; border: 1px solid var(--border-strong); border-radius: 9px; outline: 0; color: var(--text); background: var(--bg); }
+.modal-card input:focus, .modal-card select:focus { border-color: var(--accent); }
+.modal-card footer { display: flex; justify-content: space-between; gap: 10px; margin-top: 18px; }
+.primary-button, .secondary-button, .small-button { min-height: 38px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: 9px; cursor: pointer; }
+.primary-button { border: 0; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.secondary-button, .small-button { color: var(--muted); background: var(--surface-hover); }
+.small-button { min-height: 30px; padding-inline: 10px; font-size: 11px; }
+.danger-button { color: var(--danger); }
+.setting-row, .patterns-heading, .pattern-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.switch input { position: absolute; opacity: 0; }
+.switch span { position: relative; display: block; width: 40px; height: 22px; border-radius: 999px; background: var(--border-strong); cursor: pointer; transition: .18s; }
+.switch span::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: .18s; }
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(18px); }
+.patterns-heading { margin-top: 14px; }
+.patterns-heading label { margin: 0; }
+.pattern-list { display: grid; gap: 7px; margin-top: 8px; }
+.pattern-row input { min-width: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.pattern-remove { width: 34px; height: 34px; flex: none; border: 0; border-radius: 8px; color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, transparent); cursor: pointer; }
+.modal-error { min-height: 17px; color: var(--danger); font-size: 11px; }
+.confirm-card { width: min(620px, calc(100vw - 28px)); }
+.confirm-workspace, .confirm-countdown { margin: 8px 0; color: var(--faint); font-size: 11px; }
+.confirm-command { max-height: 250px; padding: 14px; overflow: auto; border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border)); border-radius: 10px; color: var(--text); background: var(--bg); font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; user-select: text; }
 
 .main-panel { position: relative; min-width: 0; min-height: 0; display: grid; grid-template-rows: 73px minmax(0, 1fr) auto; background: radial-gradient(circle at 55% -20%, var(--accent-soft), transparent 35%), var(--panel); transition: background .25s; }
 .topbar { z-index: 10; display: flex; align-items: center; justify-content: space-between; padding: 0 25px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 84%, transparent); backdrop-filter: blur(18px); }

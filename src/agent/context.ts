@@ -12,8 +12,9 @@ export class AgentContext {
 
   constructor(private readonly memory: MemoryStore, private readonly skillLoader: SkillLoader) {}
 
-  async systemPrompt(): Promise<string> {
+  async systemPrompt(workspace?: string): Promise<string> {
     const sections = [BASE_PERSONA, `Current date and time: ${new Date().toString()}`];
+    if (workspace) sections.push(`Current workspace (default working directory for tools): ${workspace}`);
     const skills = renderSkills([...this.activeSkills.values()]);
     if (skills) sections.push(skills);
     const memory = (await this.memory.tail()).trim();

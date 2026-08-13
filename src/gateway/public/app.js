@@ -40,6 +40,28 @@ const elements = {
   contextTooltip: $('#context-tooltip'),
   scrollBottom: $('#scroll-bottom'),
   theme: $('#theme-toggle'),
+  settingsOpen: $('#settings-open'),
+  settingsModal: $('#settings-modal'),
+  settingsForm: $('#settings-form'),
+  settingsClose: $('#settings-close'),
+  settingsError: $('#settings-error'),
+  settingsReset: $('#settings-reset'),
+  workspaceInput: $('#workspace-input'),
+  workspaceResolved: $('#workspace-resolved'),
+  workspaceLabel: $('#workspace-label'),
+  securityEnabled: $('#security-enabled'),
+  securityTimeout: $('#security-timeout'),
+  securityRemember: $('#security-remember'),
+  patternList: $('#pattern-list'),
+  patternAdd: $('#pattern-add'),
+  confirmModal: $('#confirm-modal'),
+  confirmReason: $('#confirm-reason'),
+  confirmWorkspace: $('#confirm-workspace'),
+  confirmCommand: $('#confirm-command'),
+  confirmRemember: $('#confirm-remember'),
+  confirmCountdown: $('#confirm-countdown'),
+  confirmApprove: $('#confirm-approve'),
+  confirmReject: $('#confirm-reject'),
   sidebarToggle: $('#sidebar-toggle'),
   sidebarClose: $('#sidebar-close'),
   scrim: $('#mobile-scrim'),
@@ -60,6 +82,11 @@ const state = {
   contextWindow: 128000,
   usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, contextWindow: 128000, model: '' },
   attachments: [],
+  workspace: '',
+  settingsRemember: 'off',
+  confirmationQueue: [],
+  activeConfirmation: null,
+  confirmationTimer: 0,
 };
 
 function escapeHtml(value) {
@@ -138,6 +165,94 @@ function showToast(message) {
   elements.toast.classList.add('show');
   clearTimeout(state.toastTimer);
   state.toastTimer = setTimeout(() => elements.toast.classList.remove('show'), 1800);
+}
+
+function addPatternRow(value = '') {
+  const row = document.createElement('div');
+  row.className = 'pattern-row';
+  const input = document.createElement('input');
+  input.value = value;
+  input.placeholder = '正则表达式';
+  input.setAttribute('aria-label', '危险命令正则');
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'pattern-remove';
+  remove.textContent = '×';
+  remove.setAttribute('aria-label', '删除规则');
+  remove.addEventListener('click', () => row.remove());
+  row.append(input, remove);
+  elements.patternList.append(row);
+}
+
+function renderSettings(settings) {
+  elements.workspaceInput.value = settings.workspace.dir;
+  elements.workspaceResolved.textContent = `解析为 ${settings.workspace.resolvedDir}`;
+  elements.workspaceLabel.textContent = settings.workspace.resolvedDir;
+  elements.workspaceLabel.title = `当前工作区：${settings.workspace.resolvedDir}`;
+  elements.securityEnabled.checked = settings.security.enabled;
+  elements.securityTimeout.value = settings.security.timeoutSeconds;
+  elements.securityRemember.value = settings.security.remember;
+  state.settingsRemember = settings.security.remember;
+  elements.patternList.replaceChildren();
+  settings.security.patterns.forEach(addPatternRow);
+}
+
+async function loadSettings() {
+  const settings = await requestJson('/api/settings');
+  renderSettings(settings);
+  return settings;
+}
+
+async function openSettings() {
+  elements.settingsError.textContent = '';
+  try {
+    await loadSettings();
+    elements.settingsModal.showModal();
+    elements.workspaceInput.focus();
+  } catch (error) { showToast(error.message); }
+}
+
+function showNextConfirmation() {
+  if (state.activeConfirmation || !state.confirmationQueue.length) return;
+  const request = state.confirmationQueue.shift();
+  state.activeConfirmation = request;
+  elements.confirmReason.textContent = request.reason;
+  elements.confirmWorkspace.textContent = `工作区：${request.workspace}`;
+  elements.confirmCommand.textContent = request.command;
+  elements.confirmRemember.value = state.settingsRemember;
+  const deadline = Date.now() + Number(request.timeoutSeconds || 60) * 1000;
+  const updateCountdown = () => {
+    const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    elements.confirmCountdown.textContent = `${remaining} 秒后自动拒绝`;
+    if (!remaining) decideConfirmation(false);
+  };
+  updateCountdown();
+  state.confirmationTimer = setInterval(updateCountdown, 1000);
+  elements.confirmModal.showModal();
+  elements.confirmReject.focus();
+}
+
+function enqueueConfirmation(request) {
+  state.confirmationQueue.push(request);
+  showNextConfirmation();
+}
+
+async function decideConfirmation(approve) {
+  const request = state.activeConfirmation;
+  if (!request) return;
+  state.activeConfirmation = null;
+  clearInterval(state.confirmationTimer);
+  if (elements.confirmModal.open) elements.confirmModal.close();
+  try {
+    await requestJson('/api/confirm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: request.id, approve, remember: approve ? elements.confirmRemember.value : 'off' }),
+    });
+  } catch (error) {
+    if (error.status !== 404) showToast(error.message);
+  }
+  showNextConfirmation();
 }
 
 async function copyText(text, button) {
@@ -648,6 +763,8 @@ async function submit(message, files = []) {
             target.details.classList.add('done');
             target.details.querySelector('.tool-detail').textContent = `${JSON.stringify(target.call.args, null, 2)}\n\n结果\n${item.data.result}`;
           }
+        } else if (item.event === 'confirm') {
+          enqueueConfirmation(item.data);
         } else if (item.event === 'usage') {
           state.usage = {
             promptTokens: item.data.promptTokens || 0,
@@ -753,9 +870,51 @@ elements.input.addEventListener('keydown', (event) => {
 
 elements.stop.addEventListener('click', () => {
   if (!state.controller) return;
+  state.confirmationQueue = [];
+  if (state.activeConfirmation) decideConfirmation(false);
   authenticatedFetch('/api/stop', { method: 'POST' }).catch(() => {});
   state.controller.abort();
 });
+
+elements.settingsOpen.addEventListener('click', openSettings);
+elements.settingsClose.addEventListener('click', () => elements.settingsModal.close());
+elements.patternAdd.addEventListener('click', () => addPatternRow());
+elements.settingsForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  elements.settingsError.textContent = '';
+  const patterns = [...elements.patternList.querySelectorAll('input')].map((input) => input.value.trim()).filter(Boolean);
+  try {
+    const result = await requestJson('/api/settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspace: { dir: elements.workspaceInput.value.trim() },
+        security: {
+          enabled: elements.securityEnabled.checked,
+          timeoutSeconds: Number(elements.securityTimeout.value),
+          remember: elements.securityRemember.value,
+          patterns,
+        },
+      }),
+    });
+    elements.workspaceLabel.textContent = result.workspace.resolvedDir;
+    elements.workspaceLabel.title = `当前工作区：${result.workspace.resolvedDir}`;
+    state.workspace = result.workspace.resolvedDir;
+    state.settingsRemember = result.security.remember;
+    elements.settingsModal.close();
+    showToast('设置已保存');
+  } catch (error) { elements.settingsError.textContent = error.message; }
+});
+elements.settingsReset.addEventListener('click', async () => {
+  try {
+    await requestJson('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ resetSecurity: true }) });
+    await loadSettings();
+    showToast('安全设置已重置');
+  } catch (error) { elements.settingsError.textContent = error.message; }
+});
+elements.confirmApprove.addEventListener('click', () => decideConfirmation(true));
+elements.confirmReject.addEventListener('click', () => decideConfirmation(false));
+elements.confirmModal.addEventListener('cancel', (event) => { event.preventDefault(); decideConfirmation(false); });
 
 elements.chat.addEventListener('scroll', () => {
   const distance = elements.chat.scrollHeight - elements.chat.scrollTop - elements.chat.clientHeight;
@@ -831,6 +990,8 @@ elements.loginForm.addEventListener('submit', async (event) => {
 
 elements.logout.addEventListener('click', async () => {
   if (state.controller) {
+    state.confirmationQueue = [];
+    if (state.activeConfirmation) await decideConfirmation(false);
     state.controller.abort();
     state.controller = null;
   }
@@ -860,6 +1021,9 @@ async function loadChat() {
     state.sessions = sessions;
     state.currentModel = models?.current || info.model || state.currentModel;
     state.contextWindow = info.contextWindow || state.contextWindow;
+    state.workspace = info.workspace || '';
+    elements.workspaceLabel.textContent = state.workspace;
+    elements.workspaceLabel.title = `当前工作区：${state.workspace}`;
     state.models = models?.models?.length ? models.models : [state.currentModel];
     if (!state.models.includes(state.currentModel)) state.models.unshift(state.currentModel);
     renderModels();
@@ -868,6 +1032,7 @@ async function loadChat() {
     elements.userAvatar.textContent = Array.from(username)[0]?.toUpperCase() || 'U';
     elements.userTrigger.hidden = !info.authEnabled;
     renderSessionList();
+    await loadSettings();
     if (sessions.length) await loadSession(sessions[0].id);
     else renderConversation(null);
   } catch (error) {

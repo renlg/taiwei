@@ -3,6 +3,7 @@ import type { ToolDefinition } from '../llm/tools.js';
 export interface ToolContext {
   signal?: AbortSignal;
   cwd: string;
+  authorizeCommand?: (command: string, cwd: string) => Promise<boolean>;
 }
 
 export interface ToolSpec extends ToolDefinition {

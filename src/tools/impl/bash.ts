@@ -12,6 +12,10 @@ export const bashTool: ToolSpec = {
     required: ['command'], additionalProperties: false,
   },
   async execute(args, context) {
+    const command = String(args.command);
+    if (context.authorizeCommand && !await context.authorizeCommand(command, context.cwd)) {
+      return { error: '用户拒绝了该命令的执行', command, cwd: context.cwd };
+    }
     const result = await execFileAsync(process.env.SHELL || '/bin/sh', ['-lc', String(args.command)], {
       cwd: context.cwd,
       signal: context.signal,

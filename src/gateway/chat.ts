@@ -2,10 +2,12 @@ import type { TaiweiApp } from '../app.js';
 import { AgentContext } from '../agent/context.js';
 import type { AgentEvent } from '../agent/loop.js';
 import type { ChatMessage } from '../llm/client.js';
+import type { ConfirmationDecision, ConfirmationRequest } from '../security/commands.js';
 
 export interface ChatSink {
   event(event: AgentEvent): void;
   error(error: Error): void;
+  confirm?(request: ConfirmationRequest): Promise<ConfirmationDecision>;
 }
 
 export interface ChatBridge {
@@ -21,7 +23,11 @@ export class AgentChatBridge implements ChatBridge {
     context.setMessages(history);
     for (const skill of this.app.context.listActiveSkills()) context.activateSkill(skill);
     try {
-      await this.app.run(message, { context, onEvent: (event) => sink.event(event) });
+      await this.app.run(message, {
+        context,
+        onEvent: (event) => sink.event(event),
+        confirmDanger: sink.confirm,
+      });
     } catch (error) {
       const reason = error instanceof Error ? error : new Error(String(error));
       sink.error(reason.name === 'AbortError' ? new Error('Turn cancelled') : reason);

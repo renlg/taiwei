@@ -9,8 +9,10 @@ import { LoginLockStore, type LoginLock } from './login-locks.js';
 import { SessionStore, type SessionToolCall } from './sessions.js';
 import { openSse, sendSse } from './sse.js';
 import { getCurrentModel, resolveModels, setCurrentModel, type ModelListResult } from '../config/model.js';
-import { loadConfig, resolveContextWindow } from '../config/config.js';
+import { DEFAULT_CONFIG, expandHome, loadConfig, resolveContextWindow, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
 import { getPaths } from '../util/paths.js';
+import { DEFAULT_DANGER_PATTERNS } from '../security/commands.js';
+import { ConfirmationBroker } from './confirmations.js';
 
 export interface GatewayModelState {
   getCurrentModel(): Promise<string>;
@@ -29,10 +31,12 @@ export interface GatewayServerOptions {
   authSessions?: AuthSessionStore;
   loginLocks?: LoginLockStore;
   uploadsDirectory?: string;
+  confirmations?: ConfirmationBroker;
+  configState?: { load(): Promise<TaiweiConfig>; save(config: TaiweiConfig): Promise<void> };
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '4';
+const STATIC_ASSET_VERSION = '5';
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -168,6 +172,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const sessions = options.sessions ?? new SessionStore();
   const authSessions = options.authSessions ?? new AuthSessionStore();
   const loginLocks = options.loginLocks ?? new LoginLockStore();
+  const confirmations = options.confirmations ?? new ConfirmationBroker();
+  const configState = options.configState ?? { load: loadConfig, save: saveConfig };
   const uploadsDirectory = resolve(options.uploadsDirectory ?? getPaths().uploads);
   const authEnabled = options.auth?.enabled ?? false;
   if (authEnabled && !options.auth?.password) {
@@ -230,12 +236,89 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       }
       if (method === 'GET' && pathname === '/api/info') {
         const model = await modelState.getCurrentModel();
+        const config = await configState.load();
         json(response, 200, {
           model,
           contextWindow: await contextWindowFor(model),
           authEnabled,
+          workspace: resolveWorkspaceDir(config),
           ...(authenticatedUsername ? { username: authenticatedUsername } : {}),
         });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/settings') {
+        const config = await configState.load();
+        json(response, 200, {
+          workspace: { dir: config.workspace.dir, resolvedDir: resolveWorkspaceDir(config) },
+          security: {
+            enabled: config.security.enabled,
+            patterns: config.security.patterns,
+            timeoutSeconds: config.security.timeoutSeconds,
+            remember: config.security.remember,
+            approvedPatterns: config.security.approvedPatterns,
+            defaultPatterns: DEFAULT_DANGER_PATTERNS,
+          },
+        });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/settings') {
+        const body = await readJson(request) as {
+          workspace?: { dir?: unknown };
+          security?: { enabled?: unknown; patterns?: unknown; timeoutSeconds?: unknown; remember?: unknown };
+          resetSecurity?: unknown;
+        };
+        const config = await configState.load();
+        if (body.workspace !== undefined) {
+          if (!body.workspace || typeof body.workspace.dir !== 'string' || !body.workspace.dir.trim()) throw new HttpError(400, 'workspace.dir must be a non-empty string');
+          const resolvedDir = expandHome(body.workspace.dir.trim());
+          await mkdir(resolvedDir, { recursive: true });
+          const info = await stat(resolvedDir);
+          if (!info.isDirectory()) throw new HttpError(400, 'workspace.dir must resolve to a directory');
+          config.workspace.dir = body.workspace.dir.trim();
+        }
+        if (body.resetSecurity === true) config.security = { ...DEFAULT_CONFIG.security, patterns: [], approvedPatterns: [] };
+        if (body.security !== undefined) {
+          const value = body.security;
+          if (!value || typeof value !== 'object') throw new HttpError(400, 'security must be an object');
+          if (value.enabled !== undefined) {
+            if (typeof value.enabled !== 'boolean') throw new HttpError(400, 'security.enabled must be boolean');
+            config.security.enabled = value.enabled;
+          }
+          if (value.timeoutSeconds !== undefined) {
+            const timeout = Number(value.timeoutSeconds);
+            if (!Number.isInteger(timeout) || timeout < 1 || timeout > 3600) throw new HttpError(400, 'security.timeoutSeconds must be an integer from 1 to 3600');
+            config.security.timeoutSeconds = timeout;
+          }
+          if (value.remember !== undefined) {
+            if (!['off', 'session', 'permanent'].includes(String(value.remember))) throw new HttpError(400, 'security.remember must be off, session, or permanent');
+            config.security.remember = value.remember as TaiweiConfig['security']['remember'];
+          }
+          if (value.patterns !== undefined) {
+            if (!Array.isArray(value.patterns) || !value.patterns.every((pattern) => typeof pattern === 'string' && pattern.trim())) throw new HttpError(400, 'security.patterns must be an array of non-empty regex strings');
+            const patterns = value.patterns.map((pattern) => pattern.trim());
+            for (const pattern of patterns) {
+              try { new RegExp(pattern, 'i'); }
+              catch (error) { throw new HttpError(400, `Invalid security regex ${pattern}: ${(error as Error).message}`); }
+            }
+            config.security.patterns = patterns;
+          }
+        }
+        await configState.save(config);
+        json(response, 200, {
+          ok: true,
+          workspace: { dir: config.workspace.dir, resolvedDir: resolveWorkspaceDir(config) },
+          security: config.security,
+        });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/confirm') {
+        const body = await readJson(request) as { id?: unknown; approve?: unknown; remember?: unknown };
+        if (typeof body.id !== 'string' || typeof body.approve !== 'boolean') throw new HttpError(400, 'id and approve are required');
+        if (body.remember !== undefined && !['off', 'session', 'permanent'].includes(String(body.remember))) throw new HttpError(400, 'remember must be off, session, or permanent');
+        if (!confirmations.decide(body.id, { approve: body.approve, ...(body.remember ? { remember: body.remember as TaiweiConfig['security']['remember'] } : {}) })) {
+          throw new HttpError(404, 'Confirmation is no longer pending');
+        }
+        json(response, 200, { ok: true });
         return;
       }
       if (method === 'GET' && pathname === '/api/models') {
@@ -364,6 +447,10 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             }
           },
           error: (error) => { turnError = error; sendSse(response, 'error', { message: error.message }); },
+          confirm: (request) => {
+            sendSse(response, 'confirm', request);
+            return confirmations.wait(request);
+          },
         }, history);
         const content = finalText ?? answer;
         if (finalText !== undefined || content || toolCalls.length || turnError) {

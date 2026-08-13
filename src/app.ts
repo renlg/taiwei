@@ -1,7 +1,8 @@
 import { AgentContext } from './agent/context.js';
 import { InterruptManager, TurnQueue } from './agent/interrupt.js';
 import { runAgentTurn, type AgentEvent } from './agent/loop.js';
-import { loadConfig, type TaiweiConfig } from './config/config.js';
+import { mkdir } from 'node:fs/promises';
+import { loadConfig, resolveWorkspaceDir, type TaiweiConfig } from './config/config.js';
 import { getCurrentModel } from './config/model.js';
 import { CronJobStore, type CronJob } from './cron/jobs.js';
 import { CronScheduler } from './cron/scheduler.js';
@@ -16,6 +17,7 @@ import { readTool } from './tools/impl/read.js';
 import { searchTool } from './tools/impl/search.js';
 import { writeTool } from './tools/impl/write.js';
 import { ToolRegistry } from './tools/registry.js';
+import { CommandSecurity, type ConfirmationHandler } from './security/commands.js';
 
 export class TaiweiApp {
   config!: TaiweiConfig;
@@ -29,9 +31,11 @@ export class TaiweiApp {
   readonly mcp = new McpBridge(this.registry);
   readonly plugins = new PluginLoader(this.registry);
   readonly scheduler = new CronScheduler(this.cronJobs, (job) => this.executeCron(job));
+  readonly security = new CommandSecurity();
 
   async initialize(options: { external?: boolean; scheduler?: boolean } = {}): Promise<void> {
     this.config = await loadConfig();
+    await mkdir(resolveWorkspaceDir(this.config), { recursive: true });
     for (const tool of [bashTool, readTool, writeTool, searchTool, ragSearchTool, ...createMemoryTools(this.memory)]) this.registry.register(tool);
     if (options.external !== false) {
       await this.plugins.reload();
@@ -40,17 +44,22 @@ export class TaiweiApp {
     if (options.scheduler !== false) await this.scheduler.start();
   }
 
-  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext } = {}): Promise<string> {
+  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler } = {}): Promise<string> {
     return this.turns.run(async () => {
       const signal = this.interrupt.beginTurn();
       try {
         this.config = await loadConfig();
+        const cwd = resolveWorkspaceDir(this.config);
+        await mkdir(cwd, { recursive: true });
         return await runAgentTurn(prompt, options.context ?? this.context, this.registry, this.config, {
           signal,
+          cwd,
           retainConversation: options.retainConversation,
           onText: options.stream ? (text) => process.stdout.write(text) : undefined,
           onEvent: options.onEvent,
           getModel: getCurrentModel,
+          confirmDanger: options.confirmDanger,
+          authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(command, workspace, this.config.security, handler, commandSignal),
         });
       } finally { this.interrupt.endTurn(); }
     });
@@ -61,7 +70,12 @@ export class TaiweiApp {
       const cronContext = new AgentContext(this.memory, this.skills);
       try {
         this.config = await loadConfig();
-        return await runAgentTurn(job.prompt, cronContext, this.registry, this.config, { retainConversation: false, getModel: getCurrentModel });
+        const cwd = resolveWorkspaceDir(this.config);
+        await mkdir(cwd, { recursive: true });
+        return await runAgentTurn(job.prompt, cronContext, this.registry, this.config, {
+          cwd, retainConversation: false, getModel: getCurrentModel,
+          authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(command, workspace, this.config.security, handler, commandSignal),
+        });
       } catch (error) { return `Error: ${(error as Error).message}`; }
     });
     const summary = result.replace(/\s+/g, ' ').trim().slice(0, 500) || '(no text response)';

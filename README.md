@@ -32,6 +32,16 @@ Edit `~/.taiwei/config.json`, or set environment variables:
     "enabled": false,
     "username": "admin",
     "password": ""
+  },
+  "workspace": {
+    "dir": "~/workspace"
+  },
+  "security": {
+    "enabled": true,
+    "patterns": [],
+    "timeoutSeconds": 60,
+    "remember": "off",
+    "approvedPatterns": []
   }
 }
 ```
@@ -57,6 +67,7 @@ The REPL commands are:
 
 ```text
 /help  /exit  /stop  /clear  /model [name]
+/workspace <path>
 /skill list|load|unload ...
 /cron list|add|remove|pause|resume ...
 /mcp list|reload
@@ -73,11 +84,15 @@ Cron arguments that contain spaces should be quoted:
 
 Ctrl+C cancels an active LLM request or tool. Scheduled turns wait for an active interactive turn to finish, run in a fresh conversation, then print a notification banner in the REPL.
 
+The workspace defaults to `~/workspace` (with `~` expanded using the operating-system home directory). taiwei creates it on startup and uses it as the default working directory for bash and other filesystem tools; it is a starting directory, not a jail, so commands may still use `cd`. Run `/workspace <path>` or use the web settings panel to change it. A running turn keeps its original directory, while later turns use the saved value.
+
 Run `/model` to list the models configured in the `models` array and mark the current one, or `/model <name>` to switch. With a configured list, switching to any other name is rejected. When the list is absent or empty, any non-empty model name is allowed. The choice is written to `~/.taiwei/config.json` and is shared immediately by the REPL, one-shot commands, scheduled turns, and the gateway.
 
 ### Local web chat
 
 Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The polished browser UI streams answer tokens and tool activity live, supports dark and light themes, includes a model switcher and local file attachments in the message composer, and provides a sidebar for creating, switching, and deleting conversations. Stop cancels the current LLM request or tool through the same cooperative interrupt mechanism as the CLI.
+
+The subtle sidebar label shows the resolved workspace. The gear button opens settings for the workspace and dangerous-command policy. `GET /api/settings` reads these values and `POST /api/settings` validates and persists updates to `~/.taiwei/config.json`; both follow the normal gateway authentication policy.
 
 Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so history and agent context survive browser refreshes and gateway restarts. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
 
@@ -86,6 +101,21 @@ The composer includes a circular context-usage ring. taiwei requests OpenAI-comp
 Use the paperclip button to attach up to five files to a message. Each file is uploaded only to `~/.taiwei/uploads/` with a 10 MB per-file limit and a sanitized filename. Text-like formats are included in the model message up to 8,000 characters; binary files are represented by their absolute local path so the agent can inspect them with its existing tools. `POST /api/upload` uses a raw request body with the URL-encoded filename in `X-File-Name`, avoiding a multipart dependency.
 
 Health checks are available at `GET /api/health`. Model state is exposed through `GET /api/models`, `GET /api/model`, and `POST /api/model`; these routes use the same authentication policy as the other gateway APIs. Session management is exposed locally through `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`, and the optional `sessionId` field on `POST /api/chat`.
+
+#### Dangerous-command confirmation
+
+Command confirmation is enabled by default. The built-in regex classes cover recursive forced removal of root/home/system paths (including `sudo rm`), `mkfs`, device-writing `dd`, `fdisk`/`format`, system shutdown/reboot/halt/poweroff, recursive permission/ownership changes, fork bombs, forced Git pushes, and `curl`/`wget` output piped into a shell. Strings in `security.patterns` are additional case-insensitive regular expressions; they append to the built-ins rather than replacing them. Invalid custom regexes are rejected by the settings API.
+
+When bash matches a rule, the chat stream pauses and emits:
+
+```text
+event: confirm
+data: {"id":"...","command":"...","reason":"...","pattern":"...","level":"danger|warn","workspace":"/resolved/path","timeoutSeconds":60}
+```
+
+The browser queues these prompts and shows one copyable command at a time. It answers through authenticated `POST /api/confirm` with `{"id":"...","approve":true|false,"remember":"off|session|permanent"}`. A missing answer is rejected after `security.timeoutSeconds`. Rejection returns `用户拒绝了该命令的执行` to the model so it can choose a safer approach. Interactive CLI turns prompt with `y/N`; one-shot and unattended cron turns auto-reject because no confirmer is available. Set `security.enabled` to `false` to bypass confirmation.
+
+Remembered approvals are keyed by the exact regex rule that matched, never by the raw command. `session` lasts for the taiwei process; `permanent` records that matched rule in `security.approvedPatterns`. The settings reset action clears custom and remembered rules and restores enabled/60 seconds/off. Because approvals apply to a rule class, keep custom expressions narrowly scoped.
 
 #### Gateway authentication
 

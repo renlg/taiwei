@@ -1,5 +1,9 @@
 import { readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
 import { ensureTaiweiHome } from '../util/paths.js';
+
+export type SecurityRememberMode = 'off' | 'session' | 'permanent';
 
 export interface TaiweiConfig {
   model: string;
@@ -19,6 +23,16 @@ export interface TaiweiConfig {
     username: string;
     password: string;
   };
+  workspace: {
+    dir: string;
+  };
+  security: {
+    enabled: boolean;
+    patterns: string[];
+    timeoutSeconds: number;
+    remember: SecurityRememberMode;
+    approvedPatterns: string[];
+  };
 }
 
 export const DEFAULT_CONFIG: TaiweiConfig = {
@@ -37,7 +51,27 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
     username: 'admin',
     password: '',
   },
+  workspace: {
+    dir: '~/workspace',
+  },
+  security: {
+    enabled: true,
+    patterns: [],
+    timeoutSeconds: 60,
+    remember: 'off',
+    approvedPatterns: [],
+  },
 };
+
+export function expandHome(path: string): string {
+  if (path === '~') return homedir();
+  if (path.startsWith('~/') || path.startsWith('~\\')) return resolve(homedir(), path.slice(2));
+  return resolve(path);
+}
+
+export function resolveWorkspaceDir(config: Pick<TaiweiConfig, 'workspace'>): string {
+  return expandHome(config.workspace.dir || DEFAULT_CONFIG.workspace.dir);
+}
 
 export function resolveContextWindow(config: TaiweiConfig, model = config.model): number {
   const configured = config.contextWindows?.[model] ?? config.contextWindow;
@@ -62,6 +96,13 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     ...stored,
     gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
     auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
+    workspace: { ...DEFAULT_CONFIG.workspace, ...stored.workspace },
+    security: {
+      ...DEFAULT_CONFIG.security,
+      ...stored.security,
+      patterns: [...(stored.security?.patterns ?? DEFAULT_CONFIG.security.patterns)],
+      approvedPatterns: [...(stored.security?.approvedPatterns ?? DEFAULT_CONFIG.security.approvedPatterns)],
+    },
     apiKey: process.env.TAIWEI_API_KEY ?? stored.apiKey ?? DEFAULT_CONFIG.apiKey,
     baseUrl: process.env.TAIWEI_BASE_URL ?? stored.baseUrl ?? DEFAULT_CONFIG.baseUrl,
     model: process.env.TAIWEI_MODEL ?? stored.model ?? DEFAULT_CONFIG.model,
@@ -85,13 +126,26 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       ...stored,
       gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
       auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
+      workspace: { ...DEFAULT_CONFIG.workspace, ...stored.workspace },
+      security: {
+        ...DEFAULT_CONFIG.security,
+        ...stored.security,
+        patterns: [...(stored.security?.patterns ?? DEFAULT_CONFIG.security.patterns)],
+        approvedPatterns: [...(stored.security?.approvedPatterns ?? DEFAULT_CONFIG.security.approvedPatterns)],
+      },
     };
     await saveConfig(config);
     return config;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     await saveConfig(DEFAULT_CONFIG);
-    return { ...DEFAULT_CONFIG };
+    return {
+      ...DEFAULT_CONFIG,
+      gateway: { ...DEFAULT_CONFIG.gateway },
+      auth: { ...DEFAULT_CONFIG.auth },
+      workspace: { ...DEFAULT_CONFIG.workspace },
+      security: { ...DEFAULT_CONFIG.security, patterns: [], approvedPatterns: [] },
+    };
   }
 }
 
