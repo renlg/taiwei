@@ -17,6 +17,7 @@ Edit `~/.taiwei/config.json`, or set environment variables:
 ```json
 {
   "model": "gpt-4.1-mini",
+  "models": ["gpt-4.1-mini", "good", "free"],
   "baseUrl": "https://api.openai.com/v1",
   "apiKey": "",
   "maxTurns": 50,
@@ -35,6 +36,8 @@ Edit `~/.taiwei/config.json`, or set environment variables:
 
 `TAIWEI_API_KEY`, `TAIWEI_BASE_URL`, `TAIWEI_MODEL`, and `TAIWEI_AUTH_PASSWORD` override the corresponding file values. `TAIWEI_HOME` can override the state directory (useful for isolated environments).
 
+The optional `models` array is the candidate list shown by the REPL and web gateway. Without it, taiwei requests `GET {baseUrl}/models` using the configured API key and falls back to the current model if the provider is unavailable. Model names are used as returned, including relay group names such as `good` and `free`.
+
 ## Usage
 
 ```bash
@@ -49,7 +52,7 @@ Edit `~/.taiwei/config.json`, or set environment variables:
 The REPL commands are:
 
 ```text
-/help  /exit  /stop  /clear  /model <name>
+/help  /exit  /stop  /clear  /model [name]
 /skill list|load|unload ...
 /cron list|add|remove|pause|resume ...
 /mcp list|reload
@@ -66,13 +69,15 @@ Cron arguments that contain spaces should be quoted:
 
 Ctrl+C cancels an active LLM request or tool. Scheduled turns wait for an active interactive turn to finish, run in a fresh conversation, then print a notification banner in the REPL.
 
+Run `/model` to list available models and mark the current one, or `/model <name>` to switch. The choice is written to `~/.taiwei/config.json` and is shared immediately by the REPL, one-shot commands, scheduled turns, and the gateway.
+
 ### Local web chat
 
-Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The polished browser UI streams answer tokens and tool activity live, supports dark and light themes, and includes a sidebar for creating, switching, and deleting conversations. Stop cancels the current LLM request or tool through the same cooperative interrupt mechanism as the CLI.
+Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The polished browser UI streams answer tokens and tool activity live, supports dark and light themes, includes a topbar model switcher, and provides a sidebar for creating, switching, and deleting conversations. Stop cancels the current LLM request or tool through the same cooperative interrupt mechanism as the CLI.
 
 Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so history and agent context survive browser refreshes and gateway restarts. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
 
-Health checks are available at `GET /api/health`. Session management is exposed locally through `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`, and the optional `sessionId` field on `POST /api/chat`.
+Health checks are available at `GET /api/health`. Model state is exposed through `GET /api/models`, `GET /api/model`, and `POST /api/model`; these routes use the same authentication policy as the other gateway APIs. Session management is exposed locally through `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`, and the optional `sessionId` field on `POST /api/chat`.
 
 #### Gateway authentication
 

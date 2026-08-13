@@ -47,7 +47,18 @@
             <h1 id="session-title">新会话</h1>
             <div class="topbar-meta">
               <span class="status-pill idle" id="status-pill"><i></i><span>就绪</span></span>
-              <span class="model-name" id="model-name">OpenAI compatible</span>
+              <div class="model-switcher" id="model-switcher">
+                <button class="model-trigger" id="model-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="model-spark" aria-hidden="true">✦</span>
+                  <span class="model-name" id="model-name">OpenAI compatible</span>
+                  <span class="model-chevron" aria-hidden="true">⌄</span>
+                </button>
+                <div class="model-menu" id="model-menu" role="listbox" aria-label="选择模型" hidden>
+                  <div class="model-menu-heading">选择模型</div>
+                  <div class="model-options" id="model-options"></div>
+                  <div class="model-error" id="model-error" role="status"></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

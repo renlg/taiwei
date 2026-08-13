@@ -14,6 +14,11 @@ const elements = {
   title: $('#session-title'),
   status: $('#status-pill'),
   model: $('#model-name'),
+  modelSwitcher: $('#model-switcher'),
+  modelTrigger: $('#model-trigger'),
+  modelMenu: $('#model-menu'),
+  modelOptions: $('#model-options'),
+  modelError: $('#model-error'),
   chat: $('#chat-scroll'),
   messages: $('#messages'),
   welcome: $('#welcome'),
@@ -37,6 +42,9 @@ const state = {
   loadVersion: 0,
   toastTimer: 0,
   authToken: localStorage.getItem('taiwei-token') || '',
+  models: [],
+  currentModel: 'OpenAI compatible',
+  switchingModel: false,
 };
 
 function escapeHtml(value) {
@@ -326,6 +334,68 @@ async function requestJson(path, options) {
   return response.status === 204 ? null : response.json();
 }
 
+function closeModelMenu() {
+  elements.modelMenu.hidden = true;
+  elements.modelTrigger.setAttribute('aria-expanded', 'false');
+}
+
+function renderModels() {
+  elements.model.textContent = state.currentModel;
+  elements.modelTrigger.title = `当前模型：${state.currentModel}`;
+  elements.modelOptions.replaceChildren();
+  for (const name of state.models) {
+    const option = document.createElement('button');
+    const active = name === state.currentModel;
+    option.type = 'button';
+    option.className = `model-option${active ? ' active' : ''}`;
+    option.dataset.model = name;
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-selected', String(active));
+    option.innerHTML = `<span class="model-option-mark">${active ? '✓' : ''}</span><span>${escapeHtml(name)}</span>`;
+    elements.modelOptions.append(option);
+  }
+}
+
+async function selectModel(name) {
+  if (state.switchingModel || name === state.currentModel) { closeModelMenu(); return; }
+  const previous = state.currentModel;
+  state.switchingModel = true;
+  elements.modelSwitcher.classList.add('loading');
+  elements.modelError.textContent = '';
+  try {
+    const result = await requestJson('/api/model', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: name }),
+    });
+    state.currentModel = result.current;
+    if (!state.models.includes(result.current)) state.models.push(result.current);
+    renderModels();
+    closeModelMenu();
+    showToast(`已切换到 ${result.current}`);
+  } catch (error) {
+    state.currentModel = previous;
+    elements.modelError.textContent = error.message;
+    renderModels();
+  } finally {
+    state.switchingModel = false;
+    elements.modelSwitcher.classList.remove('loading');
+  }
+}
+
+elements.modelTrigger.addEventListener('click', () => {
+  const opening = elements.modelMenu.hidden;
+  elements.modelMenu.hidden = !opening;
+  elements.modelTrigger.setAttribute('aria-expanded', String(opening));
+  elements.modelError.textContent = '';
+  if (opening) elements.modelOptions.querySelector('.active, .model-option')?.focus();
+});
+
+elements.modelOptions.addEventListener('click', (event) => {
+  const option = event.target.closest('[data-model]');
+  if (option) selectModel(option.dataset.model);
+});
+
 async function refreshSessions() {
   state.sessions = await requestJson('/api/sessions');
   renderSessionList();
@@ -529,6 +599,7 @@ elements.scrollBottom.addEventListener('click', () => {
 });
 
 document.addEventListener('click', (event) => {
+  if (!elements.modelSwitcher.contains(event.target)) closeModelMenu();
   const codeButton = event.target.closest('[data-copy-code]');
   if (codeButton) copyText(codeButton.closest('.code-block').querySelector('code').textContent, codeButton);
   const chip = event.target.closest('[data-prompt]');
@@ -537,6 +608,10 @@ document.addEventListener('click', (event) => {
     resizeInput();
     elements.input.focus();
   }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') { closeModelMenu(); elements.modelTrigger.focus(); }
 });
 
 document.querySelectorAll('.new-chat').forEach((button) => button.addEventListener('click', createSession));
@@ -600,10 +675,14 @@ elements.theme.addEventListener('click', () => {
 
 async function loadChat() {
   try {
-    const [sessions, info] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/info')]);
+    const modelsRequest = requestJson('/api/models').catch(() => null);
+    const [sessions, info, models] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/info'), modelsRequest]);
     showChat();
     state.sessions = sessions;
-    elements.model.textContent = info.model;
+    state.currentModel = models?.current || info.model || state.currentModel;
+    state.models = models?.models?.length ? models.models : [state.currentModel];
+    if (!state.models.includes(state.currentModel)) state.models.unshift(state.currentModel);
+    renderModels();
     elements.logout.hidden = !info.authEnabled;
     renderSessionList();
     if (sessions.length) await loadSession(sessions[0].id);
