@@ -13,6 +13,9 @@ export interface RagIndexData {
   version: 1;
   createdAt: string;
   chunks: RagChunk[];
+  /** Parallel to chunks. Absent on legacy or BM25-only indexes. */
+  vectors?: number[][];
+  embedModel?: string;
 }
 
 export interface Embedder {
@@ -53,7 +56,7 @@ export function chunkText(text: string, maxChars = 1000, overlap = 150): string[
   return chunks;
 }
 
-export async function buildIndex(): Promise<RagIndexData> {
+export async function buildIndex(embedder?: Embedder): Promise<RagIndexData> {
   const paths = await ensureTaiweiHome();
   const chunks: RagChunk[] = [];
   for (const path of await walk(paths.knowledge)) {
@@ -62,7 +65,34 @@ export async function buildIndex(): Promise<RagIndexData> {
       chunks.push({ id: `${source}:${index}`, source, text, tokens: tokenize(text) });
     });
   }
-  const data: RagIndexData = { version: 1, createdAt: new Date().toISOString(), chunks };
+  let vectors: number[][] | undefined;
+  let embedModel: string | undefined;
+  try {
+    if (!embedder) {
+      const [{ loadConfig }, { createEmbedder }] = await Promise.all([
+        import('../config/config.js'), import('./embedding.js'),
+      ]);
+      const config = await loadConfig();
+      embedModel = config.embedModel;
+      embedder = createEmbedder(config);
+    }
+    vectors = [];
+    for (let offset = 0; offset < chunks.length; offset += 32) {
+      vectors.push(...await embedder.embed(chunks.slice(offset, offset + 32).map((chunk) => chunk.text)));
+    }
+    if (vectors.length !== chunks.length) throw new Error('Embedding count does not match chunk count');
+    const dimensions = vectors[0]?.length;
+    if (vectors.some((vector) => !vector.length || vector.length !== dimensions)) throw new Error('Embedding dimensions are inconsistent');
+  } catch {
+    // A lexical index is still useful when the embedding provider is unavailable.
+    vectors = undefined;
+    embedModel = undefined;
+  }
+  const data: RagIndexData = {
+    version: 1, createdAt: new Date().toISOString(), chunks,
+    ...(vectors ? { vectors } : {}),
+    ...(embedModel ? { embedModel } : {}),
+  };
   await writeFile(paths.ragIndex, `${JSON.stringify(data)}\n`, 'utf8');
   return data;
 }

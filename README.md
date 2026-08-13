@@ -17,6 +17,7 @@ Edit `~/.taiwei/config.json`, or set environment variables:
 ```json
 {
   "model": "gpt-4.1-mini",
+  "embedModel": "embeddings",
   "models": ["good", "free", "deepseek-v4-flash"],
   "contextWindow": 128000,
   "contextWindows": { "gpt-4.1-mini": 128000, "good": 200000 },
@@ -60,6 +61,8 @@ The optional `models` array is the user-curated candidate list shown by the REPL
 
 `contextWindows` can override the context-window size for individual model names. `contextWindow` is the fallback for models without an entry and defaults to 128,000 tokens when omitted or invalid.
 
+`embedModel` selects the OpenAI-compatible embedding model and defaults to the `embeddings` model group. Set it to a concrete model such as `qwen3.7-text-embedding` when needed; embeddings use the same `baseUrl` and `apiKey` as chat.
+
 ## Usage
 
 ```bash
@@ -91,6 +94,12 @@ Cron arguments that contain spaces should be quoted:
 ```
 
 Ctrl+C cancels an active LLM request or tool. Scheduled turns wait for an active interactive turn to finish, run in a fresh conversation, then print a notification banner in the REPL.
+
+### Local RAG
+
+Put Markdown or text files under `~/.taiwei/knowledge/`, then run `/rag index` to rebuild the index. Indexing embeds chunks in batches of up to 32 and stores vectors alongside the BM25 data in `~/.taiwei/rag-index.json`. Searches fuse the top BM25 and cosine-similarity candidates with Reciprocal Rank Fusion and return the best five results. The web gateway performs this retrieval automatically before every user message and injects matching knowledge into that turn.
+
+If query embedding fails because of a timeout, network error, or upstream response, search automatically falls back to BM25. Legacy indexes without vectors also remain readable and use BM25; run `/rag index` to add vectors.
 
 The workspace defaults to `~/workspace` (with `~` expanded using the operating-system home directory). taiwei creates it on startup and uses it as the default working directory for bash and other filesystem tools; it is a starting directory, not a jail, so commands may still use `cd`. Run `/workspace <path>` or use the web settings panel to change it. A running turn keeps its original directory, while later turns use the saved value.
 
@@ -172,7 +181,7 @@ config.json       model and provider settings
 cron.json         scheduled jobs
 mcp.json          MCP server definitions
 memory.md         durable agent memory
-rag-index.json    generated BM25 index
+rag-index.json    generated BM25 and embedding index
 knowledge/        .md and .txt knowledge documents
 skills/           <name>/SKILL.md skills
 plugins/          <name>/plugin.js plugins

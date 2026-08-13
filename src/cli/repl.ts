@@ -133,7 +133,7 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
       break;
     }
     case '/rag': {
-      if (action === 'index') { const index = await buildIndex(); output(`[taiwei] Indexed ${index.chunks.length} chunks.`); }
+      if (action === 'index') { const index = await buildIndex(); output(`[taiwei] Indexed ${index.chunks.length} chunks${index.vectors ? ' with embeddings' : ' (BM25 only; embedding unavailable, rebuild to retry)'}.`); }
       else if (action === 'search' && args.length) { const results = await retrieve(args.join(' ')); app.context.setRetrievedContext(renderRetrievedContext(results)); output(results.length ? results.map((item) => `${item.score.toFixed(3)} ${item.source}\n${item.text.slice(0, 300)}`).join('\n\n') : 'No matches.'); }
       else throw new Error('Usage: /rag index | /rag search <query>');
       break;

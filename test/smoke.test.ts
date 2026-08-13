@@ -9,7 +9,9 @@ import { nextRun, parseInterval } from '../src/cron/scheduler.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { streamChat } from '../src/llm/client.js';
 import { PluginLoader } from '../src/plugins/loader.js';
-import { chunkText } from '../src/rag/index.js';
+import { chunkText, type RagIndexData } from '../src/rag/index.js';
+import { retrieve, searchIndex, searchIndexHybrid } from '../src/rag/retrieve.js';
+import { OpenAICompatibleEmbedder } from '../src/rag/embedding.js';
 import { getCurrentModel, resolveModels, setCurrentModel } from '../src/config/model.js';
 import { handleModelCommand } from '../src/cli/repl.js';
 import type { TaiweiApp } from '../src/app.js';
@@ -30,6 +32,7 @@ test('config initializes with defaults and honors environment overrides', async 
   try {
     const config = await loadConfig();
     assert.equal(config.model, 'test-model');
+    assert.equal(config.embedModel, 'embeddings');
     assert.equal(config.baseUrl, 'https://api.openai.com/v1');
     assert.equal(config.contextWindow, 128_000);
     assert.equal(config.maxTurns, 50);
@@ -50,7 +53,7 @@ test('config initializes with defaults and honors environment overrides', async 
 
 test('gateway auth validation rejects an enabled empty password', () => {
   assert.throws(() => validateGatewayAuth({
-    model: 'test', baseUrl: 'http://localhost', apiKey: '', maxTurns: 1, requestTimeoutMs: 1,
+    model: 'test', embedModel: 'embeddings', baseUrl: 'http://localhost', apiKey: '', maxTurns: 1, requestTimeoutMs: 1,
     hookTimeoutSeconds: 10, hooks: emptyHooks(),
     gateway: { host: '127.0.0.1', port: 0 },
     auth: { enabled: true, username: 'admin', password: '' },
@@ -248,6 +251,33 @@ test('LLM client assembles streamed text and fragmented tool calls', async () =>
   } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
 });
 
+test('OpenAI-compatible embedder sends batched input and restores response order', async () => {
+  let requestPayload: { model?: string; input?: string[] } = {};
+  let authorization = '';
+  const server = createServer(async (request, response) => {
+    authorization = String(request.headers.authorization ?? '');
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requestPayload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof requestPayload;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ data: [
+      { index: 1, embedding: [0, 1] },
+      { index: 0, embedding: [1, 0] },
+    ] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    const embedder = new OpenAICompatibleEmbedder({
+      baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: 'secret', model: 'embeddings', timeoutMs: 1_000,
+    });
+    assert.deepEqual(await embedder.embed(['first', 'second']), [[1, 0], [0, 1]]);
+    assert.deepEqual(requestPayload, { model: 'embeddings', input: ['first', 'second'] });
+    assert.equal(authorization, 'Bearer secret');
+  } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+});
+
 test('plugin loader supports CommonJS and ESM plugin.js files', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-plugin-test-'));
   const oldHome = process.env.TAIWEI_HOME;
@@ -277,4 +307,36 @@ test('RAG chunker bounds oversized paragraphs and preserves overlap', () => {
   assert.equal(chunks.length, 3);
   assert(chunks.every((chunk) => chunk.length <= 1_000));
   assert.equal(chunks[0].slice(-100), chunks[1].slice(0, 100));
+});
+
+test('RAG hybrid search fuses lexical and semantic rankings and lexical fallback remains available', () => {
+  const chunks = [
+    { id: 'lexical:0', source: 'lexical.md', text: 'apple apple orchard', tokens: ['apple', 'apple', 'orchard'] },
+    { id: 'semantic:0', source: 'semantic.md', text: 'fruit growing notes', tokens: ['fruit', 'growing', 'notes'] },
+  ];
+  const index: RagIndexData = { version: 1, createdAt: new Date(0).toISOString(), chunks, vectors: [[0, 1], [1, 0]] };
+  const results = searchIndexHybrid(index, 'apple', [1, 0], 2);
+  assert.deepEqual(new Set(results.map((result) => result.id)), new Set(['lexical:0', 'semantic:0']));
+  assert.equal(searchIndex({ ...index, vectors: undefined }, 'apple', 5)[0]?.id, 'lexical:0');
+});
+
+test('RAG retrieval falls back to BM25 when query embedding fails', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-rag-fallback-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  const index: RagIndexData = {
+    version: 1,
+    createdAt: new Date(0).toISOString(),
+    chunks: [{ id: 'notes:0', source: 'notes.md', text: 'reliable fallback', tokens: ['reliable', 'fallback'] }],
+    vectors: [[1, 0]],
+  };
+  try {
+    await writeFile(join(directory, 'rag-index.json'), JSON.stringify(index));
+    const results = await retrieve('fallback', 5, { embed: async () => { throw new Error('upstream unavailable'); } });
+    assert.equal(results[0]?.id, 'notes:0');
+    assert(results[0]!.score > 0);
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await rm(directory, { recursive: true, force: true });
+  }
 });

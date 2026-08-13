@@ -9,6 +9,7 @@ export type SecurityRememberMode = 'off' | 'session' | 'permanent';
 
 export interface TaiweiConfig {
   model: string;
+  embedModel: string;
   models?: string[];
   contextWindow?: number;
   contextWindows?: Record<string, number>;
@@ -41,6 +42,7 @@ export interface TaiweiConfig {
 
 export const DEFAULT_CONFIG: TaiweiConfig = {
   model: 'gpt-4.1-mini',
+  embedModel: 'embeddings',
   contextWindow: 128_000,
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
@@ -120,6 +122,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     apiKey: stored.apiKey ?? DEFAULT_CONFIG.apiKey,
     baseUrl: stored.baseUrl ?? DEFAULT_CONFIG.baseUrl,
     model: stored.model ?? DEFAULT_CONFIG.model,
+    embedModel: stored.embedModel ?? DEFAULT_CONFIG.embedModel,
   };
   const storedPassword = config.auth.password;
   const diskPassword = passwordForStorage(storedPassword);

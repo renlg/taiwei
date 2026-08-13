@@ -3,7 +3,7 @@ import { retrieve } from '../../rag/retrieve.js';
 
 export const ragSearchTool: ToolSpec = {
   name: 'rag_search',
-  description: 'Search the local indexed knowledge base with BM25 keyword retrieval.',
+  description: 'Search the local indexed knowledge base with hybrid BM25 and embedding retrieval.',
   parameters: {
     type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } },
     required: ['query'], additionalProperties: false,

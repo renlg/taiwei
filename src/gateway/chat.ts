@@ -3,6 +3,8 @@ import { AgentContext } from '../agent/context.js';
 import type { AgentEvent } from '../agent/loop.js';
 import type { ChatMessage } from '../llm/client.js';
 import type { ConfirmationDecision, ConfirmationRequest } from '../security/commands.js';
+import { renderRetrievedContext } from '../rag/prompt.js';
+import { retrieve } from '../rag/retrieve.js';
 
 export interface ChatSink {
   event(event: AgentEvent): void;
@@ -23,6 +25,8 @@ export class AgentChatBridge implements ChatBridge {
     context.setMessages(history);
     for (const skill of this.app.context.listActiveSkills()) context.activateSkill(skill);
     try {
+      try { context.setRetrievedContext(renderRetrievedContext(await retrieve(message))); }
+      catch { /* RAG is optional and must never block a web chat turn. */ }
       await this.app.run(message, {
         context,
         onEvent: (event) => sink.event(event),
