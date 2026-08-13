@@ -20,6 +20,8 @@ import { buildIndex, type RagIndexData } from '../rag/index.js';
 import { retrieve, type SearchResult } from '../rag/retrieve.js';
 import { createEmbedder } from '../rag/embedding.js';
 import { loadMcpConfig, type McpServerConfig } from '../mcp/client.js';
+import { ToolRegistry, type ToolConfigSchema } from '../tools/registry.js';
+import type { Skill } from '../skills/loader.js';
 
 export interface GatewayModelState {
   getCurrentModel(): Promise<string>;
@@ -42,7 +44,8 @@ export interface GatewayServerOptions {
   confirmations?: ConfirmationBroker;
   configState?: { load(): Promise<TaiweiConfig>; save(config: TaiweiConfig): Promise<void> };
   hooks?: HookRunner;
-  skillLoader?: SkillLoader;
+  skillLoader?: Pick<SkillLoader, 'list' | 'load'> & Partial<Pick<SkillLoader, 'setDisabled' | 'isDisabled'>>;
+  toolRegistry?: ToolRegistry;
   knowledgeDirectory?: string;
   ragIndexPath?: string;
   buildKnowledgeIndex?: () => Promise<RagIndexData>;
@@ -56,7 +59,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '9';
+const STATIC_ASSET_VERSION = '10';
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -236,6 +239,27 @@ function validateMcpServer(value: unknown): McpServerConfig & { preserveEnv?: bo
   };
 }
 
+function validateToolConfig(value: unknown, schema: ToolConfigSchema | undefined): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'config must be an object');
+  const record = value as Record<string, unknown>;
+  if (!schema && Object.keys(record).length) throw new HttpError(400, 'This tool has no configurable fields');
+  const validated: Record<string, unknown> = {};
+  for (const [field, item] of Object.entries(record)) {
+    const rule = schema?.[field];
+    if (!rule) throw new HttpError(400, `Unknown tool config field: ${field}`);
+    if (rule.type === 'string') {
+      if (typeof item !== 'string') throw new HttpError(400, `config.${field} must be a string`);
+      validated[field] = item;
+      continue;
+    }
+    if (typeof item !== 'number' || !Number.isFinite(item)) throw new HttpError(400, `config.${field} must be a number`);
+    if (rule.min !== undefined && item < rule.min) throw new HttpError(400, `config.${field} must be at least ${rule.min}`);
+    if (rule.max !== undefined && item > rule.max) throw new HttpError(400, `config.${field} must be at most ${rule.max}`);
+    validated[field] = item;
+  }
+  return validated;
+}
+
 async function attachmentContext(files: unknown, uploadsDirectory: string): Promise<string> {
   if (files === undefined) return '';
   if (!Array.isArray(files) || files.length > MAX_FILES_PER_MESSAGE) throw new HttpError(400, `files must contain at most ${MAX_FILES_PER_MESSAGE} uploads`);
@@ -269,6 +293,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const uploadsDirectory = resolve(options.uploadsDirectory ?? getPaths().uploads);
   const taiweiPaths = getPaths();
   const skillLoader = options.skillLoader ?? new SkillLoader();
+  const toolRegistry = options.toolRegistry;
   const knowledgeDirectory = resolve(options.knowledgeDirectory ?? taiweiPaths.knowledge);
   const ragIndexPath = resolve(options.ragIndexPath ?? taiweiPaths.ragIndex);
   const mcpConfigPath = resolve(options.mcpConfigPath ?? taiweiPaths.mcp);
@@ -298,6 +323,23 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const saveMcpServers = async (servers: McpServerConfig[]) => {
     await mkdir(dirname(mcpConfigPath), { recursive: true });
     await writeFile(mcpConfigPath, `${JSON.stringify(servers, null, 2)}\n`, 'utf8');
+  };
+  const allSkills = async (config: TaiweiConfig): Promise<Skill[]> => {
+    skillLoader.setDisabled?.(config.skillsDisabled);
+    return skillLoader.list({ includeDisabled: true });
+  };
+  const toolSnapshot = async () => {
+    if (!toolRegistry) throw new HttpError(503, 'Tool registry is unavailable');
+    const config = await configState.load();
+    toolRegistry.configure(config.tools);
+    return { tools: toolRegistry.list({ includeDisabled: true }).map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      enabled: toolRegistry.isEnabled(tool.name),
+      configurable: Boolean(tool.configSchema && Object.keys(tool.configSchema).length),
+      ...(tool.configSchema ? { configSchema: tool.configSchema } : {}),
+      config: toolRegistry.getConfig(tool.name),
+    })) };
   };
   return createServer(async (request, response) => {
     const started = Date.now();
@@ -517,22 +559,73 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'GET' && pathname === '/api/skills') {
-        const skills = await skillLoader.list();
-        json(response, 200, { skills: skills.map(({ name, description }) => ({ name, description })) });
+        const config = await configState.load();
+        const skills = await allSkills(config);
+        json(response, 200, { skills: skills.map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          enabled: !(skillLoader.isDisabled?.(skill) ?? config.skillsDisabled?.includes(skill.name)),
+        })) });
         return;
       }
       const skillRoute = pathname.match(/^\/api\/skills\/([^/]+)$/);
-      if (method === 'GET' && skillRoute) {
+      if (skillRoute && (method === 'GET' || method === 'POST')) {
         let name: string;
         try { name = decodeURIComponent(skillRoute[1]); }
         catch { throw new HttpError(400, '技能名称编码无效'); }
-        try {
-          const skill = await skillLoader.load(name);
-          json(response, 200, { name: skill.name, description: skill.description, content: await readFile(skill.path, 'utf8') });
-        } catch (error) {
-          if ((error as Error).message.startsWith('Skill not found:')) throw new HttpError(404, `技能不存在：${name}`);
-          throw error;
+        const config = await configState.load();
+        const skills = await allSkills(config);
+        const skill = skills.find((item) => item.name === name || item.path.split('/').at(-2) === name);
+        if (!skill) throw new HttpError(404, `技能不存在：${name}`);
+        if (method === 'POST') {
+          const body = await readJson(request) as { enabled?: unknown };
+          if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be boolean');
+          const aliases = new Set([name, skill.name, skill.path.split('/').at(-2) ?? '']);
+          const disabled = new Set(config.skillsDisabled ?? []);
+          if (body.enabled) for (const alias of aliases) disabled.delete(alias);
+          else disabled.add(skill.name);
+          config.skillsDisabled = [...disabled].sort();
+          await configState.save(config);
+          skillLoader.setDisabled?.(config.skillsDisabled);
+          json(response, 200, { ok: true, enabled: body.enabled });
+          return;
         }
+        json(response, 200, { name: skill.name, description: skill.description, content: await readFile(skill.path, 'utf8') });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/tools') {
+        json(response, 200, await toolSnapshot());
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/tools/reload') {
+        json(response, 200, await toolSnapshot());
+        return;
+      }
+      const toolRoute = pathname.match(/^\/api\/tools\/([^/]+)$/);
+      if (method === 'POST' && toolRoute) {
+        if (!toolRegistry) throw new HttpError(503, 'Tool registry is unavailable');
+        let name: string;
+        try { name = decodeURIComponent(toolRoute[1]); }
+        catch { throw new HttpError(400, '工具名称编码无效'); }
+        const tool = toolRegistry.get(name);
+        if (!tool) throw new HttpError(404, `Tool not found: ${name}`);
+        const body = await readJson(request) as { enabled?: unknown; config?: unknown };
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Request body must be an object');
+        if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be boolean');
+        const toolConfig = body.config === undefined ? {} : validateToolConfig(body.config, tool.configSchema);
+        const config = await configState.load();
+        const previous = config.tools?.[name] ?? {};
+        config.tools = {
+          ...config.tools,
+          [name]: {
+            ...previous,
+            ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+            ...toolConfig,
+          },
+        };
+        await configState.save(config);
+        toolRegistry.configure(config.tools);
+        json(response, 200, { ok: true, enabled: toolRegistry.isEnabled(name), config: toolRegistry.getConfig(name) });
         return;
       }
       if (method === 'GET' && pathname === '/api/knowledge') {

@@ -57,6 +57,8 @@ async function main(): Promise<void> {
         authSessions,
         loginLocks,
         hooks: app.hooks,
+        skillLoader: app.skills,
+        toolRegistry: app.registry,
         mcpBridge: app.mcp,
       });
       const boundPort = await listenGateway(server, app.config.gateway.host, port);

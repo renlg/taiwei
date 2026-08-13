@@ -34,6 +34,7 @@
         <button class="sidebar-section-button" id="skills-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">✦</span><span class="sidebar-label">技能</span></button>
         <button class="sidebar-section-button" id="knowledge-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">▤</span><span class="sidebar-label">知识库</span></button>
         <button class="sidebar-section-button" id="mcp-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⌘</span><span class="sidebar-label">MCP</span></button>
+        <button class="sidebar-section-button" id="tools-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🔧</span><span class="sidebar-label">工具</span></button>
       </nav>
       <div class="history-heading"><span>历史会话</span><span id="session-count">0</span></div>
       <nav class="session-list" id="session-list" aria-label="历史会话"></nav>
@@ -193,7 +194,7 @@
   </dialog>
   <dialog class="modal management-modal" id="skills-modal">
     <div class="modal-card management-card">
-      <header><div><h2>技能</h2><p>浏览安装在本机的 taiwei 技能</p></div><button class="icon-button" id="skills-close" type="button" aria-label="关闭">×</button></header>
+      <header><div><h2>技能</h2><p>浏览并启停安装在本机的 taiwei 技能</p></div><button class="icon-button" id="skills-close" type="button" aria-label="关闭">×</button></header>
       <div class="management-error" id="skills-error" role="alert"></div>
       <div class="skills-layout">
         <div class="resource-list skill-list" id="skill-list" aria-label="技能列表"></div>
@@ -254,6 +255,17 @@
         <div class="mcp-form-error" id="mcp-form-error" role="alert"></div>
         <footer><button class="secondary-button" id="mcp-cancel" type="button">取消</button><button class="primary-button" id="mcp-save" type="submit">保存并重载</button></footer>
       </form>
+    </div>
+  </dialog>
+  <dialog class="modal management-modal" id="tools-modal">
+    <div class="modal-card management-card tools-card">
+      <header>
+        <div><h2>工具</h2><p>控制提供给模型的工具，并调整内置工具默认配置</p></div>
+        <button class="icon-button" id="tools-close" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="tools-actions"><button class="secondary-button" id="tools-reload" type="button">重新应用配置</button></div>
+      <div class="management-error" id="tools-error" role="alert"></div>
+      <div class="resource-list tools-list" id="tools-list" aria-label="工具列表"></div>
     </div>
   </dialog>
   <div class="toast" id="toast" role="status"></div>

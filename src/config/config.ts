@@ -7,6 +7,11 @@ import { passwordForStorage } from './password.js';
 
 export type SecurityRememberMode = 'off' | 'session' | 'permanent';
 
+export interface ToolSettings {
+  enabled?: boolean;
+  [key: string]: unknown;
+}
+
 export interface TaiweiConfig {
   model: string;
   embedModel: string;
@@ -20,6 +25,8 @@ export interface TaiweiConfig {
   requestTimeoutMs: number;
   hookTimeoutSeconds: number;
   hooks: HookCommands;
+  skillsDisabled?: string[];
+  tools?: Record<string, ToolSettings>;
   gateway: {
     host: string;
     port: number;
@@ -120,6 +127,8 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...stored } as TaiweiConfig),
     hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
     hooks: normalizeHooks(stored.hooks),
+    skillsDisabled: normalizeStringList(stored.skillsDisabled),
+    tools: normalizeToolSettings(stored.tools),
     gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
     auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
     workspace: { ...DEFAULT_CONFIG.workspace, ...stored.workspace },
@@ -166,6 +175,8 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...stored } as TaiweiConfig),
       hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
       hooks: normalizeHooks(stored.hooks),
+      skillsDisabled: normalizeStringList(stored.skillsDisabled),
+      tools: normalizeToolSettings(stored.tools),
       gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
       auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
       workspace: { ...DEFAULT_CONFIG.workspace, ...stored.workspace },
@@ -204,6 +215,19 @@ function normalizeHookTimeout(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 1
     ? Math.min(3600, Math.floor(value))
     : DEFAULT_CONFIG.hookTimeoutSeconds;
+}
+
+function normalizeStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return [...new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))];
+}
+
+function normalizeToolSettings(value: unknown): Record<string, ToolSettings> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return Object.fromEntries(Object.entries(value).flatMap(([name, settings]) => {
+    if (!name.trim() || !settings || typeof settings !== 'object' || Array.isArray(settings)) return [];
+    return [[name, { ...settings as ToolSettings }]];
+  }));
 }
 
 export function validateGatewayAuth(config: TaiweiConfig): void {

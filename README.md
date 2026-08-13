@@ -34,6 +34,12 @@ Edit `~/.taiwei/config.json`, or set environment variables:
     "beforeTool": [],
     "afterTool": []
   },
+  "skillsDisabled": [],
+  "tools": {
+    "rag_search": { "enabled": true, "limit": 5 },
+    "bash": { "enabled": true, "defaultCwd": "" },
+    "search_files": { "enabled": true, "maxResults": 50 }
+  },
   "gateway": {
     "host": "127.0.0.1",
     "port": 8688
@@ -111,6 +117,8 @@ Run `/model` to list the models configured in the `models` array and mark the cu
 Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The polished browser UI streams answer tokens and tool activity live, supports dark and light themes, includes a model switcher and local file attachments in the message composer, and provides a sidebar for creating, switching, and deleting conversations. Stop cancels the current LLM request or tool through the same cooperative interrupt mechanism as the CLI.
 
 The subtle sidebar label shows the resolved workspace. The gear button opens settings for the workspace, lifecycle hooks, and dangerous-command policy. `GET /api/settings` reads these values and `POST /api/settings` validates and persists updates to `~/.taiwei/config.json`; both follow the normal gateway authentication policy. The Hooks section also runs a selected event's first command against a sample payload through `POST /api/hooks/test`.
+
+The sidebar skill panel can enable or disable installed skills, and the tool panel controls every built-in, MCP, and plugin tool exposed to the model. Tool state and configurable defaults are stored in `config.json`: `skillsDisabled` contains disabled skill names, while `tools.<toolName>.enabled` and schema-backed fields hold tool settings. Omitting either section keeps everything enabled. Dynamic MCP and plugin tools recover their saved state when they are registered again after a reload.
 
 Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so history and agent context survive browser refreshes and gateway restarts. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
 
@@ -204,6 +212,8 @@ description: Review code carefully.
 
 Check correctness, security, and maintainability.
 ```
+
+Disabled skills remain visible in the gateway manager but are omitted from CLI skill listings and cannot be loaded until re-enabled. The gateway endpoints are `GET /api/skills`, `GET /api/skills/:name`, and `POST /api/skills/:name` with `{"enabled":true|false}`. Tool management uses `GET /api/tools`, `POST /api/tools/:name`, and `POST /api/tools/reload`.
 
 ### MCP
 

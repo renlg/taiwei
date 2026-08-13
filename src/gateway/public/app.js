@@ -87,6 +87,12 @@ const elements = {
   mcpEnabled: $('#mcp-enabled'),
   mcpCancel: $('#mcp-cancel'),
   mcpSave: $('#mcp-save'),
+  toolsOpen: $('#tools-open'),
+  toolsModal: $('#tools-modal'),
+  toolsClose: $('#tools-close'),
+  toolsError: $('#tools-error'),
+  toolsReload: $('#tools-reload'),
+  toolsList: $('#tools-list'),
   workspaceInput: $('#workspace-input'),
   workspaceResolved: $('#workspace-resolved'),
   workspaceLabel: $('#workspace-label'),
@@ -129,6 +135,7 @@ const state = {
   mcpServers: [],
   mcpStatuses: [],
   editingMcp: null,
+  tools: [],
 };
 
 const HOOKS_OPEN_STORAGE_KEY = 'taiwei-settings-hooks-open';
@@ -276,7 +283,7 @@ async function openSettings() {
 }
 
 function closeResourcePanels(except) {
-  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal]) {
+  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal]) {
     if (modal !== except && modal.open) modal.close();
   }
 }
@@ -325,12 +332,30 @@ async function loadSkills() {
     }
     elements.skillList.replaceChildren();
     skills.forEach((skill) => {
-      const item = document.createElement('button');
-      item.type = 'button'; item.className = 'skill-item';
+      const item = document.createElement('article');
+      item.className = `skill-item${skill.enabled ? '' : ' disabled'}`;
+      const top = document.createElement('div'); top.className = 'skill-item-top';
+      const select = document.createElement('button'); select.type = 'button'; select.className = 'skill-select';
       const name = document.createElement('strong'); name.textContent = skill.name;
-      const description = document.createElement('span'); description.textContent = skill.description;
-      item.append(name, description);
-      item.addEventListener('click', () => showSkillDetail(skill.name, item));
+      const status = document.createElement('small'); status.className = 'skill-status'; status.textContent = skill.enabled ? '已启用' : '已禁用';
+      select.append(name, status);
+      const toggleLabel = document.createElement('label'); toggleLabel.className = 'mcp-switch'; toggleLabel.title = skill.enabled ? '点击禁用' : '点击启用';
+      const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = skill.enabled;
+      toggle.setAttribute('aria-label', `${skill.enabled ? '禁用' : '启用'} ${skill.name}`);
+      const track = document.createElement('span'); toggleLabel.append(toggle, track); top.append(select, toggleLabel);
+      const description = document.createElement('p'); description.className = 'skill-description'; description.textContent = skill.description;
+      item.append(top, description);
+      select.addEventListener('click', () => showSkillDetail(skill.name, item));
+      toggle.addEventListener('change', async () => {
+        toggle.disabled = true; elements.skillsError.textContent = '';
+        try {
+          await requestJson(`/api/skills/${encodeURIComponent(skill.name)}`, {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: toggle.checked }),
+          });
+          showToast(`${skill.name} 已${toggle.checked ? '启用' : '禁用'}`);
+          await loadSkills();
+        } catch (error) { toggle.checked = !toggle.checked; toggle.disabled = false; elements.skillsError.textContent = error.message; }
+      });
       elements.skillList.append(item);
     });
   } catch (error) {
@@ -527,6 +552,84 @@ function parseMcpEnv(value) {
     env[key] = item;
   }
   return { env, preserveEnv };
+}
+
+function renderManagedTools(data) {
+  state.tools = data.tools || [];
+  elements.toolsList.replaceChildren();
+  for (const tool of state.tools) {
+    const card = document.createElement('article'); card.className = `tool-card${tool.enabled ? '' : ' disabled'}`;
+    const top = document.createElement('div'); top.className = 'tool-card-top';
+    const copy = document.createElement('div'); copy.className = 'tool-card-copy';
+    const name = document.createElement('strong'); name.className = 'tool-card-name'; name.textContent = tool.name;
+    const description = document.createElement('p'); description.className = 'tool-card-description'; description.textContent = tool.description; description.title = tool.description;
+    copy.append(name, description);
+    const toggleLabel = document.createElement('label'); toggleLabel.className = 'mcp-switch'; toggleLabel.title = tool.enabled ? '点击禁用' : '点击启用';
+    const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = tool.enabled; toggle.setAttribute('aria-label', `${tool.enabled ? '禁用' : '启用'} ${tool.name}`);
+    const track = document.createElement('span'); toggleLabel.append(toggle, track); top.append(copy, toggleLabel); card.append(top);
+    toggle.addEventListener('change', async () => {
+      toggle.disabled = true; elements.toolsError.textContent = '';
+      try {
+        const result = await requestJson(`/api/tools/${encodeURIComponent(tool.name)}`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: toggle.checked }),
+        });
+        tool.enabled = result.enabled; renderManagedTools({ tools: state.tools });
+        showToast(`${tool.name} 已${result.enabled ? '启用' : '禁用'}`);
+      } catch (error) { toggle.checked = !toggle.checked; toggle.disabled = false; elements.toolsError.textContent = error.message; }
+    });
+    if (tool.configurable) {
+      const details = document.createElement('details'); details.className = 'tool-config';
+      const summary = document.createElement('summary'); summary.textContent = '配置'; details.append(summary);
+      const form = document.createElement('form'); form.className = 'tool-config-form';
+      for (const [field, schema] of Object.entries(tool.configSchema || {})) {
+        const label = document.createElement('label'); label.textContent = schema.label || field;
+        const input = document.createElement('input'); input.name = field; input.type = schema.type === 'number' ? 'number' : 'text';
+        input.value = String(tool.config?.[field] ?? schema.default ?? '');
+        if (schema.placeholder) input.placeholder = schema.placeholder;
+        if (schema.type === 'number') {
+          input.step = '1'; input.required = true;
+          if (schema.min !== undefined) input.min = String(schema.min);
+          if (schema.max !== undefined) input.max = String(schema.max);
+        }
+        label.append(input);
+        if (schema.description) { const help = document.createElement('small'); help.textContent = schema.description; label.append(help); }
+        form.append(label);
+      }
+      const save = document.createElement('button'); save.type = 'submit'; save.className = 'small-button'; save.textContent = '保存配置'; form.append(save); details.append(form); card.append(details);
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        const config = {};
+        for (const [field, schema] of Object.entries(tool.configSchema || {})) {
+          const input = form.elements.namedItem(field);
+          config[field] = schema.type === 'number' ? input.valueAsNumber : input.value;
+        }
+        save.disabled = true; save.textContent = '保存中…'; elements.toolsError.textContent = '';
+        try {
+          const result = await requestJson(`/api/tools/${encodeURIComponent(tool.name)}`, {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config }),
+          });
+          tool.config = result.config; showToast(`${tool.name} 配置已保存`);
+        } catch (error) { elements.toolsError.textContent = error.message; }
+        finally { save.disabled = false; save.textContent = '保存配置'; }
+      });
+    }
+    elements.toolsList.append(card);
+  }
+}
+
+async function loadTools(reload = false) {
+  elements.toolsError.textContent = '';
+  renderResourceEmpty(elements.toolsList, '加载中…');
+  try { renderManagedTools(await requestJson(reload ? '/api/tools/reload' : '/api/tools', reload ? { method: 'POST' } : {})); }
+  catch (error) { elements.toolsError.textContent = error.message; renderResourceEmpty(elements.toolsList, '工具加载失败'); }
+}
+
+async function openTools() {
+  closeResourcePanels(elements.toolsModal);
+  if (!elements.toolsModal.open) elements.toolsModal.showModal();
+  elements.body.classList.remove('sidebar-open');
+  await loadTools();
 }
 
 function renderKnowledgeResults(results) {
@@ -1276,7 +1379,9 @@ elements.knowledgeOpen.addEventListener('click', openKnowledge);
 elements.knowledgeClose.addEventListener('click', () => elements.knowledgeModal.close());
 elements.mcpOpen.addEventListener('click', openMcp);
 elements.mcpClose.addEventListener('click', () => elements.mcpModal.close());
-for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal]) {
+elements.toolsOpen.addEventListener('click', openTools);
+elements.toolsClose.addEventListener('click', () => elements.toolsModal.close());
+for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal]) {
   modal.addEventListener('click', (event) => { if (event.target === modal) modal.close(); });
 }
 elements.mcpModal.addEventListener('close', closeMcpForm);
@@ -1291,6 +1396,12 @@ elements.mcpReload.addEventListener('click', async () => {
   try { renderMcp(await requestJson('/api/mcp/reload', { method: 'POST' })); showToast('MCP 连接已重载'); }
   catch (error) { elements.mcpError.textContent = error.message; }
   finally { elements.mcpReload.disabled = false; elements.mcpReload.textContent = '重载连接'; }
+});
+elements.toolsReload.addEventListener('click', async () => {
+  elements.toolsReload.disabled = true; elements.toolsReload.textContent = '应用中…';
+  await loadTools(true);
+  if (!elements.toolsError.textContent) showToast('工具配置已重新应用');
+  elements.toolsReload.disabled = false; elements.toolsReload.textContent = '重新应用配置';
 });
 elements.mcpForm.addEventListener('submit', async (event) => {
   event.preventDefault();

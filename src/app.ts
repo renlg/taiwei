@@ -37,6 +37,8 @@ export class TaiweiApp {
 
   async initialize(options: { external?: boolean; scheduler?: boolean } = {}): Promise<void> {
     this.config = await loadConfig();
+    this.skills.setDisabled(this.config.skillsDisabled);
+    this.registry.configure(this.config.tools);
     const workspace = resolveWorkspaceDir(this.config);
     await mkdir(workspace, { recursive: true });
     this.hooks = new HookRunner(this.config.hooks, this.config.hookTimeoutSeconds, workspace);
@@ -53,6 +55,8 @@ export class TaiweiApp {
       const signal = this.interrupt.beginTurn();
       try {
         this.config = await loadConfig();
+        this.skills.setDisabled(this.config.skillsDisabled);
+        this.registry.configure(this.config.tools);
         const cwd = resolveWorkspaceDir(this.config);
         await mkdir(cwd, { recursive: true });
         this.hooks.configure(this.config.hooks, this.config.hookTimeoutSeconds, cwd);
@@ -81,6 +85,8 @@ export class TaiweiApp {
       const cronContext = new AgentContext(this.memory, this.skills);
       try {
         this.config = await loadConfig();
+        this.skills.setDisabled(this.config.skillsDisabled);
+        this.registry.configure(this.config.tools);
         const cwd = resolveWorkspaceDir(this.config);
         await mkdir(cwd, { recursive: true });
         this.hooks.configure(this.config.hooks, this.config.hookTimeoutSeconds, cwd);

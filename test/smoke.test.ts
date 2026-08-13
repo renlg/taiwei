@@ -184,6 +184,30 @@ test('tool registry dispatches registered tools and reports unknown tools', asyn
   });
   assert.equal(await registry.dispatch('add', { a: 2, b: 3 }, { cwd: process.cwd() }), '5');
   assert.match(await registry.dispatch('missing', {}, { cwd: process.cwd() }), /Unknown tool/);
+  assert.equal(registry.setEnabled('add', false), true);
+  assert.deepEqual(registry.list(), []);
+  assert.equal(registry.list({ includeDisabled: true }).length, 1);
+  assert.deepEqual(JSON.parse(await registry.dispatch('add', { a: 2, b: 3 }, { cwd: process.cwd() })), { error: 'Tool "add" is disabled' });
+});
+
+test('skill loader omits disabled skills from list and load', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-disabled-skill-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  await mkdir(join(directory, 'skills', 'enabled'), { recursive: true });
+  await mkdir(join(directory, 'skills', 'disabled'), { recursive: true });
+  await writeFile(join(directory, 'skills', 'enabled', 'SKILL.md'), '---\nname: enabled\ndescription: Enabled skill\n---\n\nEnabled');
+  await writeFile(join(directory, 'skills', 'disabled', 'SKILL.md'), '---\nname: disabled\ndescription: Disabled skill\n---\n\nDisabled');
+  try {
+    const loader = new SkillLoader(['disabled']);
+    assert.deepEqual((await loader.list()).map((skill) => skill.name), ['enabled']);
+    assert.deepEqual((await loader.list({ includeDisabled: true })).map((skill) => skill.name), ['disabled', 'enabled']);
+    await assert.rejects(loader.load('disabled'), /Skill not found: disabled/);
+    assert.equal((await loader.load('disabled', { includeDisabled: true })).name, 'disabled');
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('hook runner sends lifecycle payload JSON on stdin and parses stdout JSON', async () => {
@@ -408,6 +432,10 @@ test('plugin loader supports CommonJS and ESM plugin.js files', async () => {
     assert.equal(await registry.dispatch('plugin_common_ping', {}, { cwd: directory }), 'pong');
     assert.equal(loader.skills()[0]?.name, 'mod-skill');
     assert.equal(loader.list().filter((item) => !item.error).length, 2);
+    registry.configure({ plugin_common_ping: { enabled: false } });
+    await loader.reload();
+    assert.deepEqual(JSON.parse(await registry.dispatch('plugin_common_ping', {}, { cwd: directory })), { error: 'Tool "plugin_common_ping" is disabled' });
+    registry.setEnabled('plugin_common_ping', true);
     await writeFile(join(directory, 'plugins', 'common', 'plugin.js'), `module.exports = { name: 'common', tools: [{ name: 'ping', description: 'ping', parameters: { type: 'object' }, execute: () => 'fresh' }] };`);
     await loader.reload();
     assert.equal(await registry.dispatch('plugin_common_ping', {}, { cwd: directory }), 'fresh');

@@ -24,20 +24,36 @@ function parseFrontmatter(source: string, path: string): Skill {
 }
 
 export class SkillLoader {
-  async list(): Promise<Skill[]> {
+  private disabled = new Set<string>();
+
+  constructor(disabled: Iterable<string> = []) { this.setDisabled(disabled); }
+
+  setDisabled(disabled: Iterable<string> = []): void {
+    this.disabled = new Set([...disabled].map((name) => name.trim()).filter(Boolean));
+  }
+
+  isDisabled(skill: Skill | string): boolean {
+    if (typeof skill === 'string') return this.disabled.has(skill);
+    return this.disabled.has(skill.name) || this.disabled.has(skill.path.split('/').at(-2) ?? '');
+  }
+
+  async list(options: { includeDisabled?: boolean } = {}): Promise<Skill[]> {
     const { skills } = await ensureTaiweiHome();
     const entries = await readdir(skills, { withFileTypes: true });
     const loaded: Skill[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const path = join(skills, entry.name, 'SKILL.md');
-      try { loaded.push(parseFrontmatter(await readFile(path, 'utf8'), path)); } catch { /* skip invalid skills in listings */ }
+      try {
+        const skill = parseFrontmatter(await readFile(path, 'utf8'), path);
+        if (options.includeDisabled || !this.isDisabled(skill)) loaded.push(skill);
+      } catch { /* skip invalid skills in listings */ }
     }
     return loaded.sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  async load(name: string): Promise<Skill> {
-    const skills = await this.list();
+  async load(name: string, options: { includeDisabled?: boolean } = {}): Promise<Skill> {
+    const skills = await this.list(options);
     const skill = skills.find((item) => item.name === name || item.path.split('/').at(-2) === name);
     if (!skill) throw new Error(`Skill not found: ${name}`);
     return skill;

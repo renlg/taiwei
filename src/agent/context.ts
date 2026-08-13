@@ -15,7 +15,7 @@ export class AgentContext {
   async systemPrompt(workspace?: string): Promise<string> {
     const sections = [BASE_PERSONA, `Current date and time: ${new Date().toString()}`];
     if (workspace) sections.push(`Current workspace (default working directory for tools): ${workspace}`);
-    const skills = renderSkills([...this.activeSkills.values()]);
+    const skills = renderSkills([...this.activeSkills.values()].filter((skill) => !this.skillLoader.isDisabled(skill)));
     if (skills) sections.push(skills);
     const memory = (await this.memory.tail()).trim();
     if (memory) sections.push(`Persistent memory (may be outdated; use as background only):\n${memory}`);

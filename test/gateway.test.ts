@@ -14,6 +14,7 @@ import type { GatewayModelState } from '../src/gateway/server.js';
 import { DEFAULT_CONFIG, type TaiweiConfig } from '../src/config/config.js';
 import { hashPassword, isScryptPassword } from '../src/config/password.js';
 import { HookRunner } from '../src/hooks/runner.js';
+import { ToolRegistry } from '../src/tools/registry.js';
 
 class MockChat implements ChatBridge {
   stopped = false;
@@ -105,7 +106,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=9/);
+    assert.match(pageBody, /logo\.png\?v=10/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -221,7 +222,7 @@ test('gateway lists skills and safely manages knowledge files', async () => {
   const baseUrl = `http://127.0.0.1:${port}`;
   try {
     const skills = await (await fetch(`${baseUrl}/api/skills`)).json();
-    assert.deepEqual(skills, { skills: [{ name: 'review', description: 'Review code' }] });
+    assert.deepEqual(skills, { skills: [{ name: 'review', description: 'Review code', enabled: true }] });
     const detail = await (await fetch(`${baseUrl}/api/skills/review`)).json() as { content: string };
     assert.match(detail.content, /name: review/);
     assert.equal((await fetch(`${baseUrl}/api/skills/missing`)).status, 404);
@@ -251,6 +252,78 @@ test('gateway lists skills and safely manages knowledge files', async () => {
     assert.equal(deleted.status, 200);
     assert.deepEqual(await deleted.json(), { ok: true });
     assert.equal((await fetch(`${baseUrl}/api/knowledge?path=${encodeURIComponent('notes.txt')}`, { method: 'DELETE' })).status, 404);
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('gateway skill and tool APIs validate and persist merged enable/config updates', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-tool-management-test-'));
+  const skillPath = join(directory, 'skills', 'review', 'SKILL.md');
+  await mkdir(join(directory, 'skills', 'review'), { recursive: true });
+  await writeFile(skillPath, '---\nname: review\ndescription: Review code\n---\n\n# Review\n');
+  const skill = { name: 'review', description: 'Review code', body: '# Review', path: skillPath };
+  let config: TaiweiConfig = {
+    ...structuredClone(DEFAULT_CONFIG),
+    tools: { configurable: { enabled: true, limit: 2, preserved: 'value' } },
+  };
+  const registry = new ToolRegistry();
+  registry.register({
+    name: 'configurable', description: 'Configurable test tool', parameters: { type: 'object' },
+    configSchema: { limit: { type: 'number', default: 5, label: 'Limit', min: 1, max: 20 } },
+    execute: (_args, context) => context.toolConfig,
+  });
+  registry.configure(config.tools);
+  const server = createGatewayServer({
+    chat: new MockChat(),
+    sessions: new SessionStore(join(directory, 'sessions')),
+    uploadsDirectory: join(directory, 'uploads'),
+    toolRegistry: registry,
+    skillLoader: {
+      list: async () => [skill],
+      load: async (name: string) => {
+        if (name !== 'review') throw new Error(`Skill not found: ${name}`);
+        return skill;
+      },
+    },
+    configState: {
+      load: async () => structuredClone(config),
+      save: async (next) => { config = structuredClone(next); },
+    },
+    log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const post = (path: string, body: unknown) => fetch(`${baseUrl}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  try {
+    assert.equal((await post('/api/skills/missing', { enabled: false })).status, 404);
+    assert.equal((await post('/api/skills/review', { enabled: 'no' })).status, 400);
+    const disabledSkill = await post('/api/skills/review', { enabled: false });
+    assert.deepEqual(await disabledSkill.json(), { ok: true, enabled: false });
+    assert.deepEqual(config.skillsDisabled, ['review']);
+    assert.deepEqual(await (await fetch(`${baseUrl}/api/skills`)).json(), {
+      skills: [{ name: 'review', description: 'Review code', enabled: false }],
+    });
+
+    const listed = await (await fetch(`${baseUrl}/api/tools`)).json() as { tools: Array<{ name: string; enabled: boolean; configurable: boolean; config: { limit: number } }> };
+    assert.equal(listed.tools[0]?.name, 'configurable');
+    assert.equal(listed.tools[0]?.enabled, true);
+    assert.equal(listed.tools[0]?.configurable, true);
+    assert.deepEqual(listed.tools[0]?.config, { limit: 2 });
+    assert.equal((await post('/api/tools/missing', { enabled: false })).status, 404);
+    assert.equal((await post('/api/tools/configurable', { config: { unknown: 1 } })).status, 400);
+
+    const disabledTool = await post('/api/tools/configurable', { enabled: false });
+    assert.deepEqual(await disabledTool.json(), { ok: true, enabled: false, config: { limit: 2 } });
+    const configuredTool = await post('/api/tools/configurable', { config: { limit: 7 } });
+    assert.deepEqual(await configuredTool.json(), { ok: true, enabled: false, config: { limit: 7 } });
+    assert.deepEqual(config.tools?.configurable, { enabled: false, limit: 7, preserved: 'value' });
+    assert.equal(registry.isEnabled('configurable'), false);
+    const reloaded = await fetch(`${baseUrl}/api/tools/reload`, { method: 'POST' });
+    assert.equal(reloaded.status, 200);
   } finally {
     await closeGateway(server);
     await rm(directory, { recursive: true, force: true });
