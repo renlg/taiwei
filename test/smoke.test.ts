@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { loadConfig, resolveWorkspaceDir, validateGatewayAuth, type TaiweiConfig } from '../src/config/config.js';
+import { DEFAULT_CONFIG, loadConfig, resolveCompressThreshold, resolveWorkspaceDir, validateGatewayAuth, type TaiweiConfig } from '../src/config/config.js';
 import { nextRun, parseInterval } from '../src/cron/scheduler.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { streamChat } from '../src/llm/client.js';
@@ -18,6 +18,10 @@ import type { TaiweiApp } from '../src/app.js';
 import { detectDanger } from '../src/security/commands.js';
 import { HookRunner, type HookCommands } from '../src/hooks/runner.js';
 import { isScryptPassword, verifyPassword } from '../src/config/password.js';
+import { AgentContext } from '../src/agent/context.js';
+import { runAgentTurn } from '../src/agent/loop.js';
+import { MemoryStore } from '../src/memory/store.js';
+import { SkillLoader } from '../src/skills/loader.js';
 
 const emptyHooks = (): HookCommands => ({ beforeMessage: [], beforeLLM: [], afterLLM: [], beforeTool: [], afterTool: [] });
 
@@ -34,7 +38,9 @@ test('config initializes with defaults and honors environment overrides', async 
     assert.equal(config.model, 'test-model');
     assert.equal(config.embedModel, 'embeddings');
     assert.equal(config.baseUrl, 'https://api.openai.com/v1');
-    assert.equal(config.contextWindow, 128_000);
+    assert.equal(config.contextWindow, 256_000);
+    assert.equal(config.compressThreshold, 0.7);
+    assert.equal(resolveCompressThreshold({ ...config, compressThreshold: 0 }), 0.7);
     assert.equal(config.maxTurns, 50);
     assert.equal(config.auth.enabled, false);
     assert.equal(config.auth.username, 'admin');
@@ -249,6 +255,115 @@ test('LLM client assembles streamed text and fragmented tool calls', async () =>
     assert.deepEqual(requestPayload.stream_options, { include_usage: true });
     assert.deepEqual(result.toolCalls[0], { id: 'call_1', type: 'function', function: { name: 'memory_append', arguments: '{"text":"note"}' } });
   } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+});
+
+test('agent turn compresses old complete turns above the configured context threshold', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-compression-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  let requests = 0;
+  let compressionInput = '';
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { messages: Array<{ role: string; content: string }> };
+    const compressing = payload.messages[0]?.content.includes('Compress the following conversation history');
+    requests += 1;
+    if (compressing) compressionInput = payload.messages[1]?.content ?? '';
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({
+      choices: [{ message: { content: compressing ? 'Key fact: the original preference was blue.' : 'Final answer', tool_calls: [] } }],
+      usage: compressing
+        ? { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 }
+        : { prompt_tokens: 71, completion_tokens: 2, total_tokens: 73 },
+    }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    const context = new AgentContext(new MemoryStore(), new SkillLoader());
+    for (let index = 0; index < 15; index += 1) {
+      context.messages.push({ role: 'user', content: `old-user-${index}` });
+      context.messages.push({ role: 'assistant', content: `old-assistant-${index}` });
+    }
+    const usageEvents: Array<{ contextWindow?: number }> = [];
+    const config = {
+      ...structuredClone(DEFAULT_CONFIG),
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      contextWindow: 100,
+      compressThreshold: 0.7,
+    };
+    const answer = await runAgentTurn('latest-user', context, new ToolRegistry(), config, {
+      onEvent: (event) => { if (event.type === 'usage') usageEvents.push(event.usage); },
+    });
+    assert.equal(answer, 'Final answer');
+    assert.equal(requests, 2);
+    assert.match(compressionInput, /old-user-0/);
+    assert.doesNotMatch(compressionInput, /old-user-14/);
+    assert.equal(context.messages[0]?.role, 'system');
+    assert.match(String(context.messages[0]?.content), /Key fact: the original preference was blue/);
+    assert(!context.messages.some((message) => message.role === 'user' && message.content === 'old-user-0'));
+    assert(context.messages.some((message) => message.role === 'user' && message.content === 'old-user-14'));
+    assert(context.messages.some((message) => message.role === 'user' && message.content === 'latest-user'));
+    assert.deepEqual(usageEvents.map((usage) => usage.contextWindow), [100]);
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('agent turn silently keeps history when conversation compression fails', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-compression-fallback-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  const originalWarn = console.warn;
+  process.env.TAIWEI_HOME = directory;
+  let requests = 0;
+  let warning = '';
+  console.warn = (message?: unknown) => { warning = String(message); };
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { messages: Array<{ content: string }> };
+    requests += 1;
+    if (payload.messages[0]?.content.includes('Compress the following conversation history')) {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: { message: 'summary unavailable' } }));
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({
+      choices: [{ message: { content: 'Answer survives', tool_calls: [] } }],
+      usage: { prompt_tokens: 71, completion_tokens: 2, total_tokens: 73 },
+    }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    const context = new AgentContext(new MemoryStore(), new SkillLoader());
+    for (let index = 0; index < 15; index += 1) {
+      context.messages.push({ role: 'user', content: `user-${index}` });
+      context.messages.push({ role: 'assistant', content: `assistant-${index}` });
+    }
+    const config = {
+      ...structuredClone(DEFAULT_CONFIG),
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      contextWindow: 100,
+      compressThreshold: 0.7,
+    };
+    assert.equal(await runAgentTurn('latest', context, new ToolRegistry(), config), 'Answer survives');
+    assert.equal(requests, 2);
+    assert.equal(context.messages.length, 32);
+    assert.equal(context.messages[0]?.role, 'user');
+    assert.match(warning, /Conversation compression skipped.*summary unavailable/);
+  } finally {
+    console.warn = originalWarn;
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('OpenAI-compatible embedder sends batched input and restores response order', async () => {

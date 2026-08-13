@@ -76,8 +76,8 @@ const state = {
   models: [],
   currentModel: 'OpenAI compatible',
   switchingModel: false,
-  contextWindow: 128000,
-  usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, contextWindow: 128000, model: '' },
+  contextWindow: 256000,
+  usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, contextWindow: 256000, model: '' },
   attachments: [],
   workspace: '',
   settingsRemember: 'off',
@@ -325,7 +325,7 @@ function formatTokens(value) {
 }
 
 function renderUsage(usage = state.usage) {
-  const contextWindow = Math.max(1, Number(usage.contextWindow) || state.contextWindow || 128000);
+  const contextWindow = Math.max(1, Number(usage.contextWindow) || state.contextWindow || 256000);
   const totalTokens = Math.max(0, Number(usage.totalTokens) || 0);
   const percentage = Math.min(100, (totalTokens / contextWindow) * 100);
   elements.contextFill.style.strokeDashoffset = String(100 - percentage);

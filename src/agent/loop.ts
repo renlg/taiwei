@@ -1,7 +1,7 @@
 import type { AgentContext } from './context.js';
-import type { TaiweiConfig } from '../config/config.js';
+import { resolveCompressThreshold, resolveContextWindow, type TaiweiConfig } from '../config/config.js';
 import { streamChat } from '../llm/client.js';
-import type { TokenUsage } from '../llm/client.js';
+import type { ChatMessage, TokenUsage } from '../llm/client.js';
 import { toOpenAITool } from '../llm/tools.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ConfirmationHandler } from '../security/commands.js';
@@ -24,8 +24,56 @@ export type AgentEvent =
   | { type: 'token'; text: string }
   | { type: 'tool'; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; name: string; result: string }
-  | { type: 'usage'; usage: TokenUsage; model: string }
+  | { type: 'usage'; usage: TokenUsage & { contextWindow: number }; model: string }
   | { type: 'done'; text: string };
+
+const COMPRESSION_PROMPT = 'Compress the following conversation history into a concise factual summary preserving key facts, decisions, user preferences, file paths, and unresolved tasks. Output only the summary.';
+
+function compressionBoundary(conversation: ChatMessage[]): number {
+  const retainedCount = Math.max(20, Math.ceil(conversation.length / 3));
+  const latestBoundary = conversation.length - retainedCount;
+  if (latestBoundary <= 0) return 0;
+  for (let index = latestBoundary; index > 0; index -= 1) {
+    if (conversation[index]?.role === 'user' && conversation.slice(0, index).some((message) => message.role === 'assistant')) return index;
+  }
+  return 0;
+}
+
+function renderHistory(messages: ChatMessage[]): string {
+  return messages.map((message) => {
+    if (message.role === 'assistant' && message.tool_calls?.length) {
+      return `assistant: ${message.content ?? ''}\ntool calls: ${JSON.stringify(message.tool_calls)}`;
+    }
+    if (message.role === 'tool') return `tool (${message.name ?? message.tool_call_id}): ${message.content}`;
+    return `${message.role}: ${message.content}`;
+  }).join('\n\n');
+}
+
+async function compressConversation(
+  conversation: ChatMessage[],
+  config: TaiweiConfig,
+  model: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const boundary = compressionBoundary(conversation);
+  if (!boundary) return false;
+  const result = await streamChat({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    model,
+    messages: [{ role: 'system', content: COMPRESSION_PROMPT }, { role: 'user', content: renderHistory(conversation.slice(0, boundary)) }],
+    tools: [],
+    signal,
+    timeoutMs: 60_000,
+  });
+  const summary = result.content.trim();
+  if (!summary) return false;
+  conversation.splice(0, boundary, {
+    role: 'system',
+    content: `Conversation summary (history compressed at ${new Date().toISOString()}):\n${summary}`,
+  });
+  return true;
+}
 
 export async function runAgentTurn(
   prompt: string,
@@ -37,6 +85,7 @@ export async function runAgentTurn(
   const conversation = options.retainConversation === false ? [] : context.messages;
   conversation.push({ role: 'user', content: prompt });
   let fullText = '';
+  let compressionAttempted = false;
   for (let turn = 0; turn < config.maxTurns; turn += 1) {
     if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
     const model = options.getModel ? await options.getModel() : config.model;
@@ -62,7 +111,18 @@ export async function runAgentTurn(
       sessionId: options.sessionId, model, contentPreview: result.content.slice(0, 500),
       ...(result.usage ? { usage: { promptTokens: result.usage.promptTokens, completionTokens: result.usage.completionTokens } } : {}),
     });
-    if (result.usage) options.onEvent?.({ type: 'usage', usage: result.usage, model });
+    if (result.usage) {
+      const contextWindow = resolveContextWindow(config, model);
+      options.onEvent?.({ type: 'usage', usage: { ...result.usage, contextWindow }, model });
+      if (!compressionAttempted && result.usage.promptTokens > contextWindow * resolveCompressThreshold(config)) {
+        compressionAttempted = true;
+        try { await compressConversation(conversation, config, model, options.signal); }
+        catch (error) {
+          if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
+          console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    }
     conversation.push({ role: 'assistant', content: result.content || null, ...(result.toolCalls.length ? { tool_calls: result.toolCalls } : {}) });
     if (!result.toolCalls.length) {
       const text = fullText || result.content;

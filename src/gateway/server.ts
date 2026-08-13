@@ -488,7 +488,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
                 promptTokens: (previous?.promptTokens ?? 0) + event.usage.promptTokens,
                 completionTokens: (previous?.completionTokens ?? 0) + event.usage.completionTokens,
                 totalTokens: (previous?.totalTokens ?? 0) + event.usage.totalTokens,
-                contextWindow: activeContextWindow,
+                contextWindow: event.usage.contextWindow ?? activeContextWindow,
                 model: event.model || activeModel,
               };
               sendSse(response, 'usage', session.usage);

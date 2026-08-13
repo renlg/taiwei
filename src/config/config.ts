@@ -13,6 +13,7 @@ export interface TaiweiConfig {
   models?: string[];
   contextWindow?: number;
   contextWindows?: Record<string, number>;
+  compressThreshold?: number;
   baseUrl: string;
   apiKey: string;
   maxTurns: number;
@@ -43,7 +44,8 @@ export interface TaiweiConfig {
 export const DEFAULT_CONFIG: TaiweiConfig = {
   model: 'gpt-4.1-mini',
   embedModel: 'embeddings',
-  contextWindow: 128_000,
+  contextWindow: 256_000,
+  compressThreshold: 0.7,
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
   maxTurns: 50,
@@ -91,7 +93,14 @@ export function resolveContextWindow(config: TaiweiConfig, model = config.model)
   const configured = config.contextWindows?.[model] ?? config.contextWindow;
   return typeof configured === 'number' && Number.isFinite(configured) && configured > 0
     ? Math.floor(configured)
-    : DEFAULT_CONFIG.contextWindow ?? 128_000;
+    : DEFAULT_CONFIG.contextWindow ?? 256_000;
+}
+
+export function resolveCompressThreshold(config: TaiweiConfig): number {
+  const configured = config.compressThreshold;
+  return typeof configured === 'number' && Number.isFinite(configured) && configured > 0 && configured <= 1
+    ? configured
+    : DEFAULT_CONFIG.compressThreshold ?? 0.7;
 }
 
 export async function loadConfig(): Promise<TaiweiConfig> {
@@ -108,6 +117,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
   const config: TaiweiConfig = {
     ...DEFAULT_CONFIG,
     ...stored,
+    compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...stored } as TaiweiConfig),
     hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
     hooks: normalizeHooks(stored.hooks),
     gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
@@ -153,6 +163,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
     const config = {
       ...DEFAULT_CONFIG,
       ...stored,
+      compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...stored } as TaiweiConfig),
       hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
       hooks: normalizeHooks(stored.hooks),
       gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },

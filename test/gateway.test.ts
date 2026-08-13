@@ -28,7 +28,7 @@ class MockChat implements ChatBridge {
       { type: 'tool', name: 'read', args: { path: 'README.md' } },
       { type: 'tool_result', name: 'read', result: 'contents' },
       { type: 'token', text: 'world' },
-      { type: 'usage', usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 }, model: 'free' },
+      { type: 'usage', usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, contextWindow: 1_000 }, model: 'free' },
       { type: 'done', text: 'Hello world' },
     ] satisfies AgentEvent[]) sink.event(event);
   }

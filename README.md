@@ -19,8 +19,9 @@ Edit `~/.taiwei/config.json`, or set environment variables:
   "model": "gpt-4.1-mini",
   "embedModel": "embeddings",
   "models": ["good", "free", "deepseek-v4-flash"],
-  "contextWindow": 128000,
-  "contextWindows": { "gpt-4.1-mini": 128000, "good": 200000 },
+  "contextWindow": 256000,
+  "contextWindows": { "gpt-4.1-mini": 256000, "good": 200000 },
+  "compressThreshold": 0.7,
   "baseUrl": "https://api.openai.com/v1",
   "apiKey": "",
   "maxTurns": 50,
@@ -59,7 +60,7 @@ Edit `~/.taiwei/config.json`, or set environment variables:
 
 The optional `models` array is the user-curated candidate list shown by the REPL and web gateway. taiwei never fetches the provider's upstream model list. Duplicate names are removed while preserving order; when `models` is absent or empty, only the current model is shown.
 
-`contextWindows` can override the context-window size for individual model names. `contextWindow` is the fallback for models without an entry and defaults to 128,000 tokens when omitted or invalid.
+`contextWindows` can override the context-window size for individual model names. `contextWindow` is the fallback for models without an entry and defaults to 256,000 tokens when omitted or invalid. When prompt usage exceeds `contextWindow * compressThreshold`, taiwei summarizes older complete turns while retaining recent history; `compressThreshold` defaults to `0.7`, and zero or invalid values use that default.
 
 `embedModel` selects the OpenAI-compatible embedding model and defaults to the `embeddings` model group. Set it to a concrete model such as `qwen3.7-text-embedding` when needed; embeddings use the same `baseUrl` and `apiKey` as chat.
 
