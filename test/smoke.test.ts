@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { loadConfig } from '../src/config/config.js';
+import { loadConfig, validateGatewayAuth } from '../src/config/config.js';
 import { nextRun, parseInterval } from '../src/cron/scheduler.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { streamChat } from '../src/llm/client.js';
@@ -15,18 +15,32 @@ test('config initializes with defaults and honors environment overrides', async 
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-test-'));
   const oldHome = process.env.TAIWEI_HOME;
   const oldModel = process.env.TAIWEI_MODEL;
+  const oldAuthPassword = process.env.TAIWEI_AUTH_PASSWORD;
   process.env.TAIWEI_HOME = directory;
   process.env.TAIWEI_MODEL = 'test-model';
+  process.env.TAIWEI_AUTH_PASSWORD = 'environment-secret';
   try {
     const config = await loadConfig();
     assert.equal(config.model, 'test-model');
     assert.equal(config.baseUrl, 'https://api.openai.com/v1');
     assert.equal(config.maxTurns, 50);
+    assert.equal(config.auth.enabled, false);
+    assert.equal(config.auth.username, 'admin');
+    assert.equal(config.auth.password, 'environment-secret');
   } finally {
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
     if (oldModel === undefined) delete process.env.TAIWEI_MODEL; else process.env.TAIWEI_MODEL = oldModel;
+    if (oldAuthPassword === undefined) delete process.env.TAIWEI_AUTH_PASSWORD; else process.env.TAIWEI_AUTH_PASSWORD = oldAuthPassword;
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('gateway auth validation rejects an enabled empty password', () => {
+  assert.throws(() => validateGatewayAuth({
+    model: 'test', baseUrl: 'http://localhost', apiKey: '', maxTurns: 1, requestTimeoutMs: 1,
+    gateway: { host: '127.0.0.1', port: 0 },
+    auth: { enabled: true, username: 'admin', password: '' },
+  }), /auth\.password.*TAIWEI_AUTH_PASSWORD/);
 });
 
 test('tool registry dispatches registered tools and reports unknown tools', async () => {

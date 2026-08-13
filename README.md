@@ -24,11 +24,16 @@ Edit `~/.taiwei/config.json`, or set environment variables:
   "gateway": {
     "host": "127.0.0.1",
     "port": 8688
+  },
+  "auth": {
+    "enabled": false,
+    "username": "admin",
+    "password": ""
   }
 }
 ```
 
-`TAIWEI_API_KEY`, `TAIWEI_BASE_URL`, and `TAIWEI_MODEL` override the file. `TAIWEI_HOME` can override the state directory (useful for isolated environments).
+`TAIWEI_API_KEY`, `TAIWEI_BASE_URL`, `TAIWEI_MODEL`, and `TAIWEI_AUTH_PASSWORD` override the corresponding file values. `TAIWEI_HOME` can override the state directory (useful for isolated environments).
 
 ## Usage
 
@@ -69,6 +74,25 @@ Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so histo
 
 Health checks are available at `GET /api/health`. Session management is exposed locally through `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`, and the optional `sessionId` field on `POST /api/chat`.
 
+#### Gateway authentication
+
+Authentication is opt-in. It is strongly recommended whenever the gateway binds to `0.0.0.0` or another network-accessible address. Enable it in `~/.taiwei/config.json`:
+
+```json
+{
+  "gateway": { "host": "0.0.0.0", "port": 8688 },
+  "auth": {
+    "enabled": true,
+    "username": "admin",
+    "password": "choose-a-strong-password"
+  }
+}
+```
+
+The password is stored as plain text because taiwei is a local tool; protect `~/.taiwei/config.json` with normal user-only filesystem permissions. You may leave `auth.password` empty in the file and supply `TAIWEI_AUTH_PASSWORD` when starting the gateway. If authentication is enabled and neither source provides a password, `taiwei serve` refuses to start with setup instructions.
+
+Open the gateway and sign in through the login screen. Successful login creates a seven-day sliding session in `~/.taiwei/gateway-sessions.json`; the browser keeps both an HttpOnly cookie and a bearer token, and gateway restarts preserve active logins. Five failed attempts from one IP within ten minutes temporarily rate-limit further attempts. Use the sidebar’s **退出** button to invalidate the current token and return to login.
+
 ## State and extensions
 
 All durable state lives in `~/.taiwei/`:
@@ -83,6 +107,7 @@ knowledge/        .md and .txt knowledge documents
 skills/           <name>/SKILL.md skills
 plugins/          <name>/plugin.js plugins
 sessions/         durable web chat conversations
+gateway-sessions.json  durable gateway login tokens
 ```
 
 ### Skills

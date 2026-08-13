@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import type { AgentEvent } from '../src/agent/loop.js';
+import { AuthSessionStore } from '../src/gateway/auth.js';
 import type { ChatBridge, ChatSink } from '../src/gateway/chat.js';
 import { closeGateway, createGatewayServer, listenGateway } from '../src/gateway/server.js';
 import { SessionStore } from '../src/gateway/sessions.js';
@@ -91,6 +92,62 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     const removed = await fetch(`${baseUrl}/api/sessions/${created.id}`, { method: 'DELETE' });
     assert.equal(removed.status, 204);
     assert.equal((await fetch(`${baseUrl}/api/sessions/${created.id}`)).status, 404);
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('gateway authenticates API requests and preserves tokens across restarts', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-auth-test-'));
+  await writeFile(join(directory, 'index.html'), '<!doctype html><title>taiwei auth test</title>');
+  await writeFile(join(directory, 'app.js'), '');
+  await writeFile(join(directory, 'style.css'), '');
+  const authFile = join(directory, 'gateway-sessions.json');
+  const options = {
+    chat: new MockChat(),
+    sessions: new SessionStore(join(directory, 'sessions')),
+    publicDirectory: directory,
+    auth: { enabled: true, username: 'admin', password: 'correct horse' },
+    log: () => {},
+  };
+  let server = createGatewayServer({ ...options, authSessions: new AuthSessionStore(authFile) });
+  let port = await listenGateway(server, '127.0.0.1', 0);
+  let baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    assert.equal((await fetch(`${baseUrl}/api/health`)).status, 200);
+    assert.equal((await fetch(`${baseUrl}/api/sessions`)).status, 401);
+
+    const wrong = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'wrong' }),
+    });
+    assert.equal(wrong.status, 401);
+
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'correct horse' }),
+    });
+    assert.equal(login.status, 200);
+    const { token } = await login.json() as { token: string };
+    assert.match(token, /^[a-f0-9]{64}$/);
+    assert.match(login.headers.get('set-cookie') ?? '', /taiwei_token=.*HttpOnly.*SameSite=Lax.*Max-Age=604800/);
+
+    const authorized = await fetch(`${baseUrl}/api/sessions`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(authorized.status, 200);
+    const cookieAuthorized = await fetch(`${baseUrl}/api/sessions`, { headers: { cookie: `taiwei_token=${token}` } });
+    assert.equal(cookieAuthorized.status, 200);
+
+    await closeGateway(server);
+    server = createGatewayServer({ ...options, authSessions: new AuthSessionStore(authFile) });
+    port = await listenGateway(server, '127.0.0.1', 0);
+    baseUrl = `http://127.0.0.1:${port}`;
+    assert.equal((await fetch(`${baseUrl}/api/sessions`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
+
+    const logout = await fetch(`${baseUrl}/api/logout`, { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+    assert.equal(logout.status, 200);
+    assert.match(logout.headers.get('set-cookie') ?? '', /Max-Age=0/);
+    assert.equal((await fetch(`${baseUrl}/api/sessions`, { headers: { authorization: `Bearer ${token}` } })).status, 401);
   } finally {
     await closeGateway(server);
     await rm(directory, { recursive: true, force: true });
