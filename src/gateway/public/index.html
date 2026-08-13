@@ -9,7 +9,20 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div class="app-shell">
+  <section class="login-screen" id="login-screen">
+    <form class="login-card" id="login-form">
+      <div class="login-mark">🦞</div>
+      <h1>登录 taiwei</h1>
+      <p>请输入网关账号以继续。</p>
+      <label for="login-username">用户名</label>
+      <input id="login-username" name="username" autocomplete="username" required>
+      <label for="login-password">密码</label>
+      <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+      <div class="login-error" id="login-error" role="alert"></div>
+      <button class="login-button" id="login-submit" type="submit">登录</button>
+    </form>
+  </section>
+  <div class="app-shell" id="app-shell" hidden>
     <aside class="sidebar" id="sidebar">
       <div class="brand-row">
         <a class="brand" href="#" aria-label="taiwei 首页"><span class="brand-mark">🦞</span><span class="brand-name">taiwei</span></a>
@@ -19,7 +32,8 @@
       <div class="history-heading"><span>历史会话</span><span id="session-count">0</span></div>
       <nav class="session-list" id="session-list" aria-label="历史会话"></nav>
       <div class="sidebar-footer">
-        <span class="local-dot"></span><span class="sidebar-label">本地安全运行</span>
+        <div class="local-status"><span class="local-dot"></span><span class="sidebar-label">本地安全运行</span></div>
+        <button class="logout-button" id="logout" type="button" title="退出登录" hidden><span>⇥</span><span class="sidebar-label">退出</span></button>
       </div>
     </aside>
     <div class="mobile-scrim" id="mobile-scrim"></div>

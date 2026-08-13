@@ -1,6 +1,14 @@
 const $ = (selector) => document.querySelector(selector);
 const elements = {
   body: document.body,
+  loginScreen: $('#login-screen'),
+  loginForm: $('#login-form'),
+  loginUsername: $('#login-username'),
+  loginPassword: $('#login-password'),
+  loginError: $('#login-error'),
+  loginSubmit: $('#login-submit'),
+  appShell: $('#app-shell'),
+  logout: $('#logout'),
   sessionList: $('#session-list'),
   sessionCount: $('#session-count'),
   title: $('#session-title'),
@@ -28,6 +36,7 @@ const state = {
   followOutput: true,
   loadVersion: 0,
   toastTimer: 0,
+  authToken: localStorage.getItem('taiwei-token') || '',
 };
 
 function escapeHtml(value) {
@@ -280,12 +289,39 @@ function renderConversation(session) {
   autoScroll(true);
 }
 
+function authenticatedOptions(options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (state.authToken) headers.set('authorization', `Bearer ${state.authToken}`);
+  return { ...options, headers };
+}
+
+async function authenticatedFetch(path, options) {
+  return fetch(path, authenticatedOptions(options));
+}
+
+function showLogin() {
+  localStorage.removeItem('taiwei-token');
+  state.authToken = '';
+  elements.appShell.hidden = true;
+  elements.loginScreen.hidden = false;
+  elements.loginPassword.value = '';
+  elements.loginUsername.focus();
+}
+
+function showChat() {
+  elements.loginScreen.hidden = true;
+  elements.appShell.hidden = false;
+}
+
 async function requestJson(path, options) {
-  const response = await fetch(path, options);
+  const response = await authenticatedFetch(path, options);
   if (!response.ok) {
     let message = `请求失败 (${response.status})`;
     try { message = (await response.json()).error || message; } catch {}
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    if (response.status === 401) showLogin();
+    throw error;
   }
   return response.status === 204 ? null : response.json();
 }
@@ -357,7 +393,7 @@ async function submit(message) {
   state.controller = new AbortController();
   setStreaming(true);
   try {
-    const response = await fetch('/api/chat', {
+    const response = await authenticatedFetch('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ message, sessionId: state.current.id }),
@@ -366,6 +402,7 @@ async function submit(message) {
     if (!response.ok || !response.body) {
       let detail = `请求失败 (${response.status})`;
       try { detail = (await response.json()).error || detail; } catch {}
+      if (response.status === 401) showLogin();
       throw new Error(detail);
     }
     const reader = response.body.getReader();
@@ -475,7 +512,7 @@ elements.input.addEventListener('keydown', (event) => {
 
 elements.stop.addEventListener('click', () => {
   if (!state.controller) return;
-  fetch('/api/stop', { method: 'POST' }).catch(() => {});
+  authenticatedFetch('/api/stop', { method: 'POST' }).catch(() => {});
   state.controller.abort();
 });
 
@@ -513,6 +550,42 @@ elements.sidebarToggle.addEventListener('click', () => {
 elements.sidebarClose.addEventListener('click', () => elements.body.classList.remove('sidebar-open'));
 elements.scrim.addEventListener('click', () => elements.body.classList.remove('sidebar-open'));
 
+elements.loginForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  elements.loginError.textContent = '';
+  elements.loginSubmit.disabled = true;
+  elements.loginSubmit.textContent = '登录中…';
+  try {
+    const response = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: elements.loginUsername.value, password: elements.loginPassword.value }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `登录失败 (${response.status})`);
+    state.authToken = body.token;
+    localStorage.setItem('taiwei-token', body.token);
+    await loadChat();
+  } catch (error) {
+    elements.loginError.textContent = error.message;
+    elements.loginPassword.select();
+  } finally {
+    elements.loginSubmit.disabled = false;
+    elements.loginSubmit.textContent = '登录';
+  }
+});
+
+elements.logout.addEventListener('click', async () => {
+  if (state.controller) {
+    state.controller.abort();
+    state.controller = null;
+  }
+  try { await authenticatedFetch('/api/logout', { method: 'POST' }); } catch {}
+  state.sessions = [];
+  state.current = null;
+  showLogin();
+});
+
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   elements.theme.textContent = theme === 'dark' ? '☾' : '☀';
@@ -525,23 +598,30 @@ elements.theme.addEventListener('click', () => {
   applyTheme(next);
 });
 
+async function loadChat() {
+  try {
+    const [sessions, info] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/info')]);
+    showChat();
+    state.sessions = sessions;
+    elements.model.textContent = info.model;
+    elements.logout.hidden = !info.authEnabled;
+    renderSessionList();
+    if (sessions.length) await loadSession(sessions[0].id);
+    else renderConversation(null);
+  } catch (error) {
+    if (error.status === 401) return;
+    setStatus('error', '服务离线');
+    showToast(`无法连接网关：${error.message}`);
+  }
+  elements.input.focus();
+}
+
 async function initialize() {
   const savedTheme = localStorage.getItem('taiwei-theme');
   applyTheme(savedTheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
   if (localStorage.getItem('taiwei-sidebar-collapsed') === '1') elements.body.classList.add('sidebar-collapsed');
   resizeInput();
-  try {
-    const [sessions, info] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/info')]);
-    state.sessions = sessions;
-    elements.model.textContent = info.model;
-    renderSessionList();
-    if (sessions.length) await loadSession(sessions[0].id);
-    else renderConversation(null);
-  } catch (error) {
-    setStatus('error', '服务离线');
-    showToast(`无法连接网关：${error.message}`);
-  }
-  elements.input.focus();
+  await loadChat();
 }
 
 initialize();
