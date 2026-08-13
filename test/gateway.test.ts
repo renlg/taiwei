@@ -31,7 +31,7 @@ class MockChat implements ChatBridge {
 
 test('gateway serves health, static UI, and streamed SSE events', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-test-'));
-  await writeFile(join(directory, 'index.html'), '<!doctype html><title>taiwei test</title>');
+  await writeFile(join(directory, 'index.html'), '<!doctype html><title>taiwei test</title><img src="/logo.png?v={{ASSET_VERSION}}">');
   await writeFile(join(directory, 'app.js'), 'console.log("taiwei test")');
   await writeFile(join(directory, 'style.css'), 'body {}');
   await writeFile(join(directory, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -65,16 +65,29 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     const page = await fetch(baseUrl);
     assert.equal(page.status, 200);
     assert.match(page.headers.get('content-type') ?? '', /text\/html/);
-    assert.match(await page.text(), /taiwei test/);
+    assert.equal(page.headers.get('cache-control'), 'no-cache');
+    const pageBody = await page.text();
+    assert.match(pageBody, /taiwei test/);
+    assert.match(pageBody, /logo\.png\?v=2/);
+    assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
     assert.equal(stylesheet.status, 200);
     assert.match(stylesheet.headers.get('content-type') ?? '', /text\/css/);
+    assert.equal(stylesheet.headers.get('cache-control'), 'public, max-age=3600');
 
     const logo = await fetch(`${baseUrl}/logo.png`);
     assert.equal(logo.status, 200);
     assert.equal(logo.headers.get('content-type'), 'image/png');
+    assert.equal(logo.headers.get('cache-control'), 'public, max-age=3600');
     assert.deepEqual(Buffer.from(await logo.arrayBuffer()), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const logoHead = await fetch(`${baseUrl}/logo.png`, { method: 'HEAD' });
+    assert.equal(logoHead.status, logo.status);
+    assert.equal(logoHead.headers.get('content-type'), logo.headers.get('content-type'));
+    assert.equal(logoHead.headers.get('cache-control'), logo.headers.get('cache-control'));
+    assert.equal(logoHead.headers.get('content-length'), logo.headers.get('content-length'));
+    assert.equal((await logoHead.arrayBuffer()).byteLength, 0);
 
     const createdResponse = await fetch(`${baseUrl}/api/sessions`, { method: 'POST' });
     assert.equal(createdResponse.status, 201);

@@ -26,6 +26,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
+const STATIC_ASSET_VERSION = '2';
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -270,11 +271,19 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       }
       const staticMatch = pathname.match(/^\/([^/]+)(\.[^.]+)$/);
       const staticContentType = staticMatch ? STATIC_CONTENT_TYPES[staticMatch[2].toLowerCase()] : undefined;
-      if (method === 'GET' && (pathname === '/' || staticContentType)) {
+      if ((method === 'GET' || method === 'HEAD') && (pathname === '/' || staticContentType)) {
         const filename = pathname === '/' ? 'index.html' : pathname.slice(1);
-        const content = await readFile(join(publicDirectory, filename));
-        response.writeHead(200, { 'content-type': staticContentType ?? STATIC_CONTENT_TYPES['.html'] });
-        response.end(content);
+        const fileContent = await readFile(join(publicDirectory, filename));
+        const isHtml = filename.endsWith('.html');
+        const content = isHtml
+          ? Buffer.from(fileContent.toString('utf8').replaceAll('{{ASSET_VERSION}}', STATIC_ASSET_VERSION))
+          : fileContent;
+        response.writeHead(200, {
+          'content-type': staticContentType ?? STATIC_CONTENT_TYPES['.html'],
+          'cache-control': isHtml ? 'no-cache' : 'public, max-age=3600',
+          'content-length': content.byteLength,
+        });
+        response.end(method === 'HEAD' ? undefined : content);
         return;
       }
       json(response, 404, { error: 'Not found' });

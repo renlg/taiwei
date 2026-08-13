@@ -6,13 +6,13 @@
   <meta name="color-scheme" content="dark light">
   <meta name="description" content="taiwei local AI agent chat">
   <title>taiwei · 本地 AI 助手</title>
-  <link rel="icon" href="/logo.png">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="/logo.png?v={{ASSET_VERSION}}">
+  <link rel="stylesheet" href="/style.css?v={{ASSET_VERSION}}">
 </head>
 <body>
   <section class="login-screen" id="login-screen">
     <form class="login-card" id="login-form">
-      <img class="login-mark" src="/logo.png" alt="taiwei">
+      <img class="login-mark" src="/logo.png?v={{ASSET_VERSION}}" alt="taiwei">
       <h1>登录 taiwei</h1>
       <p>请输入网关账号以继续。</p>
       <label for="login-username">用户名</label>
@@ -26,7 +26,7 @@
   <div class="app-shell" id="app-shell" hidden>
     <aside class="sidebar" id="sidebar">
       <div class="brand-row">
-        <a class="brand" href="#" aria-label="taiwei 首页"><img class="brand-mark" src="/logo.png" alt=""><span class="brand-name">taiwei</span></a>
+        <a class="brand" href="#" aria-label="taiwei 首页"><img class="brand-mark" src="/logo.png?v={{ASSET_VERSION}}" alt=""><span class="brand-name">taiwei</span></a>
         <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="关闭侧边栏">×</button>
       </div>
       <button class="new-chat sidebar-new" type="button"><span>+</span><span class="sidebar-label">新对话</span></button>
@@ -71,7 +71,7 @@
       <section class="chat-scroll" id="chat-scroll" aria-live="polite">
         <div class="messages" id="messages"></div>
         <div class="welcome" id="welcome">
-          <img class="welcome-mark" src="/logo.png" alt="taiwei">
+          <img class="welcome-mark" src="/logo.png?v={{ASSET_VERSION}}" alt="taiwei">
           <h2>你好，我是 taiwei</h2>
           <p>你的本地主动式 AI 助手。写代码、理思路、做研究，我们从这里开始。</p>
           <div class="prompt-grid">
@@ -107,6 +107,6 @@
     </main>
   </div>
   <div class="toast" id="toast" role="status"></div>
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/app.js?v={{ASSET_VERSION}}"></script>
 </body>
 </html>
