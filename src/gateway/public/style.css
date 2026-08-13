@@ -178,7 +178,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 .messages { width: min(900px, calc(100% - 42px)); margin: 0 auto; padding: 38px 0 28px; }
 .message-row { display: flex; align-items: flex-start; gap: 11px; margin: 0 0 27px; animation: message-in .28s ease both; }
 .message-row.user { justify-content: flex-end; }
-.avatar { width: 30px; height: 30px; display: grid; flex: 0 0 auto; place-items: center; margin-top: 3px; border: 1px solid var(--border); border-radius: 10px; background: linear-gradient(145deg, var(--accent-soft), var(--surface)); font-size: 16px; box-shadow: 0 7px 20px rgba(0,0,0,.12); }
+.avatar { width: 30px; height: 30px; display: grid; flex: 0 0 auto; place-items: center; overflow: hidden; margin-top: 3px; border: 1px solid var(--border); border-radius: 50%; background: linear-gradient(145deg, var(--accent-soft), var(--surface)); box-shadow: 0 7px 20px rgba(0,0,0,.12); }
+.avatar-img { width: 100%; height: 100%; display: block; border-radius: inherit; object-fit: cover; }
 .message-stack { min-width: 0; max-width: min(78%, 720px); }
 .message-row.assistant .message-stack, .message-row.error .message-stack { max-width: min(86%, 760px); }
 .bubble { position: relative; overflow-wrap: anywhere; font-size: 14.5px; line-height: 1.72; }

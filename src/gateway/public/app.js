@@ -449,7 +449,11 @@ function addMessage(message, options = {}) {
   if (message.role === 'assistant') {
     const avatar = document.createElement('div');
     avatar.className = 'avatar';
-    avatar.textContent = '🦞';
+    const avatarImg = document.createElement('img');
+    avatarImg.className = 'avatar-img';
+    avatarImg.src = '/logo.png?v={{ASSET_VERSION}}';
+    avatarImg.alt = 'taiwei';
+    avatar.append(avatarImg);
     row.append(avatar);
   }
   const stack = document.createElement('div');
