@@ -12,7 +12,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && mkdir -p dist/src/gateway && cp -R src/gateway/public dist/src/gateway/",
     "clean": "rm -rf dist",
     "test": "npm run build && node --test dist/test/*.test.js",
     "start": "node bin/taiwei"

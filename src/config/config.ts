@@ -7,6 +7,10 @@ export interface TaiweiConfig {
   apiKey: string;
   maxTurns: number;
   requestTimeoutMs: number;
+  gateway: {
+    host: string;
+    port: number;
+  };
 }
 
 export const DEFAULT_CONFIG: TaiweiConfig = {
@@ -15,6 +19,10 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   apiKey: '',
   maxTurns: 50,
   requestTimeoutMs: 120_000,
+  gateway: {
+    host: '127.0.0.1',
+    port: 8688,
+  },
 };
 
 export async function loadConfig(): Promise<TaiweiConfig> {
@@ -31,6 +39,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
   return {
     ...DEFAULT_CONFIG,
     ...stored,
+    gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
     apiKey: process.env.TAIWEI_API_KEY ?? stored.apiKey ?? DEFAULT_CONFIG.apiKey,
     baseUrl: process.env.TAIWEI_BASE_URL ?? stored.baseUrl ?? DEFAULT_CONFIG.baseUrl,
     model: process.env.TAIWEI_MODEL ?? stored.model ?? DEFAULT_CONFIG.model,
@@ -46,7 +55,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
   const paths = await ensureTaiweiHome();
   try {
     const stored = JSON.parse(await readFile(paths.config, 'utf8')) as Partial<TaiweiConfig>;
-    const config = { ...DEFAULT_CONFIG, ...stored };
+    const config = { ...DEFAULT_CONFIG, ...stored, gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway } };
     await saveConfig(config);
     return config;
   } catch (error) {
