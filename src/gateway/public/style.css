@@ -192,11 +192,24 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 .prompt-chip small { color: var(--faint); font-size: 11px; }
 
 .composer-dock { z-index: 8; padding: 11px max(18px, calc((100% - 900px) / 2)) 10px; background: linear-gradient(180deg, transparent, var(--panel) 24%); }
-.composer { padding: 11px 11px 9px 16px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--surface-soft); box-shadow: 0 11px 35px rgba(0,0,0,.14); backdrop-filter: blur(18px); transition: border-color .18s, box-shadow .18s; }
+.composer { padding: 11px 11px 9px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--surface-soft); box-shadow: 0 11px 35px rgba(0,0,0,.14); backdrop-filter: blur(18px); transition: border-color .18s, box-shadow .18s; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 48%, transparent); box-shadow: 0 12px 38px rgba(0,0,0,.17), 0 0 0 3px var(--accent-soft); }
-.composer textarea { display: block; width: 100%; min-height: 30px; max-height: 170px; padding: 4px 4px 2px 0; resize: none; overflow-y: auto; border: 0; outline: 0; color: var(--text); background: transparent; line-height: 1.55; }
+.composer-main { display: grid; grid-template-columns: 38px minmax(0, 1fr) 52px; gap: 9px; align-items: center; }
+.composer-content { min-width: 0; }
+.composer textarea { display: block; width: 100%; min-height: 76px; max-height: 170px; padding: 5px 4px 3px 0; resize: none; overflow-y: auto; border: 0; outline: 0; color: var(--text); background: transparent; line-height: 1.55; }
 .composer textarea::placeholder { color: var(--faint); }
 .composer textarea:disabled { opacity: .55; }
+.attachment-button { width: 36px; height: 36px; display: grid; place-items: center; align-self: center; padding: 0; border: 1px solid transparent; border-radius: 11px; color: var(--muted); background: transparent; cursor: pointer; font-size: 17px; transition: .16s; }
+.attachment-button:hover { color: var(--text); border-color: var(--border); background: var(--surface-hover); }
+.attachment-button:disabled { opacity: .35; cursor: default; }
+.attachment-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.attachment-list:empty { display: none; }
+.attachment-chip { min-width: 0; max-width: min(260px, 100%); display: flex; align-items: center; gap: 6px; margin: 0 0 5px; padding: 5px 6px 5px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: var(--surface-hover); font-size: 10.5px; }
+.attachment-chip.uploading { opacity: .65; }
+.attachment-name { overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.attachment-size { flex: none; color: var(--faint); }
+.attachment-remove { width: 19px; height: 19px; display: grid; flex: none; place-items: center; padding: 0; border: 0; border-radius: 50%; color: var(--faint); background: transparent; cursor: pointer; font-size: 15px; line-height: 1; }
+.attachment-remove:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 .composer-footer { min-height: 34px; display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
 .composer-controls, .composer-actions { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .composer-hint { color: var(--faint); font-size: 10px; }
@@ -207,13 +220,17 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 .stop-button span { width: 8px; height: 8px; border-radius: 2px; background: currentColor; }
 body.streaming .send-button { display: none; }
 body.streaming .stop-button { display: flex; }
-.context-meter { position: relative; width: calc(100% - 22px); height: 5px; margin: 7px auto 0; outline: 0; }
-.context-track { height: 3px; overflow: hidden; border-radius: 999px; background: var(--border-strong); }
-.context-fill { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .24s ease, background .2s; }
-.context-meter.warning .context-fill { background: #d89a3a; }
-.context-meter.danger .context-fill { background: var(--danger); }
-.context-tooltip { position: absolute; z-index: 80; right: 0; bottom: calc(100% + 8px); width: max-content; max-width: min(290px, calc(100vw - 28px)); padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 9px; opacity: 0; pointer-events: none; color: var(--text); background: var(--surface); box-shadow: var(--shadow); font-size: 10.5px; line-height: 1.5; white-space: normal; transform: translateY(3px); transition: .14s; }
-.context-meter:hover .context-tooltip, .context-meter:focus-visible .context-tooltip { opacity: 1; transform: translateY(0); }
+.context-meter { position: relative; width: 48px; height: 48px; display: grid; place-items: center; flex: none; outline: 0; border-radius: 50%; }
+.context-ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.context-track, .context-fill { fill: none; stroke-width: 4; }
+.context-track { stroke: var(--border-strong); }
+.context-fill { stroke: var(--accent); stroke-linecap: round; stroke-dasharray: 100; stroke-dashoffset: 100; transition: stroke-dashoffset .24s ease, stroke .2s; }
+.context-percent { position: relative; color: var(--muted); font-size: 9px; font-weight: 750; letter-spacing: -.03em; }
+.context-meter.warning .context-fill { stroke: #d89a3a; }
+.context-meter.danger .context-fill { stroke: var(--danger); }
+.context-meter.warning .context-percent, .context-meter.danger .context-percent { color: var(--text); }
+.context-tooltip { position: absolute; z-index: 80; right: -5px; bottom: calc(100% + 8px); width: max-content; max-width: min(290px, calc(100vw - 28px)); padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 9px; opacity: 0; pointer-events: none; color: var(--text); background: var(--surface); box-shadow: var(--shadow); font-size: 10.5px; line-height: 1.5; white-space: normal; transform: translateY(3px); transition: .14s; }
+.context-meter:hover .context-tooltip, .context-meter:focus-visible .context-tooltip, .context-meter:focus-within .context-tooltip { opacity: 1; transform: translateY(0); }
 .disclaimer { margin: 7px 0 0; color: var(--faint); text-align: center; font-size: 9.5px; }
 .scroll-bottom { position: absolute; z-index: 9; right: 27px; bottom: 135px; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 999px; opacity: 0; pointer-events: none; color: var(--muted); background: var(--surface); box-shadow: var(--shadow); cursor: pointer; font-size: 11px; transform: translateY(8px); transition: .18s; }
 .scroll-bottom.visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
@@ -266,6 +283,9 @@ body.sidebar-collapsed .sidebar-footer { flex-direction: column; justify-content
   .prompt-grid { grid-template-columns: 1fr; }
   .prompt-chip { min-height: 70px; }
   .composer-dock { padding: 9px 10px 7px; }
+  .composer-main { grid-template-columns: 34px minmax(0, 1fr) 46px; gap: 6px; }
+  .attachment-button { width: 32px; height: 32px; }
+  .context-meter { width: 44px; height: 44px; }
   .composer-hint, .disclaimer { display: none; }
   .scroll-bottom { right: 14px; bottom: 105px; }
   body.sidebar-collapsed .brand-name, body.sidebar-collapsed .sidebar-label, body.sidebar-collapsed .history-heading, body.sidebar-collapsed .session-copy { display: initial; }

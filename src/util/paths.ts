@@ -14,6 +14,8 @@ export interface TaiweiPaths {
   plugins: string;
   sessions: string;
   gatewaySessions: string;
+  loginLocks: string;
+  uploads: string;
 }
 
 export function getPaths(): TaiweiPaths {
@@ -30,6 +32,8 @@ export function getPaths(): TaiweiPaths {
     plugins: join(home, 'plugins'),
     sessions: join(home, 'sessions'),
     gatewaySessions: join(home, 'gateway-sessions.json'),
+    loginLocks: join(home, 'login-locks.json'),
+    uploads: join(home, 'uploads'),
   };
 }
 
@@ -49,6 +53,7 @@ export async function ensureTaiweiHome(): Promise<TaiweiPaths> {
     mkdir(paths.knowledge, { recursive: true }),
     mkdir(paths.plugins, { recursive: true }),
     mkdir(paths.sessions, { recursive: true }),
+    mkdir(paths.uploads, { recursive: true }),
   ]);
   await Promise.all([
     writeIfMissing(paths.cron, '[]\n'),

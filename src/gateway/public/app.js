@@ -31,8 +31,12 @@ const elements = {
   input: $('#input'),
   send: $('#send'),
   stop: $('#stop'),
+  attachmentButton: $('#attachment-button'),
+  fileInput: $('#file-input'),
+  attachmentList: $('#attachment-list'),
   contextMeter: $('#context-meter'),
   contextFill: $('#context-fill'),
+  contextPercent: $('#context-percent'),
   contextTooltip: $('#context-tooltip'),
   scrollBottom: $('#scroll-bottom'),
   theme: $('#theme-toggle'),
@@ -55,6 +59,7 @@ const state = {
   switchingModel: false,
   contextWindow: 128000,
   usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, contextWindow: 128000, model: '' },
+  attachments: [],
 };
 
 function escapeHtml(value) {
@@ -156,7 +161,8 @@ function renderUsage(usage = state.usage) {
   const contextWindow = Math.max(1, Number(usage.contextWindow) || state.contextWindow || 128000);
   const totalTokens = Math.max(0, Number(usage.totalTokens) || 0);
   const percentage = Math.min(100, (totalTokens / contextWindow) * 100);
-  elements.contextFill.style.width = `${percentage}%`;
+  elements.contextFill.style.strokeDashoffset = String(100 - percentage);
+  elements.contextPercent.textContent = `${Math.round(percentage)}%`;
   elements.contextMeter.classList.toggle('warning', percentage >= 70 && percentage < 90);
   elements.contextMeter.classList.toggle('danger', percentage >= 90);
   elements.contextMeter.setAttribute('aria-valuenow', percentage.toFixed(1));
@@ -167,10 +173,76 @@ function renderUsage(usage = state.usage) {
 function setStreaming(streaming) {
   elements.body.classList.toggle('streaming', streaming);
   elements.input.disabled = streaming;
-  elements.send.disabled = streaming || !elements.input.value.trim();
+  elements.attachmentButton.disabled = streaming || state.attachments.length >= 5;
+  elements.send.disabled = streaming || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
+  elements.attachmentList.querySelectorAll('button').forEach((button) => { button.disabled = streaming; });
   document.querySelectorAll('.new-chat').forEach((button) => { button.disabled = streaming; });
   document.querySelectorAll('.session-item').forEach((item) => item.setAttribute('aria-disabled', String(streaming)));
   if (streaming) setStatus('streaming', '思考中');
+}
+
+function formatFileSize(value) {
+  const size = Math.max(0, Number(value) || 0);
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderAttachments() {
+  elements.attachmentList.replaceChildren();
+  for (const attachment of state.attachments) {
+    const chip = document.createElement('div');
+    chip.className = `attachment-chip${attachment.uploading ? ' uploading' : ''}`;
+    const name = document.createElement('span');
+    name.className = 'attachment-name';
+    name.textContent = attachment.name;
+    name.title = attachment.name;
+    const size = document.createElement('span');
+    size.className = 'attachment-size';
+    size.textContent = attachment.uploading ? '上传中…' : formatFileSize(attachment.size);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'attachment-remove';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', `移除 ${attachment.name}`);
+    remove.disabled = Boolean(state.controller);
+    remove.addEventListener('click', () => {
+      state.attachments = state.attachments.filter((item) => item.id !== attachment.id);
+      renderAttachments();
+      resizeInput();
+    });
+    chip.append(name, size, remove);
+    elements.attachmentList.append(chip);
+  }
+  elements.attachmentButton.disabled = Boolean(state.controller) || state.attachments.length >= 5;
+  elements.send.disabled = Boolean(state.controller) || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
+}
+
+async function uploadFile(file) {
+  const attachment = { id: crypto.randomUUID(), name: file.name, size: file.size, type: file.type, uploading: true };
+  state.attachments.push(attachment);
+  renderAttachments();
+  try {
+    const response = await authenticatedFetch('/api/upload', {
+      method: 'POST',
+      headers: {
+        'content-type': file.type || 'application/octet-stream',
+        'x-file-name': encodeURIComponent(file.name),
+        ...(state.current?.id ? { 'x-session-id': state.current.id } : {}),
+      },
+      body: file,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 401) showLogin();
+      throw new Error(body.error || `上传失败 (${response.status})`);
+    }
+    Object.assign(attachment, body, { uploading: false });
+  } catch (error) {
+    state.attachments = state.attachments.filter((item) => item.id !== attachment.id);
+    showToast(`${file.name}：${error.message}`);
+  }
+  renderAttachments();
 }
 
 function autoScroll(force = false) {
@@ -460,6 +532,8 @@ async function loadSession(id) {
     const session = await requestJson(`/api/sessions/${encodeURIComponent(id)}`);
     if (version !== state.loadVersion) return;
     state.current = session;
+    state.attachments = [];
+    renderAttachments();
     renderConversation(session);
     renderSessionList();
     elements.body.classList.remove('sidebar-open');
@@ -472,6 +546,8 @@ async function createSession() {
   try {
     const session = await requestJson('/api/sessions', { method: 'POST' });
     state.current = session;
+    state.attachments = [];
+    renderAttachments();
     await refreshSessions();
     renderConversation(session);
     elements.body.classList.remove('sidebar-open');
@@ -503,7 +579,7 @@ function parseEvent(block) {
   try { return { event, data: JSON.parse(data.join('\n')) }; } catch { return null; }
 }
 
-async function submit(message) {
+async function submit(message, files = []) {
   if (state.controller) return;
   if (!state.current && !await createSession()) return;
   const userMessage = { role: 'user', content: message, timestamp: new Date().toISOString() };
@@ -520,7 +596,11 @@ async function submit(message) {
     const response = await authenticatedFetch('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message, sessionId: state.current.id }),
+      body: JSON.stringify({
+        message,
+        sessionId: state.current.id,
+        files: files.map(({ name, path, size, type }) => ({ name, path, size, type })),
+      }),
       signal: state.controller.signal,
     });
     if (!response.ok || !response.body) {
@@ -634,16 +714,33 @@ async function submit(message) {
 function resizeInput() {
   elements.input.style.height = 'auto';
   elements.input.style.height = `${Math.min(elements.input.scrollHeight, 170)}px`;
-  elements.send.disabled = Boolean(state.controller) || !elements.input.value.trim();
+  elements.send.disabled = Boolean(state.controller) || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
 }
 
 elements.composer.addEventListener('submit', (event) => {
   event.preventDefault();
   const message = elements.input.value.trim();
-  if (!message || state.controller) return;
+  if (!message || state.controller || state.attachments.some((file) => file.uploading)) return;
+  const files = state.attachments.filter((file) => file.path);
+  state.attachments = [];
+  renderAttachments();
   elements.input.value = '';
   resizeInput();
-  submit(message);
+  submit(message, files);
+});
+
+elements.attachmentButton.addEventListener('click', () => {
+  if (!state.controller && state.attachments.length < 5) elements.fileInput.click();
+});
+
+elements.fileInput.addEventListener('change', async () => {
+  const selected = Array.from(elements.fileInput.files || []);
+  elements.fileInput.value = '';
+  if (!selected.length) return;
+  if (!state.current && !await createSession()) return;
+  const available = Math.max(0, 5 - state.attachments.length);
+  if (selected.length > available) showToast('每条消息最多添加 5 个附件');
+  await Promise.all(selected.slice(0, available).map(uploadFile));
 });
 
 elements.input.addEventListener('input', resizeInput);

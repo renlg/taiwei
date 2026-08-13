@@ -77,11 +77,13 @@ Run `/model` to list available models and mark the current one, or `/model <name
 
 ### Local web chat
 
-Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The polished browser UI streams answer tokens and tool activity live, supports dark and light themes, includes a model switcher in the message composer, and provides a sidebar for creating, switching, and deleting conversations. Stop cancels the current LLM request or tool through the same cooperative interrupt mechanism as the CLI.
+Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The polished browser UI streams answer tokens and tool activity live, supports dark and light themes, includes a model switcher and local file attachments in the message composer, and provides a sidebar for creating, switching, and deleting conversations. Stop cancels the current LLM request or tool through the same cooperative interrupt mechanism as the CLI.
 
 Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so history and agent context survive browser refreshes and gateway restarts. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
 
-The composer includes a context-usage bar. taiwei requests OpenAI-compatible streaming usage (`stream_options.include_usage`), normalizes `prompt_tokens`, `completion_tokens`, and `total_tokens`, and emits an SSE `usage` event after each provider call. The gateway accumulates those provider-reported values in the current session file, and the browser updates the meter as usage arrives (with a small interim completion estimate while text is streaming). Hover or focus the bar to inspect the totals, window size, and percentage.
+The composer includes a circular context-usage ring. taiwei requests OpenAI-compatible streaming usage (`stream_options.include_usage`), normalizes `prompt_tokens`, `completion_tokens`, and `total_tokens`, and emits an SSE `usage` event after each provider call. The gateway accumulates those provider-reported values in the current session file, and the browser updates the ring as usage arrives (with a small interim completion estimate while text is streaming). Hover or focus the ring to inspect the totals, window size, and percentage.
+
+Use the paperclip button to attach up to five files to a message. Each file is uploaded only to `~/.taiwei/uploads/` with a 10 MB per-file limit and a sanitized filename. Text-like formats are included in the model message up to 8,000 characters; binary files are represented by their absolute local path so the agent can inspect them with its existing tools. `POST /api/upload` uses a raw request body with the URL-encoded filename in `X-File-Name`, avoiding a multipart dependency.
 
 Health checks are available at `GET /api/health`. Model state is exposed through `GET /api/models`, `GET /api/model`, and `POST /api/model`; these routes use the same authentication policy as the other gateway APIs. Session management is exposed locally through `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`, and the optional `sessionId` field on `POST /api/chat`.
 
@@ -102,7 +104,7 @@ Authentication is opt-in. It is strongly recommended whenever the gateway binds 
 
 The password is stored as plain text because taiwei is a local tool; protect `~/.taiwei/config.json` with normal user-only filesystem permissions. You may leave `auth.password` empty in the file and supply `TAIWEI_AUTH_PASSWORD` when starting the gateway. If authentication is enabled and neither source provides a password, `taiwei serve` refuses to start with setup instructions.
 
-Open the gateway and sign in through the login screen. Successful login creates a seven-day sliding session in `~/.taiwei/gateway-sessions.json`; the browser keeps both an HttpOnly cookie and a bearer token, and gateway restarts preserve active logins. Five failed attempts from one IP within ten minutes temporarily rate-limit further attempts. Click the username in the top-right corner and choose **退出登录 / Logout** to invalidate the current token and return to login.
+Open the gateway and sign in through the login screen. Successful login creates a seven-day sliding session in `~/.taiwei/gateway-sessions.json`; the browser keeps both an HttpOnly cookie and a bearer token, and gateway restarts preserve active logins. Login lock state is persisted separately in `~/.taiwei/login-locks.json`: five failures for the same account and IP within a sliding ten-minute window trigger a ten-minute cooldown, ten cumulative failures permanently lock that account/IP pair, and ten failures across any accounts from one IP within a sliding ten-minute window lock the IP for ten minutes. A successful login resets the matching account/IP counters. Click the username in the top-right corner and choose **退出登录 / Logout** to invalidate the current token and return to login.
 
 ## State and extensions
 
@@ -119,6 +121,8 @@ skills/           <name>/SKILL.md skills
 plugins/          <name>/plugin.js plugins
 sessions/         durable web chat conversations
 gateway-sessions.json  durable gateway login tokens
+login-locks.json   durable login failure and lock state
+uploads/           local web-chat attachments
 ```
 
 ### Skills

@@ -6,6 +6,7 @@ import { runRepl } from './cli/repl.js';
 import { initializeConfig, validateGatewayAuth } from './config/config.js';
 import { AuthSessionStore } from './gateway/auth.js';
 import { AgentChatBridge } from './gateway/chat.js';
+import { LoginLockStore } from './gateway/login-locks.js';
 import { closeGateway, createGatewayServer, listenGateway } from './gateway/server.js';
 import { ensureTaiweiHome } from './util/paths.js';
 
@@ -47,11 +48,13 @@ async function main(): Promise<void> {
         if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error('Gateway port must be an integer between 0 and 65535');
       }
       const authSessions = new AuthSessionStore();
-      await authSessions.initialize();
+      const loginLocks = new LoginLockStore();
+      await Promise.all([authSessions.initialize(), loginLocks.initialize()]);
       const server = createGatewayServer({
         chat: new AgentChatBridge(app),
         auth: app.config.auth,
         authSessions,
+        loginLocks,
       });
       const boundPort = await listenGateway(server, app.config.gateway.host, port);
       console.log(`[taiwei] Gateway listening at http://${app.config.gateway.host}:${boundPort}`);

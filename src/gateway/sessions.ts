@@ -13,6 +13,7 @@ export interface SessionToolCall {
 export interface SessionMessage {
   role: 'user' | 'assistant';
   content: string;
+  agentContent?: string;
   toolCalls?: SessionToolCall[];
   timestamp: string;
   status?: 'stopped' | 'error';
@@ -99,7 +100,7 @@ export class SessionStore {
   }
 
   toChatHistory(session: GatewaySession): ChatMessage[] {
-    return session.messages.map((message) => ({ role: message.role, content: message.content }));
+    return session.messages.map((message) => ({ role: message.role, content: message.agentContent ?? message.content }));
   }
 
   titleFrom(message: string): string {

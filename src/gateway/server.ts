@@ -1,14 +1,16 @@
-import { readFile } from 'node:fs/promises';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { join } from 'node:path';
+import { extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ChatBridge } from './chat.js';
 import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
+import { LoginLockStore, type LoginLock } from './login-locks.js';
 import { SessionStore, type SessionToolCall } from './sessions.js';
 import { openSse, sendSse } from './sse.js';
 import { getCurrentModel, resolveModels, setCurrentModel, type ModelListResult } from '../config/model.js';
 import { loadConfig, resolveContextWindow } from '../config/config.js';
+import { getPaths } from '../util/paths.js';
 
 export interface GatewayModelState {
   getCurrentModel(): Promise<string>;
@@ -25,10 +27,12 @@ export interface GatewayServerOptions {
   log?: (message: string) => void;
   auth?: { enabled: boolean; username: string; password: string };
   authSessions?: AuthSessionStore;
+  loginLocks?: LoginLockStore;
+  uploadsDirectory?: string;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '3';
+const STATIC_ASSET_VERSION = '4';
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -43,8 +47,27 @@ const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
 };
 
-const LOGIN_WINDOW_MS = 10 * 60 * 1_000;
-const MAX_LOGIN_FAILURES = 5;
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MAX_FILES_PER_MESSAGE = 5;
+const ATTACHMENT_TEXT_LIMIT = 8_000;
+const TEXT_EXTENSIONS = new Set([
+  '.txt', '.md', '.markdown', '.json', '.jsonl', '.yaml', '.yml', '.csv', '.tsv', '.log',
+  '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.py', '.java', '.go', '.c', '.h', '.cc',
+  '.cpp', '.cxx', '.hpp', '.html', '.htm', '.css', '.scss', '.less', '.sql', '.sh', '.bash',
+  '.zsh', '.fish', '.xml', '.toml', '.ini', '.conf', '.env', '.rs', '.rb', '.php', '.swift',
+  '.kt', '.kts', '.scala', '.vue', '.svelte', '.tex', '.rst', '.properties', '.gradle', '.dockerfile',
+]);
+
+interface UploadedFile {
+  name: string;
+  path: string;
+  size: number;
+  type: string;
+}
+
+class HttpError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
 
 function json(response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers });
@@ -88,10 +111,64 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   catch { throw new Error('Request body must be valid JSON'); }
 }
 
+async function readUpload(request: IncomingMessage): Promise<Buffer> {
+  const declaredSize = Number(request.headers['content-length']);
+  if (Number.isFinite(declaredSize) && declaredSize > MAX_UPLOAD_BYTES) throw new HttpError(413, '文件不能超过 10 MB');
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += value.length;
+    if (size > MAX_UPLOAD_BYTES) throw new HttpError(413, '文件不能超过 10 MB');
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
+function sanitizeFilename(value: string): string {
+  const leaf = value.replaceAll('\\', '/').split('/').pop() ?? '';
+  const clean = leaf.replace(/[\u0000-\u001f\u007f]/g, '').replace(/[^\p{L}\p{N}._()\- ]/gu, '_').replace(/^\.+/, '').trim();
+  return clean.slice(0, 180) || 'attachment';
+}
+
+function lockMessage(lock: LoginLock): string {
+  return lock === 'pair_permanent' ? '该账号已锁定，请联系管理员' : '失败次数过多，请稍后再试';
+}
+
+function withinDirectory(path: string, directory: string): boolean {
+  const child = relative(resolve(directory), resolve(path));
+  return child !== '' && !child.startsWith('..') && !isAbsolute(child);
+}
+
+async function attachmentContext(files: unknown, uploadsDirectory: string): Promise<string> {
+  if (files === undefined) return '';
+  if (!Array.isArray(files) || files.length > MAX_FILES_PER_MESSAGE) throw new HttpError(400, `files must contain at most ${MAX_FILES_PER_MESSAGE} uploads`);
+  const sections: string[] = [];
+  for (const item of files) {
+    if (!item || typeof item !== 'object') throw new HttpError(400, 'Invalid uploaded file metadata');
+    const candidate = item as Partial<UploadedFile>;
+    if (typeof candidate.path !== 'string' || !withinDirectory(candidate.path, uploadsDirectory)) throw new HttpError(400, 'Invalid uploaded file path');
+    const info = await stat(candidate.path).catch(() => undefined);
+    if (!info?.isFile()) throw new HttpError(400, 'Uploaded file does not exist');
+    const name = sanitizeFilename(typeof candidate.name === 'string' ? candidate.name : candidate.path.split('/').pop() ?? 'attachment');
+    const extension = extname(name).toLowerCase();
+    if (TEXT_EXTENSIONS.has(extension) || name.toLowerCase() === 'dockerfile') {
+      const content = (await readFile(candidate.path, 'utf8')).slice(0, ATTACHMENT_TEXT_LIMIT).replaceAll('```', '``\u200b`');
+      const truncated = info.size > Buffer.byteLength(content) ? '\n[内容已截断]' : '';
+      sections.push(`[附件: ${name}]\n\`\`\`${extension.slice(1) || 'text'}\n${content}${truncated}\n\`\`\``);
+    } else {
+      sections.push(`[附件: ${name}] 路径: ${resolve(candidate.path)} (可通过工具读取)`);
+    }
+  }
+  return sections.length ? `\n\n${sections.join('\n\n')}` : '';
+}
+
 export function createGatewayServer(options: GatewayServerOptions): Server {
   const publicDirectory = options.publicDirectory ?? DEFAULT_PUBLIC_DIRECTORY;
   const sessions = options.sessions ?? new SessionStore();
   const authSessions = options.authSessions ?? new AuthSessionStore();
+  const loginLocks = options.loginLocks ?? new LoginLockStore();
+  const uploadsDirectory = resolve(options.uploadsDirectory ?? getPaths().uploads);
   const authEnabled = options.auth?.enabled ?? false;
   if (authEnabled && !options.auth?.password) {
     throw new Error('Gateway auth is enabled but no password is set. Set auth.password in ~/.taiwei/config.json or TAIWEI_AUTH_PASSWORD.');
@@ -99,7 +176,6 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const log = options.log ?? console.log;
   const modelState: GatewayModelState = options.modelState ?? { getCurrentModel, resolveModels, setCurrentModel };
   const contextWindowFor = options.contextWindow ?? (async (model: string) => resolveContextWindow(await loadConfig(), model));
-  const loginFailures = new Map<string, { count: number; windowStartedAt: number }>();
   return createServer(async (request, response) => {
     const started = Date.now();
     const method = request.method ?? 'GET';
@@ -115,28 +191,23 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           json(response, 404, { error: 'Authentication is disabled' });
           return;
         }
-        const ip = request.socket.remoteAddress ?? 'unknown';
-        const now = Date.now();
-        const failures = loginFailures.get(ip);
-        if (failures && now - failures.windowStartedAt < LOGIN_WINDOW_MS && failures.count >= MAX_LOGIN_FAILURES) {
-          log(`[taiwei] Warning: login rate limit reached for ${ip}`);
-          json(response, 429, { error: 'Too many login attempts. Try again later.' });
-          return;
-        }
         const body = await readJson(request) as { username?: unknown; password?: unknown };
+        const ip = request.socket.remoteAddress ?? 'unknown';
+        const username = typeof body?.username === 'string' ? body.username : '';
         const valid = typeof body?.username === 'string'
           && typeof body?.password === 'string'
           && constantTimeEqual(body.username, options.auth?.username ?? '')
           && constantTimeEqual(body.password, options.auth?.password ?? '');
-        if (!valid) {
-          const active = failures && now - failures.windowStartedAt < LOGIN_WINDOW_MS
-            ? failures : { count: 0, windowStartedAt: now };
-          active.count += 1;
-          loginFailures.set(ip, active);
+        const attempt = await loginLocks.attempt(username, ip, valid);
+        if (attempt.lock) {
+          log(`[taiwei] Warning: login lock ${attempt.lock} reached for ${ip} (${username || '<empty>'})`);
+          json(response, 429, { error: lockMessage(attempt.lock) });
+          return;
+        }
+        if (attempt.failed) {
           json(response, 401, { error: 'Invalid username or password' });
           return;
         }
-        loginFailures.delete(ip);
         const token = await authSessions.create(body.username as string);
         json(response, 200, { token }, { 'set-cookie': sessionCookie(token) });
         return;
@@ -218,8 +289,26 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         json(response, 200, { stopped: options.chat.stop() });
         return;
       }
+      if (method === 'POST' && pathname === '/api/upload') {
+        const url = new URL(request.url ?? '/', 'http://localhost');
+        const headerName = request.headers['x-file-name'];
+        const rawName = typeof headerName === 'string' ? headerName : url.searchParams.get('name') ?? '';
+        let decodedName = rawName;
+        try { decodedName = decodeURIComponent(rawName); } catch {}
+        const name = sanitizeFilename(decodedName);
+        if (!rawName) throw new HttpError(400, '缺少文件名');
+        const data = await readUpload(request);
+        const requestedGroup = request.headers['x-session-id'];
+        const group = sanitizeFilename(typeof requestedGroup === 'string' ? requestedGroup : 'unassigned');
+        const directory = join(uploadsDirectory, group);
+        await mkdir(directory, { recursive: true });
+        const path = join(directory, `${Date.now()}-${randomUUID()}-${name}`);
+        await writeFile(path, data, { flag: 'wx' });
+        json(response, 201, { name, path: resolve(path), size: data.byteLength, type: request.headers['content-type'] || 'application/octet-stream' });
+        return;
+      }
       if (method === 'POST' && pathname === '/api/chat') {
-        const body = await readJson(request) as { message?: unknown; sessionId?: unknown };
+        const body = await readJson(request) as { message?: unknown; sessionId?: unknown; files?: unknown };
         if (typeof body?.message !== 'string' || !body.message.trim()) {
           json(response, 400, { error: 'message must be a non-empty string' });
           return;
@@ -234,11 +323,12 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           return;
         }
         const message = body.message.trim();
+        const agentMessage = `${message}${await attachmentContext(body.files, uploadsDirectory)}`;
         const history = sessions.toChatHistory(session);
         const activeModel = await modelState.getCurrentModel();
         const activeContextWindow = await contextWindowFor(activeModel);
         if (!session.messages.some((item) => item.role === 'user')) session.title = sessions.titleFrom(message) || session.title;
-        session.messages.push({ role: 'user', content: message, timestamp: new Date().toISOString() });
+        session.messages.push({ role: 'user', content: message, ...(agentMessage !== message ? { agentContent: agentMessage } : {}), timestamp: new Date().toISOString() });
         openSse(response);
         let completed = false;
         let answer = '';
@@ -246,7 +336,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         let turnError: Error | undefined;
         const toolCalls: SessionToolCall[] = [];
         response.once('close', () => { if (!completed) options.chat.stop(); });
-        await options.chat.run(message, {
+        await options.chat.run(agentMessage, {
           event: (event) => {
             if (event.type === 'token') {
               answer += event.text;
@@ -311,7 +401,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       }
       json(response, 404, { error: 'Not found' });
     } catch (error) {
-      if (!response.headersSent) json(response, 400, { error: (error as Error).message });
+      if (!response.headersSent) json(response, error instanceof HttpError ? error.status : 400, { error: (error as Error).message });
       else { sendSse(response, 'error', { message: (error as Error).message }); response.end(); }
     }
   });

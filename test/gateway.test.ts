@@ -6,6 +6,7 @@ import test from 'node:test';
 import type { AgentEvent } from '../src/agent/loop.js';
 import { AuthSessionStore } from '../src/gateway/auth.js';
 import type { ChatBridge, ChatSink } from '../src/gateway/chat.js';
+import { LOGIN_COOLDOWN_MS, LoginLockStore } from '../src/gateway/login-locks.js';
 import { closeGateway, createGatewayServer, listenGateway } from '../src/gateway/server.js';
 import { SessionStore } from '../src/gateway/sessions.js';
 import type { ChatMessage } from '../src/llm/client.js';
@@ -14,8 +15,10 @@ import type { GatewayModelState } from '../src/gateway/server.js';
 class MockChat implements ChatBridge {
   stopped = false;
   histories: ChatMessage[][] = [];
+  messages: string[] = [];
 
-  async run(_message: string, sink: ChatSink, history: ChatMessage[] = []): Promise<void> {
+  async run(message: string, sink: ChatSink, history: ChatMessage[] = []): Promise<void> {
+    this.messages.push(message);
     this.histories.push(history);
     for (const event of [
       { type: 'token', text: 'Hello ' },
@@ -50,6 +53,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     modelState,
     contextWindow: async () => 1_000,
     publicDirectory: directory,
+    uploadsDirectory: join(directory, 'uploads'),
     log: () => {},
   });
   const port = await listenGateway(server, '127.0.0.1', 0);
@@ -76,7 +80,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=3/);
+    assert.match(pageBody, /logo\.png\?v=4/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -102,8 +106,24 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     const created = await createdResponse.json() as { id: string; title: string };
     assert.equal(created.title, '新会话');
 
+    const oversizedUpload = await fetch(`${baseUrl}/api/upload`, {
+      method: 'POST', headers: { 'x-file-name': 'oversized.bin' }, body: Buffer.alloc(10 * 1024 * 1024 + 1),
+    });
+    assert.equal(oversizedUpload.status, 413);
+
+    const upload = await fetch(`${baseUrl}/api/upload`, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain', 'x-file-name': encodeURIComponent('../notes.txt'), 'x-session-id': created.id },
+      body: 'local attachment contents',
+    });
+    assert.equal(upload.status, 201);
+    const uploaded = await upload.json() as { name: string; path: string; size: number; type: string };
+    assert.equal(uploaded.name, 'notes.txt');
+    assert.equal(uploaded.size, 25);
+    assert.match(uploaded.path, /uploads/);
+
     const chat = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: 'hello', sessionId: created.id }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: 'hello', sessionId: created.id, files: [uploaded] }),
     });
     assert.equal(chat.status, 200);
     assert.match(chat.headers.get('content-type') ?? '', /text\/event-stream/);
@@ -124,6 +144,8 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.deepEqual(persisted.messages.map(({ role, content }) => ({ role, content })), [
       { role: 'user', content: 'hello' }, { role: 'assistant', content: 'Hello world' },
     ]);
+    assert.match(mock.messages[0], /\[附件: notes\.txt\]/);
+    assert.match(mock.messages[0], /local attachment contents/);
     assert.equal(persisted.messages[1].toolCalls?.length, 1);
     assert.deepEqual(persisted.usage, { promptTokens: 10, completionTokens: 2, totalTokens: 12, contextWindow: 1_000, model: 'free' });
 
@@ -132,9 +154,8 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     });
     assert.equal(secondChat.status, 200);
     assert.match(await secondChat.text(), /event: usage\ndata: \{"promptTokens":20,"completionTokens":4,"totalTokens":24,"contextWindow":1000,"model":"free"\}/);
-    assert.deepEqual(mock.histories[1], [
-      { role: 'user', content: 'hello' }, { role: 'assistant', content: 'Hello world' },
-    ]);
+    assert.match(mock.histories[1][0].content ?? '', /local attachment contents/);
+    assert.deepEqual(mock.histories[1][1], { role: 'assistant', content: 'Hello world' });
 
     const listed = await (await fetch(`${baseUrl}/api/sessions`)).json() as Array<{ id: string; messageCount: number }>;
     assert.equal(listed[0].id, created.id);
@@ -155,20 +176,23 @@ test('gateway authenticates API requests and preserves tokens across restarts', 
   await writeFile(join(directory, 'app.js'), '');
   await writeFile(join(directory, 'style.css'), '');
   const authFile = join(directory, 'gateway-sessions.json');
+  const lockFile = join(directory, 'login-locks.json');
   const options = {
     chat: new MockChat(),
     sessions: new SessionStore(join(directory, 'sessions')),
     publicDirectory: directory,
+    uploadsDirectory: join(directory, 'uploads'),
     auth: { enabled: true, username: 'admin', password: 'correct horse' },
     log: () => {},
   };
-  let server = createGatewayServer({ ...options, authSessions: new AuthSessionStore(authFile) });
+  let server = createGatewayServer({ ...options, authSessions: new AuthSessionStore(authFile), loginLocks: new LoginLockStore(lockFile) });
   let port = await listenGateway(server, '127.0.0.1', 0);
   let baseUrl = `http://127.0.0.1:${port}`;
   try {
     assert.equal((await fetch(`${baseUrl}/api/health`)).status, 200);
     assert.equal((await fetch(`${baseUrl}/api/sessions`)).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/models`)).status, 401);
+    assert.equal((await fetch(`${baseUrl}/api/upload`, { method: 'POST', headers: { 'x-file-name': 'private.txt' }, body: 'private' })).status, 401);
 
     const wrong = await fetch(`${baseUrl}/api/login`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -191,9 +215,13 @@ test('gateway authenticates API requests and preserves tokens across restarts', 
     assert.equal((await info.json() as { username?: string }).username, 'admin');
     const cookieAuthorized = await fetch(`${baseUrl}/api/sessions`, { headers: { cookie: `taiwei_token=${token}` } });
     assert.equal(cookieAuthorized.status, 200);
+    const authorizedUpload = await fetch(`${baseUrl}/api/upload`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'x-file-name': 'private.txt', 'content-type': 'text/plain' }, body: 'private',
+    });
+    assert.equal(authorizedUpload.status, 201);
 
     await closeGateway(server);
-    server = createGatewayServer({ ...options, authSessions: new AuthSessionStore(authFile) });
+    server = createGatewayServer({ ...options, authSessions: new AuthSessionStore(authFile), loginLocks: new LoginLockStore(lockFile) });
     port = await listenGateway(server, '127.0.0.1', 0);
     baseUrl = `http://127.0.0.1:${port}`;
     assert.equal((await fetch(`${baseUrl}/api/sessions`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
@@ -204,6 +232,67 @@ test('gateway authenticates API requests and preserves tokens across restarts', 
     assert.equal((await fetch(`${baseUrl}/api/sessions`, { headers: { authorization: `Bearer ${token}` } })).status, 401);
   } finally {
     await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('gateway login returns 429 after five failed account and IP attempts', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-lock-route-test-'));
+  const server = createGatewayServer({
+    chat: new MockChat(),
+    sessions: new SessionStore(join(directory, 'sessions')),
+    authSessions: new AuthSessionStore(join(directory, 'gateway-sessions.json')),
+    loginLocks: new LoginLockStore(join(directory, 'login-locks.json')),
+    auth: { enabled: true, username: 'admin', password: 'secret' },
+    log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  try {
+    const login = () => fetch(`http://127.0.0.1:${port}/api/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'wrong' }),
+    });
+    for (let attempt = 0; attempt < 5; attempt += 1) assert.equal((await login()).status, 401);
+    const locked = await login();
+    assert.equal(locked.status, 429);
+    assert.deepEqual(await locked.json(), { error: '失败次数过多，请稍后再试' });
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('login lock store enforces cooldown, permanent pair locks, IP-wide locks, and persistence', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-login-lock-store-test-'));
+  const file = join(directory, 'login-locks.json');
+  const store = new LoginLockStore(file);
+  const start = 1_000_000;
+  try {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      assert.deepEqual(await store.attempt('admin', 'pair-ip', false, start + attempt), { failed: true });
+    }
+    assert.equal((await store.attempt('admin', 'pair-ip', true, start + 10)).lock, 'pair_cooldown');
+
+    const secondWindow = start + LOGIN_COOLDOWN_MS + 100;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      assert.deepEqual(await store.attempt('admin', 'pair-ip', false, secondWindow + attempt), { failed: true });
+    }
+    assert.equal((await store.attempt('admin', 'pair-ip', true, secondWindow + 10)).lock, 'pair_permanent');
+    const restarted = new LoginLockStore(file);
+    assert.equal((await restarted.attempt('admin', 'pair-ip', true, secondWindow + LOGIN_COOLDOWN_MS + 20)).lock, 'pair_permanent');
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      assert.deepEqual(await store.attempt(`user-${attempt}`, 'shared-ip', false, start + attempt), { failed: true });
+    }
+    assert.equal((await store.attempt('valid-user', 'shared-ip', true, start + 20)).lock, 'ip_cooldown');
+    assert.deepEqual(await store.attempt('valid-user', 'shared-ip', true, start + LOGIN_COOLDOWN_MS + 30), { failed: false });
+
+    await store.attempt('reset-user', 'reset-ip', false, start);
+    assert.deepEqual(await store.attempt('reset-user', 'reset-ip', true, start + 1), { failed: false });
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      assert.deepEqual(await store.attempt('reset-user', 'reset-ip', false, start + 2 + attempt), { failed: true });
+    }
+    assert.deepEqual(await store.attempt('reset-user', 'reset-ip', true, start + 10), { failed: false });
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
