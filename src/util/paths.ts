@@ -12,6 +12,7 @@ export interface TaiweiPaths {
   knowledge: string;
   ragIndex: string;
   plugins: string;
+  sessions: string;
 }
 
 export function getPaths(): TaiweiPaths {
@@ -26,6 +27,7 @@ export function getPaths(): TaiweiPaths {
     knowledge: join(home, 'knowledge'),
     ragIndex: join(home, 'rag-index.json'),
     plugins: join(home, 'plugins'),
+    sessions: join(home, 'sessions'),
   };
 }
 
@@ -44,6 +46,7 @@ export async function ensureTaiweiHome(): Promise<TaiweiPaths> {
     mkdir(paths.skills, { recursive: true }),
     mkdir(paths.knowledge, { recursive: true }),
     mkdir(paths.plugins, { recursive: true }),
+    mkdir(paths.sessions, { recursive: true }),
   ]);
   await Promise.all([
     writeIfMissing(paths.cron, '[]\n'),

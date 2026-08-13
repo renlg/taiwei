@@ -35,6 +35,7 @@ export class AgentContext {
   }
 
   listActiveSkills(): Skill[] { return [...this.activeSkills.values()]; }
+  setMessages(messages: ChatMessage[]): void { this.messages.splice(0, this.messages.length, ...messages); }
   setRetrievedContext(context: string): void { this.retrievedContext = context; }
   clear(): void { this.messages.length = 0; this.retrievedContext = ''; }
 }

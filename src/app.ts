@@ -39,11 +39,11 @@ export class TaiweiApp {
     if (options.scheduler !== false) await this.scheduler.start();
   }
 
-  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void } = {}): Promise<string> {
+  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext } = {}): Promise<string> {
     return this.turns.run(async () => {
       const signal = this.interrupt.beginTurn();
       try {
-        return await runAgentTurn(prompt, this.context, this.registry, this.config, {
+        return await runAgentTurn(prompt, options.context ?? this.context, this.registry, this.config, {
           signal,
           retainConversation: options.retainConversation,
           onText: options.stream ? (text) => process.stdout.write(text) : undefined,

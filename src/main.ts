@@ -44,7 +44,7 @@ async function main(): Promise<void> {
         port = Number(args[2]);
         if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error('Gateway port must be an integer between 0 and 65535');
       }
-      const server = createGatewayServer({ chat: new AgentChatBridge(app) });
+      const server = createGatewayServer({ chat: new AgentChatBridge(app), model: app.config.model });
       const boundPort = await listenGateway(server, app.config.gateway.host, port);
       console.log(`[taiwei] Gateway listening at http://${app.config.gateway.host}:${boundPort}`);
       await new Promise<void>((resolve) => {
