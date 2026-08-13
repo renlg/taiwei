@@ -163,22 +163,29 @@
         <div class="pattern-list" id="pattern-list"></div>
       </section>
       <section class="hooks-settings">
-        <h3>Hooks</h3>
-        <small>每行一个 shell 命令；相对路径以工作区为基准。</small>
-        <label for="hook-timeout">Hook 超时（秒）</label>
-        <input id="hook-timeout" type="number" min="1" max="3600" required>
-        <div class="hook-fields" id="hook-fields">
-          <label>beforeMessage<textarea data-hook-event="beforeMessage" rows="2" placeholder="/path/to/script.sh"></textarea></label>
-          <label>beforeLLM<textarea data-hook-event="beforeLLM" rows="2" placeholder="node /path/to/hook.js"></textarea></label>
-          <label>afterLLM<textarea data-hook-event="afterLLM" rows="2"></textarea></label>
-          <label>beforeTool<textarea data-hook-event="beforeTool" rows="2"></textarea></label>
-          <label>afterTool<textarea data-hook-event="afterTool" rows="2"></textarea></label>
+        <button class="hooks-toggle" id="hooks-toggle" type="button" aria-expanded="false" aria-controls="hooks-content">
+          <span class="hooks-toggle-title"><span class="hooks-chevron" aria-hidden="true">▸</span><span class="hooks-heading">Hooks</span></span>
+          <small class="hooks-status" id="hooks-status">未配置</small>
+        </button>
+        <div class="hooks-content" id="hooks-content">
+          <div class="hooks-content-inner">
+            <small>每行一个 shell 命令；相对路径以工作区为基准。</small>
+            <label for="hook-timeout">Hook 超时（秒）</label>
+            <input id="hook-timeout" type="number" min="1" max="3600" required>
+            <div class="hook-fields" id="hook-fields">
+              <label>beforeMessage<textarea data-hook-event="beforeMessage" rows="2" placeholder="/path/to/script.sh"></textarea></label>
+              <label>beforeLLM<textarea data-hook-event="beforeLLM" rows="2" placeholder="node /path/to/hook.js"></textarea></label>
+              <label>afterLLM<textarea data-hook-event="afterLLM" rows="2"></textarea></label>
+              <label>beforeTool<textarea data-hook-event="beforeTool" rows="2"></textarea></label>
+              <label>afterTool<textarea data-hook-event="afterTool" rows="2"></textarea></label>
+            </div>
+            <div class="hook-test-row">
+              <select id="hook-test-event" aria-label="选择要测试的 Hook"><option>beforeMessage</option><option>beforeLLM</option><option>afterLLM</option><option>beforeTool</option><option>afterTool</option></select>
+              <button class="small-button" id="hook-test" type="button">测试首条命令</button>
+            </div>
+            <pre class="hook-test-result" id="hook-test-result" aria-live="polite"></pre>
+          </div>
         </div>
-        <div class="hook-test-row">
-          <select id="hook-test-event" aria-label="选择要测试的 Hook"><option>beforeMessage</option><option>beforeLLM</option><option>afterLLM</option><option>beforeTool</option><option>afterTool</option></select>
-          <button class="small-button" id="hook-test" type="button">测试首条命令</button>
-        </div>
-        <pre class="hook-test-result" id="hook-test-result" aria-live="polite"></pre>
       </section>
       <div class="modal-error" id="settings-error" role="alert"></div>
       <footer><button class="secondary-button" id="settings-reset" type="button">重置安全默认值</button><button class="primary-button" id="settings-save" type="submit">保存设置</button></footer>

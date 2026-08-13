@@ -95,6 +95,9 @@ const elements = {
   securityRemember: $('#security-remember'),
   patternList: $('#pattern-list'),
   patternAdd: $('#pattern-add'),
+  hooksSettings: $('.hooks-settings'),
+  hooksToggle: $('#hooks-toggle'),
+  hooksStatus: $('#hooks-status'),
   hookTimeout: $('#hook-timeout'),
   hookFields: $('#hook-fields'),
   hookTestEvent: $('#hook-test-event'),
@@ -127,6 +130,8 @@ const state = {
   mcpStatuses: [],
   editingMcp: null,
 };
+
+const HOOKS_OPEN_STORAGE_KEY = 'taiwei-settings-hooks-open';
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -223,6 +228,18 @@ function addPatternRow(value = '') {
   elements.patternList.append(row);
 }
 
+function updateHooksStatus() {
+  const count = [...elements.hookFields.querySelectorAll('[data-hook-event]')]
+    .reduce((total, textarea) => total + textarea.value.split(/\r?\n/).filter((line) => line.trim()).length, 0);
+  elements.hooksStatus.textContent = count ? `${count} 条命令` : '未配置';
+}
+
+function setHooksOpen(open, remember = false) {
+  elements.hooksSettings.classList.toggle('is-open', open);
+  elements.hooksToggle.setAttribute('aria-expanded', String(open));
+  if (remember) localStorage.setItem(HOOKS_OPEN_STORAGE_KEY, String(open));
+}
+
 function renderSettings(settings) {
   elements.workspaceInput.value = settings.workspace.dir;
   elements.workspaceResolved.textContent = `解析为 ${settings.workspace.resolvedDir}`;
@@ -238,6 +255,7 @@ function renderSettings(settings) {
   elements.hookFields.querySelectorAll('[data-hook-event]').forEach((textarea) => {
     textarea.value = (settings.hooks?.[textarea.dataset.hookEvent] || []).join('\n');
   });
+  updateHooksStatus();
   elements.hookTestResult.textContent = '';
 }
 
@@ -251,6 +269,7 @@ async function openSettings() {
   elements.settingsError.textContent = '';
   try {
     await loadSettings();
+    setHooksOpen(localStorage.getItem(HOOKS_OPEN_STORAGE_KEY) === 'true');
     elements.settingsModal.showModal();
     elements.workspaceInput.focus();
   } catch (error) { showToast(error.message); }
@@ -1340,6 +1359,10 @@ elements.knowledgeSearchForm.addEventListener('submit', async (event) => {
   finally { button.disabled = false; button.textContent = '搜索'; }
 });
 elements.patternAdd.addEventListener('click', () => addPatternRow());
+elements.hooksToggle.addEventListener('click', () => {
+  setHooksOpen(elements.hooksToggle.getAttribute('aria-expanded') !== 'true', true);
+});
+elements.hookFields.addEventListener('input', updateHooksStatus);
 elements.settingsForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   elements.settingsError.textContent = '';
