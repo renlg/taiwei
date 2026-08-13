@@ -41,12 +41,12 @@ export function chunkText(text: string, maxChars = 1000, overlap = 150): string[
     if (current && current.length + paragraph.length + 2 > maxChars) {
       chunks.push(current);
       current = `${current.slice(-overlap)}\n\n${paragraph}`;
-      while (current.length > maxChars) {
-        chunks.push(current.slice(0, maxChars));
-        current = current.slice(maxChars - overlap);
-      }
     } else {
       current = current ? `${current}\n\n${paragraph}` : paragraph;
+    }
+    while (current.length > maxChars) {
+      chunks.push(current.slice(0, maxChars));
+      current = current.slice(maxChars - overlap);
     }
   }
   if (current) chunks.push(current);

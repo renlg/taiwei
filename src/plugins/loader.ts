@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import type { ToolSpec, ToolRegistry } from '../tools/registry.js';
 import type { Skill } from '../skills/loader.js';
@@ -15,6 +16,7 @@ export interface PluginContext { registry: ToolRegistry; home: string; }
 export interface PluginStatus { name: string; tools: number; skills: number; error?: string; }
 
 function safeName(value: string): string { return value.replace(/[^A-Za-z0-9_-]/g, '_'); }
+const requirePlugin = createRequire(import.meta.url);
 
 export class PluginLoader {
   private statuses: PluginStatus[] = [];
@@ -29,13 +31,20 @@ export class PluginLoader {
       const file = join(paths.plugins, entry.name, 'plugin.js');
       try {
         let module: { default?: TaiweiPlugin } & Partial<TaiweiPlugin>;
-        try {
-          module = await import(`${pathToFileURL(file).href}?v=${Date.now()}`) as typeof module;
-        } catch (firstError) {
-          const source = await readFile(file, 'utf8');
-          if (!/\b(?:export|import)\b/.test(source)) throw firstError;
-          const encoded = Buffer.from(`${source}\n//# sourceURL=${pathToFileURL(file).href}`).toString('base64');
-          module = await import(`data:text/javascript;base64,${encoded}`) as typeof module;
+        const source = await readFile(file, 'utf8');
+        if (/\b(?:module\.exports|exports\.|require\s*\()/.test(source)) {
+          const resolved = requirePlugin.resolve(file);
+          delete requirePlugin.cache[resolved];
+          const loaded = requirePlugin(resolved) as TaiweiPlugin;
+          module = { default: loaded };
+        } else {
+          try {
+            module = await import(`${pathToFileURL(file).href}?v=${Date.now()}`) as typeof module;
+          } catch (firstError) {
+            if (!/\b(?:export|import)\b/.test(source)) throw firstError;
+            const encoded = Buffer.from(`${source}\n//# sourceURL=${pathToFileURL(file).href}`).toString('base64');
+            module = await import(`data:text/javascript;base64,${encoded}`) as typeof module;
+          }
         }
         const plugin = (module.default ?? module) as TaiweiPlugin;
         if (!plugin.name) throw new Error('plugin must export a name');

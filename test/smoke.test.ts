@@ -9,6 +9,7 @@ import { nextRun, parseInterval } from '../src/cron/scheduler.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { streamChat } from '../src/llm/client.js';
 import { PluginLoader } from '../src/plugins/loader.js';
+import { chunkText } from '../src/rag/index.js';
 
 test('config initializes with defaults and honors environment overrides', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-test-'));
@@ -86,8 +87,18 @@ test('plugin loader supports CommonJS and ESM plugin.js files', async () => {
     assert.equal(await registry.dispatch('plugin_common_ping', {}, { cwd: directory }), 'pong');
     assert.equal(loader.skills()[0]?.name, 'mod-skill');
     assert.equal(loader.list().filter((item) => !item.error).length, 2);
+    await writeFile(join(directory, 'plugins', 'common', 'plugin.js'), `module.exports = { name: 'common', tools: [{ name: 'ping', description: 'ping', parameters: { type: 'object' }, execute: () => 'fresh' }] };`);
+    await loader.reload();
+    assert.equal(await registry.dispatch('plugin_common_ping', {}, { cwd: directory }), 'fresh');
   } finally {
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('RAG chunker bounds oversized paragraphs and preserves overlap', () => {
+  const chunks = chunkText('a'.repeat(2_200), 1_000, 100);
+  assert.equal(chunks.length, 3);
+  assert(chunks.every((chunk) => chunk.length <= 1_000));
+  assert.equal(chunks[0].slice(-100), chunks[1].slice(0, 100));
 });
