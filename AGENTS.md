@@ -53,6 +53,48 @@ taiwei is a **proactive agent CLI** inspired by opencode (terminal AI coding age
 └── AGENTS.md
 ```
 
+## Gateway (local web chat, v1.1 — ADD THIS)
+
+A **local web chat gateway** so the agent can be used from a browser like a chat app (Feishu-style input, but no Feishu integration yet — local web page only). Streaming output is mandatory.
+
+```
+src/gateway/
+├── server.ts     # node:http server: static page + JSON/SSE routes
+├── sse.ts        # SSE helper (text/event-stream, zero-dep, node:http only)
+├── chat.ts       # bridge: user message -> agent loop -> stream events back
+└── public/
+    ├── index.html  # single chat page (inline CSS/JS or small files)
+    └── app.js      # fetch + ReadableStream parsing (or EventSource), streaming render
+```
+
+Requirements:
+1. **Command**: `taiwei serve [--port N]` starts the gateway. Default host `127.0.0.1`, default port `8688` (avoid conflicts: 8890/8899 are used by other services). Add `gateway: { host, port }` to `~/.taiwei/config.json`; `--port` overrides.
+2. **Streaming**: POST `/api/chat` with `{ "message": "..." }` returns `text/event-stream` (SSE). Event types:
+   - `event: token` / data: `{"text":"..."}` — streamed answer chunks
+   - `event: tool` / data: `{"name":"bash","args":{...}}` — tool call started (optional: tool result as `event: tool_result`)
+   - `event: done` / data: `{"text":"<full answer>"}`
+   - `event: error` / data: `{"message":"..."}`
+   Client uses `fetch` + `ReadableStream` (or EventSource). The UI must render tokens as they arrive (no waiting for completion).
+3. **Reuse**: the gateway MUST reuse the existing agent loop (`src/agent/loop.ts`) and conversation/context machinery — do NOT duplicate agent logic. Add whatever hook (callback/emitter) is needed in the loop to emit incremental events (token deltas, tool calls, done). Keep the CLI behavior unchanged (default streaming unchanged, no regression).
+4. **UI**: minimal clean chat page — message bubbles, input box, Enter to send, "Stop" button that aborts the current turn (reuse interrupt/AbortController), tool-call activity shown as small status lines (e.g. `🔧 bash ...`), auto-scroll. No framework, no build step for the frontend (plain HTML/CSS/JS served as static files).
+5. **Session**: keep one conversation per browser tab (or a single in-memory conversation for v1.1 — simplest is fine, but document it). History should persist across refreshes if cheap (localStorage) — optional.
+6. **Lifecycle**: `/api/health` returns `{"ok":true}`. Clean shutdown on SIGINT. Log each request to stdout briefly. The gateway and the REPL can coexist in one process but for v1.1 `taiwei serve` runs the gateway standalone (no REPL in same process).
+7. Zero new npm dependencies — node:http, SSE by hand. If that is impossible for some reason, document why.
+8. Update README (usage section: how to start and open the gateway). Add a smoke test: start server on a random port, POST a mocked chat (or health check + static page 200 + SSE headers), assert streaming works, then close. `npm test` must stay green.
+9. Keep `npm run build` passing (tsc). Frontend files under `src/gateway/public/` must be copied to `dist/` (adjust tsconfig/package.json build so dist has them — e.g. a small `cp` step in the build script or resolve paths from src in dev).
+
+## Gateway Auth (v1.2 — ADD THIS)
+
+Add password login to the web gateway (it currently binds 0.0.0.0 with no auth — anyone on the network can chat). Requirements:
+
+1. **Config**: `~/.taiwei/config.json` gains `auth: { enabled: true, username: "admin", password: "..." }`. `enabled: true` + empty/missing password → fail startup with a clear message telling the user to set `auth.password` (or use `TAIWEI_AUTH_PASSWORD` env override). Default in `--init` template: `enabled: false` (opt-in), but document it.
+2. **Login API**: `POST /api/login` `{username, password}` → 200 `{token}` (random, `crypto.randomBytes` hex) or 401. Brute-force protection: after 5 failed attempts from the same IP within 10 minutes, return 429 and log a warning (simple in-memory counter is fine). **Sessions MUST persist to disk** (`~/.taiwei/gateway-sessions.json`: `{token: {username, createdAt, expiresAt}}`) — save on login, load on startup, so **restarting the gateway does NOT log the user out** (this is an explicit user requirement). Expiry: 7 days sliding (extend expiresAt on each authenticated request; rewrite the file).
+3. **Auth middleware**: all `/api/*` routes require auth EXCEPT `/api/health` and `/api/login`. Accept `Authorization: Bearer <token>` header OR a `taiwei_token` cookie (set on login, `HttpOnly`, `SameSite=Lax`, `Max-Age` 7d). Unauthorized → 401 JSON `{"error":"unauthorized"}`.
+4. **Frontend**: login view (centered card: 🦞 logo, username + password inputs, submit button, error message, loading state). On page load: if `/api/sessions` returns 401 → show login view; after successful login (fetch POST /api/login, store token in localStorage + rely on cookie), load the chat UI. Logout button in the sidebar bottom (clears token/cookie, returns to login view). Keep the existing chat UI untouched otherwise.
+5. **Password storage**: store `password` in config as plain text is acceptable for a local tool, but if easy use a salted hash (`crypto.scryptSync`, store `scrypt$salt$hash`) — your call, document the choice. The `TAIWEI_AUTH_PASSWORD` env override compares against the plain value.
+6. **Tests**: add tests for login (wrong password 401, correct 200+token, protected route without token 401, with token 200). `npm test` must stay green (existing 7 + new).
+7. Update README (auth section: enable + how to log in). Commit in logical chunks with clear English messages.
+
 ## Core Requirements
 
 1. **TypeScript, Node >= 20, ESM.** Prefer Node built-ins (node:fs, node:child_process, node:readline, node:http/https). Keep runtime dependencies minimal. Allowed deps: `@modelcontextprotocol/sdk` (MCP), `cron-parser` (cron expressions). Everything else should be zero-dep.
