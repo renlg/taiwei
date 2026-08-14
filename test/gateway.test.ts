@@ -157,7 +157,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=12/);
+    assert.match(pageBody, /logo\.png\?v=13/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -311,6 +311,49 @@ test('gateway lists skills and safely manages knowledge files', async () => {
     assert.equal(deleted.status, 200);
     assert.deepEqual(await deleted.json(), { ok: true });
     assert.equal((await fetch(`${baseUrl}/api/knowledge?path=${encodeURIComponent('notes.txt')}`, { method: 'DELETE' })).status, 404);
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('gateway memory API reads, replaces, validates, and clears persistent memory', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-memory-test-'));
+  const memoryPath = join(directory, 'memory.md');
+  const initialContent = '# Durable facts\n\nThe user prefers concise answers.';
+  await writeFile(memoryPath, initialContent, 'utf8');
+  const server = createGatewayServer({
+    chat: new MockChat(),
+    sessions: new SessionStore(join(directory, 'sessions')),
+    uploadsDirectory: join(directory, 'uploads'),
+    memoryStore: new MemoryStore(memoryPath),
+    log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const post = (body: unknown) => fetch(`${baseUrl}/api/memory`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  try {
+    const current = await (await fetch(`${baseUrl}/api/memory`)).json() as { content: string; chars: number; lines: number };
+    assert.deepEqual(current, { content: initialContent, chars: initialContent.length, lines: 3 });
+
+    const replacement = 'Remember the project name.\nUse TypeScript.';
+    const saved = await post({ content: replacement });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await saved.json(), { chars: replacement.length, lines: 2 });
+    assert.equal(await readFile(memoryPath, 'utf8'), replacement);
+    assert.equal((await (await fetch(`${baseUrl}/api/memory`)).json() as { content: string }).content, replacement);
+
+    assert.equal((await post({ content: 42 })).status, 400);
+    assert.equal((await post({ content: 'x'.repeat(50_001) })).status, 413);
+    assert.equal(await readFile(memoryPath, 'utf8'), replacement);
+
+    const cleared = await fetch(`${baseUrl}/api/memory`, { method: 'DELETE' });
+    assert.equal(cleared.status, 200);
+    assert.deepEqual(await cleared.json(), { ok: true });
+    assert.equal(await readFile(memoryPath, 'utf8'), '');
+    assert.deepEqual(await (await fetch(`${baseUrl}/api/memory`)).json(), { content: '', chars: 0, lines: 0 });
   } finally {
     await closeGateway(server);
     await rm(directory, { recursive: true, force: true });

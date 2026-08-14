@@ -236,6 +236,17 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 .tools-card { overflow-y: auto; }
 .tools-actions { display: flex; justify-content: flex-end; margin-bottom: 10px; }
 .tools-list { display: grid; gap: 9px; overflow: visible; }
+.memory-card { overflow-y: auto; }
+.memory-toolbar, .memory-actions, .memory-actions > div { display: flex; align-items: center; gap: 8px; }
+.memory-toolbar { justify-content: space-between; margin-bottom: 12px; }
+.memory-toolbar p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.memory-editor-label { margin-bottom: 7px; color: var(--muted); font: 10.5px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.memory-card textarea { width: 100%; min-height: 310px; flex: 1; padding: 13px; resize: vertical; border: 1px solid var(--border-strong); border-radius: 11px; outline: 0; color: var(--text); background: var(--bg); font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.memory-card textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.memory-card textarea:disabled { opacity: .65; cursor: wait; }
+.memory-actions { justify-content: space-between; margin-top: 13px; }
+.memory-feedback { color: var(--success); font-size: 11px; font-weight: 650; }
+.memory-clear { color: var(--danger); }
 .tool-card { padding: 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); transition: opacity .16s; }
 .tool-card.disabled { opacity: .55; }
 .tool-card-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

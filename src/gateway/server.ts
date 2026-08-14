@@ -23,6 +23,7 @@ import { loadMcpConfig, type McpServerConfig } from '../mcp/client.js';
 import { ToolRegistry, type ToolConfigSchema } from '../tools/registry.js';
 import type { Skill } from '../skills/loader.js';
 import { appendMessage as appendHistoryMessage, upsertSession as upsertHistorySession, type HistoryMessageInput, type HistorySessionMeta } from '../history/db.js';
+import { MemoryStore } from '../memory/store.js';
 
 export interface GatewayHistoryIndex {
   upsertSession(meta: HistorySessionMeta): Promise<void>;
@@ -54,6 +55,7 @@ export interface GatewayServerOptions {
   toolRegistry?: ToolRegistry;
   knowledgeDirectory?: string;
   ragIndexPath?: string;
+  memoryStore?: Pick<MemoryStore, 'read' | 'replace' | 'clear'>;
   buildKnowledgeIndex?: () => Promise<RagIndexData>;
   searchKnowledge?: (query: string, limit: number) => Promise<SearchResult[]>;
   mcpBridge?: {
@@ -67,8 +69,9 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '12';
+const STATIC_ASSET_VERSION = '13';
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
+const MAX_MEMORY_LENGTH = 50_000;
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -94,6 +97,10 @@ const TEXT_EXTENSIONS = new Set([
   '.kt', '.kts', '.scala', '.vue', '.svelte', '.tex', '.rst', '.properties', '.gradle', '.dockerfile',
 ]);
 const KNOWLEDGE_EXTENSIONS = new Set(['.md', '.txt']);
+
+function memoryStats(content: string): { chars: number; lines: number } {
+  return { chars: content.length, lines: content ? content.split(/\r\n|\r|\n/).length : 0 };
+}
 
 interface UploadedFile {
   name: string;
@@ -310,6 +317,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const knowledgeDirectory = resolve(options.knowledgeDirectory ?? taiweiPaths.knowledge);
   const ragIndexPath = resolve(options.ragIndexPath ?? taiweiPaths.ragIndex);
   const mcpConfigPath = resolve(options.mcpConfigPath ?? taiweiPaths.mcp);
+  const memoryStore = options.memoryStore ?? new MemoryStore();
   let mcpInitialized = false;
   const buildKnowledgeIndex = options.buildKnowledgeIndex ?? (async () => buildIndex(createEmbedder(await configState.load())));
   const searchKnowledge = options.searchKnowledge ?? (async (query: string, limit: number) => retrieve(query, limit, createEmbedder(await configState.load())));
@@ -448,6 +456,26 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       if (method === 'GET' && pathname === '/api/settings/custom-prompt') {
         const config = await configState.load();
         json(response, 200, { customPrompt: config.customPrompt });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/memory') {
+        const content = await memoryStore.read();
+        json(response, 200, { content, ...memoryStats(content) });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/memory') {
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Request body must be an object');
+        const { content } = body as { content?: unknown };
+        if (typeof content !== 'string') throw new HttpError(400, 'content must be a string');
+        if (content.length > MAX_MEMORY_LENGTH) throw new HttpError(413, `content must be at most ${MAX_MEMORY_LENGTH} characters`);
+        await memoryStore.replace(content);
+        json(response, 200, memoryStats(content));
+        return;
+      }
+      if (method === 'DELETE' && pathname === '/api/memory') {
+        await memoryStore.clear();
+        json(response, 200, { ok: true });
         return;
       }
       if (method === 'POST' && pathname === '/api/settings/custom-prompt') {

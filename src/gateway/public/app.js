@@ -101,6 +101,16 @@ const elements = {
   toolsError: $('#tools-error'),
   toolsReload: $('#tools-reload'),
   toolsList: $('#tools-list'),
+  memoryOpen: $('#memory-open'),
+  memoryModal: $('#memory-modal'),
+  memoryClose: $('#memory-close'),
+  memoryStatus: $('#memory-status'),
+  memoryRefresh: $('#memory-refresh'),
+  memoryError: $('#memory-error'),
+  memoryContent: $('#memory-content'),
+  memoryFeedback: $('#memory-feedback'),
+  memoryClear: $('#memory-clear'),
+  memorySave: $('#memory-save'),
   workspaceInput: $('#workspace-input'),
   workspaceResolved: $('#workspace-resolved'),
   workspaceLabel: $('#workspace-label'),
@@ -150,6 +160,8 @@ const state = {
   mcpStatuses: [],
   editingMcp: null,
   tools: [],
+  savedMemory: '',
+  memoryFeedbackTimer: 0,
 };
 
 const WORKSPACE_OPEN_STORAGE_KEY = 'taiwei-settings-workspace-open';
@@ -342,7 +354,7 @@ async function openSettings() {
 }
 
 function closeResourcePanels(except) {
-  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal]) {
+  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal]) {
     if (modal !== except && modal.open) modal.close();
   }
 }
@@ -691,6 +703,51 @@ async function openTools() {
   await loadTools();
 }
 
+function setMemoryFeedback(message) {
+  clearTimeout(state.memoryFeedbackTimer);
+  elements.memoryFeedback.textContent = message;
+  state.memoryFeedbackTimer = setTimeout(() => { elements.memoryFeedback.textContent = ''; }, 2200);
+}
+
+function updateMemoryControls() {
+  elements.memorySave.disabled = elements.memoryContent.disabled || elements.memoryContent.value === state.savedMemory;
+}
+
+function renderMemory(data) {
+  state.savedMemory = data.content;
+  elements.memoryContent.value = data.content;
+  elements.memoryStatus.textContent = `${data.chars} 字 · ${data.lines} 行`;
+  updateMemoryControls();
+}
+
+async function loadMemory() {
+  elements.memoryError.textContent = '';
+  elements.memoryFeedback.textContent = '';
+  elements.memoryContent.disabled = true;
+  elements.memoryRefresh.disabled = true;
+  elements.memoryClear.disabled = true;
+  elements.memoryStatus.textContent = '加载中…';
+  elements.memoryContent.placeholder = '正在加载持久记忆…';
+  try { renderMemory(await requestJson('/api/memory')); }
+  catch (error) {
+    elements.memoryError.textContent = error.message;
+    elements.memoryStatus.textContent = '加载失败';
+  } finally {
+    elements.memoryContent.disabled = false;
+    elements.memoryRefresh.disabled = false;
+    elements.memoryClear.disabled = false;
+    elements.memoryContent.placeholder = '持久记忆为空';
+    updateMemoryControls();
+  }
+}
+
+async function openMemory() {
+  closeResourcePanels(elements.memoryModal);
+  if (!elements.memoryModal.open) elements.memoryModal.showModal();
+  elements.body.classList.remove('sidebar-open');
+  await loadMemory();
+}
+
 function renderKnowledgeResults(results) {
   elements.knowledgeResultsSection.hidden = false;
   if (!results.length) { renderResourceEmpty(elements.knowledgeResults, '未找到相关内容'); return; }
@@ -942,7 +999,7 @@ function addMessage(message, options = {}) {
     avatar.className = 'avatar';
     const avatarImg = document.createElement('img');
     avatarImg.className = 'avatar-img';
-    avatarImg.src = '/logo.png?v=12';
+    avatarImg.src = '/logo.png?v=13';
     avatarImg.alt = 'taiwei';
     avatar.append(avatarImg);
     row.append(avatar);
@@ -1440,9 +1497,39 @@ elements.mcpOpen.addEventListener('click', openMcp);
 elements.mcpClose.addEventListener('click', () => elements.mcpModal.close());
 elements.toolsOpen.addEventListener('click', openTools);
 elements.toolsClose.addEventListener('click', () => elements.toolsModal.close());
-for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal]) {
+elements.memoryOpen.addEventListener('click', openMemory);
+elements.memoryClose.addEventListener('click', () => elements.memoryModal.close());
+for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal]) {
   modal.addEventListener('click', (event) => { if (event.target === modal) modal.close(); });
 }
+elements.memoryContent.addEventListener('input', updateMemoryControls);
+elements.memoryRefresh.addEventListener('click', loadMemory);
+elements.memorySave.addEventListener('click', async () => {
+  elements.memoryError.textContent = '';
+  elements.memorySave.disabled = true;
+  elements.memorySave.textContent = '保存中…';
+  try {
+    const content = elements.memoryContent.value;
+    const result = await requestJson('/api/memory', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content }),
+    });
+    state.savedMemory = content;
+    elements.memoryStatus.textContent = `${result.chars} 字 · ${result.lines} 行`;
+    setMemoryFeedback('已保存');
+  } catch (error) { elements.memoryError.textContent = error.message; }
+  finally { elements.memorySave.textContent = '保存'; updateMemoryControls(); }
+});
+elements.memoryClear.addEventListener('click', async () => {
+  if (!confirm('确定清空全部持久记忆吗？此操作无法撤销。')) return;
+  elements.memoryError.textContent = '';
+  elements.memoryClear.disabled = true;
+  try {
+    await requestJson('/api/memory', { method: 'DELETE' });
+    renderMemory({ content: '', chars: 0, lines: 0 });
+    setMemoryFeedback('已清空');
+  } catch (error) { elements.memoryError.textContent = error.message; }
+  finally { elements.memoryClear.disabled = false; }
+});
 elements.mcpModal.addEventListener('close', closeMcpForm);
 elements.mcpAdd.addEventListener('click', () => openMcpForm());
 elements.mcpFormClose.addEventListener('click', closeMcpForm);
