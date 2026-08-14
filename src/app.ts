@@ -29,6 +29,8 @@ import { DelegationManager } from './agent/delegation.js';
 import { createDelegateTool } from './tools/impl/delegate.js';
 import { BrowserToolRuntime } from './tools/impl/browser.js';
 import { executeWatchdogScript } from './cron/script.js';
+import { SessionRuntime } from './agent/runtime.js';
+import { PolicyEngine } from './security/policy.js';
 
 export class TaiweiApp {
   config!: TaiweiConfig;
@@ -38,6 +40,7 @@ export class TaiweiApp {
   readonly context = new AgentContext(this.memory, this.skills);
   readonly interrupt = new InterruptManager();
   readonly turns = new TurnQueue();
+  runtime!: SessionRuntime;
   readonly cronJobs = new CronJobStore();
   readonly mcp = new McpBridge(this.registry);
   readonly plugins = new PluginLoader(this.registry);
@@ -50,6 +53,7 @@ export class TaiweiApp {
 
   async initialize(options: { external?: boolean; scheduler?: boolean } = {}): Promise<void> {
     this.config = await loadConfig();
+    this.runtime = new SessionRuntime(this.config.runtime.maxConcurrentTurns);
     this.skills.setDisabled(this.config.skillsDisabled);
     this.registry.configure(resolveToolSettings(this.config));
     const workspace = resolveWorkspaceDir(this.config);
@@ -67,9 +71,11 @@ export class TaiweiApp {
     if (options.scheduler !== false) { await this.scheduler.start(); console.log(`[taiwei] Scheduler started (${(await this.cronJobs.list()).filter((job) => job.enabled).length} enabled jobs)`); }
   }
 
-  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number } = {}): Promise<string> {
-    return this.turns.run(async () => {
-      const signal = this.interrupt.beginTurn();
+  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string } = {}): Promise<string> {
+    const runtimeSessionId = options.runtimeSessionId ?? options.sessionId ?? 'local';
+    return this.runtime.run(runtimeSessionId, async (runtimeSignal) => {
+      const localSignal = options.sessionId ? undefined : this.interrupt.beginTurn();
+      const signal = localSignal ? AbortSignal.any([runtimeSignal, localSignal]) : runtimeSignal;
       try {
         this.config = await loadConfig();
         this.skills.setDisabled(this.config.skillsDisabled);
@@ -95,15 +101,19 @@ export class TaiweiApp {
           sessionId: options.sessionId,
           agentProfile: profile,
           delegationDepth: options.delegationDepth,
+          role: options.role ?? 'admin', identity: options.identity ?? options.role ?? 'admin',
+          workspaceRoot: cwd, policy: new PolicyEngine(this.config.policy),
         });
-      } finally { this.interrupt.endTurn(); }
+      } finally { if (localSignal) this.interrupt.endTurn(); }
     });
   }
+
+  stopSession(sessionId: string): boolean { return this.runtime.stop(sessionId); }
 
   private async executeCron(job: CronJob, signal: AbortSignal): Promise<CronExecutionResult> {
     if (job.kind === 'script') return this.executeScript(job, signal);
     if (job.kind === 'command') throw new Error('Cron command jobs are not supported; use kind "script" or "agent"');
-    const result = await this.turns.run(async () => {
+    const result = await this.runtime.run(`cron:${job.id}`, async (runtimeSignal) => {
       const cronContext = new AgentContext(this.memory, this.skills);
       try {
         this.config = await loadConfig();
@@ -114,10 +124,11 @@ export class TaiweiApp {
         this.hooks.configure(this.config.hooks, this.config.hookTimeoutSeconds, cwd);
         let tokens = 0;
         const output = await runAgentTurn(job.prompt!, cronContext, this.registry, this.config, {
-          signal, cwd, retainConversation: false, getModel: getCurrentModel,
+          signal: AbortSignal.any([signal, runtimeSignal]), cwd, retainConversation: false, getModel: getCurrentModel,
           authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(command, workspace, this.config.security, handler, commandSignal),
           hooks: this.hooks,
           onEvent: (event) => { if (event.type === 'usage') tokens += event.usage.totalTokens; },
+          role: 'admin', identity: `cron:${job.id}`, workspaceRoot: cwd, policy: new PolicyEngine(this.config.policy), sessionId: `cron:${job.id}`,
         });
         return { output, tokens };
       } catch (error) { throw error; }
@@ -133,6 +144,7 @@ export class TaiweiApp {
       agentProfile: request.profile, delegationDepth: request.depth + 1, sessionId: request.childSessionId,
       authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(command, workspace, config.security, handler, commandSignal),
       hooks: this.hooks,
+      role: 'admin', identity: request.parentSessionId ?? 'delegate', workspaceRoot: resolveWorkspaceDir(config), policy: new PolicyEngine(config.policy),
     });
     try {
       const now = Date.now();

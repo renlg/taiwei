@@ -1,6 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import type { CronJob, CronJobStore } from './jobs.js';
 import { CronRunLedger, type CronRun } from './runs.js';
+import { appendAudit } from '../observability/audit.js';
 
 export interface CronExecutionResult { output?: string; tokens?: number; exitCode?: number; silent?: boolean }
 export type CronExecutor = (job: CronJob, signal: AbortSignal) => Promise<CronExecutionResult | void>;
@@ -127,6 +128,7 @@ export class CronScheduler {
       };
     } finally { this.running.set(job.id, Math.max(0, (this.running.get(job.id) ?? 1) - 1)); }
     await this.ledger.append(run!);
+    await appendAudit({ type: 'cron.run', runId: `cron:${job.id}:${startedAt}`, sessionId: `cron:${job.id}`, outcome: run!.status, jobId: job.id, ledger: 'cron-runs.jsonl' }).catch(() => {});
     if (source === 'scheduled') await this.store.update(job.id, { lastScheduledAt: this.now().toISOString() });
     if (this.deliver && !(silent && run!.status === 'ok')) await this.deliver(job, run!, silent);
     return run!;
@@ -135,6 +137,8 @@ export class CronScheduler {
   private async recordSkipped(job: CronJob, error: string): Promise<CronRun> {
     const timestamp = this.now().toISOString();
     const run: CronRun = { jobId: job.id, kind: job.kind, startedAt: timestamp, endedAt: timestamp, status: 'skipped', error };
-    await this.ledger.append(run); return run;
+    await this.ledger.append(run);
+    await appendAudit({ type: 'cron.run', runId: `cron:${job.id}:${timestamp}`, sessionId: `cron:${job.id}`, outcome: 'skipped', jobId: job.id, ledger: 'cron-runs.jsonl' }).catch(() => {});
+    return run;
   }
 }

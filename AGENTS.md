@@ -118,6 +118,23 @@ Add password login to the web gateway (it currently binds 0.0.0.0 with no auth â
 - The callback exchanges the code at ai-connect, fetches `/api/oauth/userinfo`, and stores a seven-day sliding `guest` session in `~/.taiwei/gateway-sessions.json`. The ai-connect username determines the sanitized `guest-<username>` memory/session directory.
 - Share-link guest entry remains independent of OAuth and continues to use `guest-<share-token-prefix>` storage.
 
+## Unified Policy and Session Runtime (implemented)
+
+- Every tool dispatch is evaluated by `src/security/policy.ts` as `allow`, `ask`, or `deny`. Config rules in `policy.rules` are evaluated first, then role/mode defaults. Guests cannot use shell, file writes, memory management, MCP, or plugin tools unless an explicit rule allows the call; Plan mode is read-only.
+- Guest and Plan file operations use a realpath-aware workspace boundary check that rejects `..` and symlink escapes, including nonexistent write targets. Bash warns when `defaultCwd` is external, but its cwd is not a jail.
+- Gateway turns have per-session controllers. Stop/disconnect targets the authenticated identity plus browser session; sessions serialize their own turns while `runtime.maxConcurrentTurns` limits total active turns (default 4).
+
+## Context Budget and Provider Recovery (implemented)
+
+- `src/agent/budget.ts` estimates tokens before requests using `tokenEstimateCharsPerToken` (default 4), applies `budget.systemMax/historyMax/toolsMax/outputReserve`, prunes old tool results first, and then uses history summary/memory flush. Estimates trigger compression when providers omit usage.
+- Provider calls retry 429, 5xx, and network failures using `retry.maxAttempts/baseDelayMs/maxDelayMs`, jitter, and `Retry-After`. 400/401/403 fail immediately. Optional `fallbackModel` receives one attempt after retryable primary-model exhaustion.
+
+## Structured Observability and Audit (implemented)
+
+- Each turn gets a `runId` propagated through model attempts, tool calls, policy decisions, confirmations, and completion. Structured events carry session/agent/tool/model, latency, usage/retry fields, and outcome where applicable.
+- Security and execution events append to `~/.taiwei/audit.jsonl`; argument keys matching `key|token|secret|password|apiKey` are recursively redacted. Cron audit events reference `cron-runs.jsonl`.
+- `GET /api/audit?limit=&offset=` and the settings audit viewer are administrator-only.
+
 ## Core Requirements
 
 1. **TypeScript, Node >= 20, ESM.** Prefer Node built-ins (node:fs, node:child_process, node:readline, node:http/https). Core runtime dependencies stay minimal. Allowed deps: `@modelcontextprotocol/sdk` (MCP), `cron-parser` (cron expressions), plus optional-heavy `playwright`, which must be loaded lazily so core startup never depends on a browser binary.

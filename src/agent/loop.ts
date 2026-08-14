@@ -8,6 +8,11 @@ import type { ConfirmationHandler } from '../security/commands.js';
 import type { HookRunner } from '../hooks/runner.js';
 import { MemoryStore } from '../memory/store.js';
 import type { AgentProfile } from '../agents/profiles.js';
+import { randomUUID } from 'node:crypto';
+import { applyContextBudget, limitTextTokens, limitToolsTokens } from './budget.js';
+import { PolicyEngine } from '../security/policy.js';
+import { appendAudit } from '../observability/audit.js';
+import { emitEvent } from '../observability/events.js';
 
 export interface RunTurnOptions {
   signal?: AbortSignal;
@@ -22,6 +27,11 @@ export interface RunTurnOptions {
   sessionId?: string;
   agentProfile?: AgentProfile;
   delegationDepth?: number;
+  role?: 'admin' | 'guest';
+  identity?: string;
+  workspaceRoot?: string;
+  runId?: string;
+  policy?: PolicyEngine;
 }
 
 export type AgentEvent =
@@ -137,27 +147,53 @@ export async function runAgentTurn(
   config: TaiweiConfig,
   options: RunTurnOptions = {},
 ): Promise<string> {
+  const runId = options.runId ?? randomUUID();
+  const sessionId = options.sessionId ?? 'local';
+  const startedAt = Date.now();
+  const startEvent = { type: 'turn.start', runId, sessionId, agentId: options.agentProfile?.id, model: config.model, outcome: 'started' } as const;
+  emitEvent(startEvent); await appendAudit(startEvent).catch(() => {});
   const conversation = options.retainConversation === false ? [] : context.messages;
   if (options.agentProfile) context.profile = options.agentProfile;
   conversation.push({ role: 'user', content: prompt });
   let fullText = '';
   let compressionAttempted = false;
   const maxTurns = options.agentProfile?.maxTurns ?? config.maxTurns;
-  for (let turn = 0; turn < maxTurns; turn += 1) {
+  try { for (let turn = 0; turn < maxTurns; turn += 1) {
     if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
     const model = options.getModel ? await options.getModel() : config.model;
-    const systemPrompt = await context.systemPrompt(options.cwd, config.customPrompt);
+    let systemPrompt = limitTextTokens(await context.systemPrompt(options.cwd, config.customPrompt), config.budget.systemMax, config.tokenEstimateCharsPerToken);
+    const tools = limitToolsTokens(registry.list({ profile: options.agentProfile }).map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters })), config.budget.toolsMax, config.tokenEstimateCharsPerToken);
+    const contextWindow = resolveContextWindow(config, model);
+    let budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
+    if (budgetResult.needsCompression && !compressionAttempted) {
+      compressionAttempted = true;
+      const boundary = compressionBoundary(conversation);
+      if (config.memoryFlush) {
+        try { await flushMemory(conversation, boundary, config, model, options.signal, context.memory); }
+        catch (error) { if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError'); console.debug(`[taiwei] Memory flush skipped: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      try { await compressConversation(conversation, boundary, config, model, options.signal); }
+      catch (error) { if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError'); console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`); }
+      budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
+    }
     const lastMessage = conversation.at(-1);
     const lastMessagePreview = typeof lastMessage?.content === 'string' ? lastMessage.content.slice(0, 500) : '';
     const beforeLLM = await options.hooks?.run('beforeLLM', {
       sessionId: options.sessionId, model, messagesCount: conversation.length,
       lastMessagePreview,
     });
+    if (beforeLLM?.extraContext) systemPrompt = limitTextTokens(`${systemPrompt}\n\n${beforeLLM.extraContext}`, config.budget.systemMax, config.tokenEstimateCharsPerToken);
     const result = await streamChat({
       baseUrl: config.baseUrl, apiKey: config.apiKey, model,
-      messages: [{ role: 'system', content: beforeLLM?.extraContext ? `${systemPrompt}\n\n${beforeLLM.extraContext}` : systemPrompt }, ...conversation],
-      tools: registry.list({ profile: options.agentProfile }).map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters })),
+      messages: [{ role: 'system', content: systemPrompt }, ...conversation],
+      tools,
       signal: options.signal, timeoutMs: config.requestTimeoutMs,
+      fallbackModel: config.fallbackModel,
+      retry: config.retry,
+      onAttempt: (attempt) => {
+        const event = { type: attempt.outcome === 'fallback' ? 'model.fallback' : 'model.attempt', runId, sessionId, agentId: options.agentProfile?.id, model: attempt.model, retryAttempt: attempt.attempt, outcome: attempt.outcome, ...(attempt.delayMs === undefined ? {} : { backoffMs: attempt.delayMs }) } as const;
+        emitEvent(event); void appendAudit(event).catch(() => {});
+      },
       onText: (text) => {
         fullText += text;
         options.onText?.(text);
@@ -169,9 +205,10 @@ export async function runAgentTurn(
       ...(result.usage ? { usage: { promptTokens: result.usage.promptTokens, completionTokens: result.usage.completionTokens } } : {}),
     });
     if (result.usage) {
-      const contextWindow = resolveContextWindow(config, model);
       options.onEvent?.({ type: 'usage', usage: { ...result.usage, contextWindow }, model });
-      if (!compressionAttempted && result.usage.promptTokens > contextWindow * resolveCompressThreshold(config)) {
+    }
+    const promptTokens = result.usage?.promptTokens ?? budgetResult.estimatedTokens;
+    if (!compressionAttempted && promptTokens > contextWindow * resolveCompressThreshold(config)) {
         compressionAttempted = true;
         const boundary = compressionBoundary(conversation);
         if (config.memoryFlush) {
@@ -186,12 +223,13 @@ export async function runAgentTurn(
           if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
           console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`);
         }
-      }
     }
     conversation.push({ role: 'assistant', content: result.content || null, ...(result.toolCalls.length ? { tool_calls: result.toolCalls } : {}) });
     if (!result.toolCalls.length) {
       const text = fullText || result.content;
       options.onEvent?.({ type: 'done', text });
+      const endEvent = { type: 'turn.end', runId, sessionId, agentId: options.agentProfile?.id, model: result.model ?? model, latencyMs: Date.now() - startedAt, usage: result.usage, outcome: 'success' } as const;
+      emitEvent(endEvent); await appendAudit(endEvent).catch(() => {});
       return text;
     }
     for (const call of result.toolCalls) {
@@ -206,16 +244,30 @@ export async function runAgentTurn(
         cwd,
         agentContext: context,
         authorizeCommand: options.authorizeCommand
-          ? (command, commandCwd) => options.authorizeCommand!(command, commandCwd, options.confirmDanger, options.signal)
+          ? async (command, commandCwd) => {
+            const approved = await options.authorizeCommand!(command, commandCwd, options.confirmDanger, options.signal);
+            await appendAudit({ type: 'confirmation', runId, sessionId, agentId: options.agentProfile?.id, tool: 'bash', outcome: approved ? 'approved' : 'denied', command, cwd: commandCwd }).catch(() => {});
+            return approved;
+          }
           : undefined,
         hooks: options.hooks,
         sessionId: options.sessionId,
         agentProfile: options.agentProfile,
         delegationDepth: options.delegationDepth ?? 0,
+        role: options.role,
+        identity: options.identity,
+        workspaceRoot: options.workspaceRoot ?? cwd,
+        runId,
+        policy: options.policy,
       });
       options.onEvent?.({ type: 'tool_result', name: call.function.name, result: output });
       conversation.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: output });
     }
   }
-  throw new Error(`Agent stopped after reaching the ${maxTurns}-turn safety limit`);
+  throw new Error(`Agent stopped after reaching the ${maxTurns}-turn safety limit`); }
+  catch (error) {
+    const endEvent = { type: 'turn.end', runId, sessionId, agentId: options.agentProfile?.id, model: config.model, latencyMs: Date.now() - startedAt, outcome: error instanceof DOMException && error.name === 'AbortError' ? 'cancelled' : 'error', error: error instanceof Error ? error.message : String(error) } as const;
+    emitEvent(endEvent); await appendAudit(endEvent).catch(() => {});
+    throw error;
+  }
 }

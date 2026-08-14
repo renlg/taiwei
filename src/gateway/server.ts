@@ -27,6 +27,7 @@ import { MemoryStore } from '../memory/store.js';
 import { CronJobStore, type CronJobInput } from '../cron/jobs.js';
 import { CronScheduler, jobNextRun } from '../cron/scheduler.js';
 import { BUILTIN_AGENTS, getAgentProfile } from '../agents/profiles.js';
+import { readAudit } from '../observability/audit.js';
 
 export interface GatewayHistoryIndex {
   upsertSession(meta: HistorySessionMeta): Promise<void>;
@@ -75,7 +76,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '19';
+const STATIC_ASSET_VERSION = '20';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -167,6 +168,7 @@ function guestIdForUsername(username: string): string {
 
 function guestRouteAllowed(method: string, pathname: string): boolean {
   if (method === 'POST' && pathname === '/api/chat') return true;
+  if (method === 'POST' && pathname === '/api/stop') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/sessions') return true;
   return (method === 'GET' || method === 'DELETE') && /^\/api\/sessions\/[^/]+$/.test(pathname);
 }
@@ -1045,7 +1047,15 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'POST' && pathname === '/api/stop') {
-        json(response, 200, { stopped: options.chat.stop() });
+        const body = await readJson(request).catch(() => ({})) as { sessionId?: unknown };
+        const sessionId = typeof body.sessionId === 'string' ? body.sessionId : '';
+        const runtimeSessionId = `${guestId ?? authenticatedUsername ?? authenticatedRole}:${sessionId}`;
+        json(response, 200, { stopped: sessionId ? options.chat.stop(runtimeSessionId) : false });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/audit') {
+        const url = new URL(request.url ?? '/', 'http://localhost');
+        json(response, 200, { entries: await readAudit(Number(url.searchParams.get('limit') ?? 100), Number(url.searchParams.get('offset') ?? 0)) });
         return;
       }
       if (method === 'POST' && pathname === '/api/upload') {
@@ -1105,7 +1115,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         let finalText: string | undefined;
         let turnError: Error | undefined;
         const toolCalls: SessionToolCall[] = [];
-        response.once('close', () => { if (!completed) options.chat.stop(); });
+        const runtimeSessionId = `${guestId ?? authenticatedUsername ?? authenticatedRole}:${session.id}`;
+        response.once('close', () => { if (!completed) options.chat.stop(runtimeSessionId); });
         await options.chat.run(agentMessage, {
           event: (event) => {
             if (event.type === 'token') {
@@ -1138,7 +1149,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             sendSse(response, 'confirm', request);
             return confirmations.wait(request);
           },
-        }, history, session.id, turnMemory, session.agentId ?? 'build');
+        }, history, session.id, turnMemory, session.agentId ?? 'build', authenticatedRole, authenticatedUsername ?? authenticatedRole, runtimeSessionId);
         const content = finalText ?? answer;
         if (finalText !== undefined || content || toolCalls.length || turnError) {
           const stopped = turnError?.message === 'Turn cancelled';

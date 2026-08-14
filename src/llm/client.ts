@@ -1,4 +1,5 @@
 import type { OpenAIToolSchema } from './tools.js';
+import { parseRetryAfter, ProviderHttpError, retryableProviderError, withProviderRetry, type RetryOptions } from './retry.js';
 
 export interface ToolCall {
   id: string;
@@ -17,7 +18,7 @@ export interface TokenUsage {
   totalTokens: number;
 }
 
-export interface ChatResult { content: string; toolCalls: ToolCall[]; usage?: TokenUsage; }
+export interface ChatResult { content: string; toolCalls: ToolCall[]; usage?: TokenUsage; model?: string; attempts?: number; }
 
 export interface ChatRequest {
   baseUrl: string;
@@ -28,6 +29,9 @@ export interface ChatRequest {
   signal?: AbortSignal;
   timeoutMs?: number;
   onText?: (text: string) => void;
+  fallbackModel?: string;
+  retry?: Omit<RetryOptions, 'onRetry'>;
+  onAttempt?: (event: { model: string; attempt: number; delayMs?: number; outcome: 'start' | 'retry' | 'success' | 'fallback' }) => void;
 }
 
 interface ProviderUsage {
@@ -44,28 +48,29 @@ function normalizeUsage(usage?: ProviderUsage): TokenUsage | undefined {
   return { promptTokens, completionTokens, totalTokens };
 }
 
-function friendlyProviderError(status: number, body: string): Error {
+function friendlyProviderError(status: number, body: string, retryAfter?: string | null): Error {
   const detail = (() => { try { return JSON.parse(body).error?.message as string; } catch { return body.slice(0, 500); } })();
-  if (status === 429) return new Error(`Provider rate limit reached (429): ${detail}`);
-  if (status >= 500) return new Error(`Provider is temporarily unavailable (${status}): ${detail}`);
-  return new Error(`Provider request failed (${status}): ${detail}`);
+  const message = status === 429 ? `Provider rate limit reached (429): ${detail}`
+    : status >= 500 ? `Provider is temporarily unavailable (${status}): ${detail}`
+      : `Provider request failed (${status}): ${detail}`;
+  return new ProviderHttpError(status, message, parseRetryAfter(retryAfter ?? null));
 }
 
-export async function streamChat(request: ChatRequest): Promise<ChatResult> {
+async function streamChatOnce(request: ChatRequest, model: string): Promise<ChatResult> {
   const timeout = AbortSignal.timeout(request.timeoutMs ?? 120_000);
   const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout;
   const response = await fetch(`${request.baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST', signal,
     headers: { 'content-type': 'application/json', ...(request.apiKey ? { authorization: `Bearer ${request.apiKey}` } : {}) },
     body: JSON.stringify({
-      model: request.model,
+      model,
       messages: request.messages,
       tools: request.tools,
       stream: true,
       stream_options: { include_usage: true },
     }),
   });
-  if (!response.ok) throw friendlyProviderError(response.status, await response.text());
+  if (!response.ok) throw friendlyProviderError(response.status, await response.text(), response.headers.get('retry-after'));
   if (response.headers.get('content-type')?.includes('application/json')) {
     const payload = await response.json() as {
       choices?: Array<{ message?: { content?: string | null; tool_calls?: ToolCall[] } }>;
@@ -75,7 +80,7 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
     if (!message) throw new Error('Provider returned a malformed completion');
     const content = message.content ?? '';
     if (content) request.onText?.(content);
-    return { content, toolCalls: message.tool_calls ?? [], usage: normalizeUsage(payload.usage) };
+    return { content, toolCalls: message.tool_calls ?? [], usage: normalizeUsage(payload.usage), model };
   }
   if (!response.body) throw new Error('Provider returned an empty response body');
 
@@ -112,5 +117,27 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
     }
     if (done) break;
   }
-  return { content, toolCalls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call), usage };
+  return { content, toolCalls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call), usage, model };
+}
+
+export async function streamChat(request: ChatRequest): Promise<ChatResult> {
+  const retry = request.retry ?? { maxAttempts: 1, baseDelayMs: 1_000, maxDelayMs: 30_000 };
+  const runModel = async (model: string) => withProviderRetry(async (attempt) => {
+    request.onAttempt?.({ model, attempt, outcome: 'start' });
+    const value = await streamChatOnce(request, model);
+    request.onAttempt?.({ model, attempt, outcome: 'success' });
+    return value;
+  }, {
+    ...retry,
+    onRetry: (attempt, delayMs) => request.onAttempt?.({ model, attempt, delayMs, outcome: 'retry' }),
+  });
+  try {
+    const result = await runModel(request.model);
+    return { ...result.value, attempts: result.attempts };
+  } catch (error) {
+    if (!request.fallbackModel || request.fallbackModel === request.model || !retryableProviderError(error)) throw error;
+    request.onAttempt?.({ model: request.fallbackModel, attempt: 1, outcome: 'fallback' });
+    const result = await streamChatOnce(request, request.fallbackModel);
+    return { ...result, attempts: retry.maxAttempts + 1 };
+  }
 }

@@ -72,7 +72,7 @@ test('plan profile denies write tools at listing and dispatch boundaries', async
   registry.register({ name: 'read_file', description: 'read', parameters: { type: 'object' }, execute: () => 'read' });
   const plan = getAgentProfile('plan');
   assert.deepEqual(registry.list({ profile: plan }).map((tool) => tool.name), ['read_file']);
-  assert.match(await registry.dispatch('write_file', {}, { cwd: process.cwd(), agentProfile: plan }), /denied by agent profile/);
+  assert.match(await registry.dispatch('write_file', {}, { cwd: process.cwd(), agentProfile: plan }), /denied by policy/);
 });
 
 test('delegation enforces isolation contract, depth, cancellation, and parallel cap', async () => {

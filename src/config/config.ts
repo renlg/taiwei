@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { ensureTaiweiHome } from '../util/paths.js';
 import { HOOK_EVENTS, type HookCommands } from '../hooks/runner.js';
 import { passwordForStorage } from './password.js';
+import type { PolicyConfig } from '../security/policy.js';
 
 export type SecurityRememberMode = 'off' | 'session' | 'permanent';
 
@@ -24,6 +25,12 @@ export interface TaiweiConfig {
   apiKey: string;
   maxTurns: number;
   requestTimeoutMs: number;
+  fallbackModel?: string;
+  tokenEstimateCharsPerToken: number;
+  budget: { systemMax: number; historyMax: number; toolsMax: number; outputReserve: number };
+  retry: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number };
+  runtime: { maxConcurrentTurns: number };
+  policy: PolicyConfig;
   customPrompt: string;
   hookTimeoutSeconds: number;
   hooks: HookCommands;
@@ -71,6 +78,11 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   apiKey: '',
   maxTurns: 50,
   requestTimeoutMs: 120_000,
+  tokenEstimateCharsPerToken: 4,
+  budget: { systemMax: 20_000, historyMax: 180_000, toolsMax: 30_000, outputReserve: 16_000 },
+  retry: { maxAttempts: 3, baseDelayMs: 1_000, maxDelayMs: 30_000 },
+  runtime: { maxConcurrentTurns: 4 },
+  policy: { rules: [] },
   customPrompt: '',
   hookTimeoutSeconds: 10,
   hooks: {
@@ -168,6 +180,10 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     skillsDisabled: normalizeStringList(storedConfig.skillsDisabled),
     tools: normalizeToolSettings(storedConfig.tools),
     delegation: { ...DEFAULT_CONFIG.delegation, ...storedConfig.delegation },
+    budget: { ...DEFAULT_CONFIG.budget, ...storedConfig.budget },
+    retry: { ...DEFAULT_CONFIG.retry, ...storedConfig.retry },
+    runtime: { ...DEFAULT_CONFIG.runtime, ...storedConfig.runtime },
+    policy: { rules: Array.isArray(storedConfig.policy?.rules) ? storedConfig.policy.rules : [] },
     browser: { ...DEFAULT_CONFIG.browser, ...storedConfig.browser },
     gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },
     auth: { ...DEFAULT_CONFIG.auth, ...storedConfig.auth },
@@ -226,6 +242,10 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       skillsDisabled: normalizeStringList(storedConfig.skillsDisabled),
       tools: normalizeToolSettings(storedConfig.tools),
       delegation: { ...DEFAULT_CONFIG.delegation, ...storedConfig.delegation },
+      budget: { ...DEFAULT_CONFIG.budget, ...storedConfig.budget },
+      retry: { ...DEFAULT_CONFIG.retry, ...storedConfig.retry },
+      runtime: { ...DEFAULT_CONFIG.runtime, ...storedConfig.runtime },
+      policy: { rules: Array.isArray(storedConfig.policy?.rules) ? storedConfig.policy.rules : [] },
       browser: { ...DEFAULT_CONFIG.browser, ...storedConfig.browser },
       gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },
       auth: { ...DEFAULT_CONFIG.auth, ...storedConfig.auth },
@@ -249,6 +269,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       ...DEFAULT_CONFIG,
       hooks: normalizeHooks(),
       delegation: { ...DEFAULT_CONFIG.delegation }, browser: { ...DEFAULT_CONFIG.browser },
+      budget: { ...DEFAULT_CONFIG.budget }, retry: { ...DEFAULT_CONFIG.retry }, runtime: { ...DEFAULT_CONFIG.runtime }, policy: { rules: [] },
       gateway: { ...DEFAULT_CONFIG.gateway },
       auth: { ...DEFAULT_CONFIG.auth },
       oauth: { ...DEFAULT_CONFIG.oauth },

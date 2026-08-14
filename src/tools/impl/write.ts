@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import type { ToolSpec } from '../registry.js';
+import { resolveInWorkspace } from '../../util/paths.js';
 
 export const writeTool: ToolSpec = {
   name: 'write_file',
@@ -10,7 +11,9 @@ export const writeTool: ToolSpec = {
     required: ['path', 'content'], additionalProperties: false,
   },
   async execute(args, context) {
-    const path = resolve(context.cwd, String(args.path));
+    const path = context.workspaceOnly
+      ? await resolveInWorkspace(String(args.path), context.workspaceRoot ?? context.cwd)
+      : resolve(context.cwd, String(args.path));
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, String(args.content), 'utf8');
     return { ok: true, path };

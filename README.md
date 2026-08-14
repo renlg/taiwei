@@ -27,6 +27,12 @@ Edit `~/.taiwei/config.json`, or set environment variables:
   "apiKey": "",
   "maxTurns": 50,
   "requestTimeoutMs": 120000,
+  "fallbackModel": "",
+  "tokenEstimateCharsPerToken": 4,
+  "budget": { "systemMax": 20000, "historyMax": 180000, "toolsMax": 30000, "outputReserve": 16000 },
+  "retry": { "maxAttempts": 3, "baseDelayMs": 1000, "maxDelayMs": 30000 },
+  "runtime": { "maxConcurrentTurns": 4 },
+  "policy": { "rules": [] },
   "customPrompt": "",
   "hookTimeoutSeconds": 10,
   "hooks": {
@@ -247,6 +253,12 @@ Administrators can still open **设置 → 分享** to rotate a share link. A sh
 
 Each OAuth user stores core memory under a sanitized `~/.taiwei/guests/guest-<ai-connect-username>/memory.md`; a share credential uses `~/.taiwei/guests/guest-<token-prefix>/memory.md`. These files are isolated from the administrator and other guests. Guests can retrieve the administrator-managed knowledge and extended-memory RAG index but cannot modify it. Disabling sharing immediately invalidates the current share credential. The administrator password remains stored as a salted scrypt hash when persisted.
 
+## Policy, recovery, and audit
+
+Execution policy, concurrency, context budgeting, retries, and auditing are configured in `~/.taiwei/config.json`. Gateway guests are denied shell, file-write, memory-management, MCP, and plugin tools by default; Plan mode is read-only. Custom `policy.rules` are first-match and can explicitly allow or deny narrower role/tool/path combinations. Guest and Plan file access is confined to `workspace.dir` with realpath/symlink checks.
+
+Provider recovery defaults to three attempts for 429/5xx/network failures and honors `Retry-After`; set `fallbackModel` for one final model fallback. Audit events append to `~/.taiwei/audit.jsonl` with secret-shaped argument keys redacted. Administrators can inspect recent entries in Settings or through `GET /api/audit`.
+
 ## State and extensions
 
 All durable state lives in `~/.taiwei/`:
@@ -255,6 +267,7 @@ All durable state lives in `~/.taiwei/`:
 config.json       model and provider settings
 cron.json         scheduled jobs
 cron-runs.jsonl   append-only scheduled-run ledger
+audit.jsonl       redacted append-only policy and execution audit
 mcp.json          MCP server definitions
 memory.md         durable agent memory
 memory/           extended Markdown memory indexed with the knowledge base

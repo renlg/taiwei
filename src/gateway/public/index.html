@@ -251,6 +251,16 @@
           <div class="share-link-row" id="share-link-row" hidden><input id="share-url" readonly><button class="small-button" id="share-copy" type="button">复制</button></div>
         </div></div>
       </section>
+      <section class="settings-collapse audit-settings">
+        <button class="settings-collapse-toggle" id="audit-toggle" type="button" aria-expanded="false" aria-controls="audit-content">
+          <span class="settings-collapse-title"><span class="settings-collapse-chevron" aria-hidden="true">▸</span><span class="settings-collapse-heading">审计日志</span></span>
+          <small class="settings-collapse-status" id="audit-status">最近事件</small>
+        </button>
+        <div class="settings-collapse-content" id="audit-content"><div class="settings-collapse-content-inner">
+          <label for="audit-filter">事件类型筛选</label><input id="audit-filter" placeholder="例如 policy.decision">
+          <pre class="hook-test-result audit-list" id="audit-list">展开以加载最近事件</pre>
+        </div></div>
+      </section>
       <div class="modal-error" id="settings-error" role="alert"></div>
       <footer><button class="secondary-button" id="settings-reset" type="button">重置安全默认值</button><button class="primary-button" id="settings-save" type="submit">保存设置</button></footer>
     </form>

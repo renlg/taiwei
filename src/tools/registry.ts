@@ -4,6 +4,10 @@ import type { ToolSettings } from '../config/config.js';
 import type { AgentContext } from '../agent/context.js';
 import type { AgentProfile } from '../agents/profiles.js';
 import { toolDenied } from '../agents/profiles.js';
+import { PolicyEngine, toolPath } from '../security/policy.js';
+import { resolveInWorkspace } from '../util/paths.js';
+import { appendAudit } from '../observability/audit.js';
+import { emitEvent } from '../observability/events.js';
 
 export interface ToolConfigField {
   type: 'number' | 'string';
@@ -29,6 +33,12 @@ export interface ToolContext {
   toolConfig?: Readonly<Record<string, unknown>>;
   agentProfile?: AgentProfile;
   delegationDepth?: number;
+  role?: 'admin' | 'guest';
+  identity?: string;
+  workspaceRoot?: string;
+  runId?: string;
+  policy?: PolicyEngine;
+  workspaceOnly?: boolean;
 }
 
 export interface ToolSpec extends ToolDefinition {
@@ -87,7 +97,30 @@ export class ToolRegistry {
     const tool = this.tools.get(name);
     if (!tool) return JSON.stringify({ error: `Unknown tool: ${name}` });
     if (!this.isEnabled(name)) return JSON.stringify({ error: `Tool "${name}" is disabled` });
+    const role = context.role ?? 'admin';
+    const agentMode = context.agentProfile?.mode ?? 'build';
+    const sessionId = context.sessionId ?? 'local';
+    const runId = context.runId ?? 'unknown';
+    const workspaceRoot = context.workspaceRoot ?? context.cwd;
+    const decision = (context.policy ?? new PolicyEngine()).decide({
+      role, agentMode, sessionId, tool: name, args, cwd: context.cwd, workspaceRoot, identity: context.identity ?? role,
+    });
+    const policyEvent = { type: 'policy.decision', runId, sessionId, agentId: context.agentProfile?.id, tool: name, outcome: decision.effect, role, agentMode, rule: decision.rule, args } as const;
+    emitEvent(policyEvent);
+    await appendAudit(policyEvent).catch(() => {});
+    if (decision.effect === 'deny') return JSON.stringify({ error: `Tool "${name}" denied by policy`, policy: decision.rule });
     if (toolDenied(name, context.agentProfile)) return JSON.stringify({ error: `Tool "${name}" is denied by agent profile "${context.agentProfile?.id}"` });
+    const candidatePath = toolPath(args, context.cwd);
+    const workspaceOnly = (role === 'guest' || agentMode === 'plan') && !decision.allowExternalPath;
+    if (candidatePath && workspaceOnly) {
+      try { await resolveInWorkspace(candidatePath, workspaceRoot); }
+      catch (error) {
+        const output = JSON.stringify({ error: error instanceof Error ? error.message : String(error), policy: 'workspace-boundary' });
+        await appendAudit({ type: 'policy.decision', runId, sessionId, tool: name, outcome: 'deny', role, agentMode, rule: 'workspace-boundary', args }).catch(() => {});
+        return output;
+      }
+    }
+    if (decision.effect === 'ask' && (name !== 'bash' || !context.authorizeCommand)) return JSON.stringify({ error: `Tool "${name}" requires confirmation`, policy: decision.rule });
     const hook = await context.hooks?.run('beforeTool', { sessionId: context.sessionId, tool: name, args, cwd: context.cwd });
     if (hook?.block) {
       const output = JSON.stringify({ error: '用户拒绝了该命令的执行', blockedByHook: hook.reason });
@@ -97,12 +130,16 @@ export class ToolRegistry {
     let output: string;
     let ok = true;
     try {
-      const value = await tool.execute(args, { ...context, toolConfig: this.getConfig(name) });
+      const started = Date.now();
+      const value = await tool.execute(args, { ...context, workspaceRoot, workspaceOnly, toolConfig: this.getConfig(name) });
       output = typeof value === 'string' ? value : JSON.stringify(value ?? null);
       try { ok = !(JSON.parse(output) as { error?: unknown })?.error; } catch {}
+      const toolEvent = { type: 'tool.call', runId, sessionId, agentId: context.agentProfile?.id, tool: name, latencyMs: Date.now() - started, outcome: ok ? 'success' : 'error', args } as const;
+      emitEvent(toolEvent); await appendAudit(toolEvent).catch(() => {});
     } catch (error) {
       ok = false;
       output = JSON.stringify({ error: error instanceof Error ? error.message : String(error) });
+      await appendAudit({ type: 'tool.call', runId, sessionId, agentId: context.agentProfile?.id, tool: name, outcome: 'error', args }).catch(() => {});
     }
     await context.hooks?.run('afterTool', { sessionId: context.sessionId, tool: name, args, ok, resultPreview: output.slice(0, 1_000) });
     return output;

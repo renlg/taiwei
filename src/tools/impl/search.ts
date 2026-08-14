@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ToolSpec } from '../registry.js';
+import { resolveInWorkspace } from '../../util/paths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -17,7 +18,10 @@ export const searchTool: ToolSpec = {
   async execute(args, context) {
     const rgArgs = ['--line-number', '--no-heading', '--color', 'never'];
     if (args.glob) rgArgs.push('--glob', String(args.glob));
-    rgArgs.push('--', String(args.query), String(args.path ?? '.'));
+    const searchPath = context.workspaceOnly
+      ? await resolveInWorkspace(String(args.path ?? '.'), context.workspaceRoot ?? context.cwd)
+      : String(args.path ?? '.');
+    rgArgs.push('--', String(args.query), searchPath);
     try {
       const result = await execFileAsync('rg', rgArgs, { cwd: context.cwd, signal: context.signal, maxBuffer: 10 * 1024 * 1024 });
       const maxResults = Math.max(1, Math.floor(Number(context.toolConfig?.maxResults ?? 50)));

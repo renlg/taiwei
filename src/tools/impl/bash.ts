@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { resolve } from 'node:path';
 import type { ToolSpec } from '../registry.js';
 import { expandHome } from '../../config/config.js';
+import { resolveInWorkspace } from '../../util/paths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -20,6 +21,10 @@ export const bashTool: ToolSpec = {
     const command = String(args.command);
     const configuredCwd = String(context.toolConfig?.defaultCwd ?? '').trim();
     const cwd = configuredCwd ? (configuredCwd.startsWith('~') ? expandHome(configuredCwd) : resolve(context.cwd, configuredCwd)) : context.cwd;
+    if (configuredCwd) {
+      try { await resolveInWorkspace(cwd, context.workspaceRoot ?? context.cwd); }
+      catch { console.warn(`[taiwei] bash defaultCwd is outside the workspace (${cwd}); command execution is not jailed`); }
+    }
     if (context.authorizeCommand && !await context.authorizeCommand(command, cwd)) {
       return { error: '用户拒绝了该命令的执行', command, cwd };
     }

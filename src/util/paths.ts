@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { mkdir, writeFile, access } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { mkdir, writeFile, access, realpath } from 'node:fs/promises';
 
 export interface TaiweiPaths {
   home: string;
@@ -20,6 +20,7 @@ export interface TaiweiPaths {
   loginLocks: string;
   uploads: string;
   guests: string;
+  audit: string;
 }
 
 export function getPaths(): TaiweiPaths {
@@ -42,7 +43,30 @@ export function getPaths(): TaiweiPaths {
     loginLocks: join(home, 'login-locks.json'),
     uploads: join(home, 'uploads'),
     guests: join(home, 'guests'),
+    audit: join(home, 'audit.jsonl'),
   };
+}
+
+/** Resolve an existing path, or the nearest existing parent for a new path, without permitting symlink escapes. */
+export async function resolveInWorkspace(path: string, workspaceRoot: string): Promise<string> {
+  const root = await realpath(resolve(workspaceRoot));
+  const candidate = resolve(workspaceRoot, path);
+  let existing = candidate;
+  const suffix: string[] = [];
+  for (;;) {
+    try { existing = await realpath(existing); break; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = dirname(existing);
+      if (parent === existing) throw new Error(`Cannot resolve path in workspace: ${path}`);
+      suffix.unshift(existing.slice(parent.length + (parent.endsWith('/') ? 0 : 1)));
+      existing = parent;
+    }
+  }
+  const resolved = resolve(existing, ...suffix);
+  const child = relative(root, resolved);
+  if (child.startsWith('..') || isAbsolute(child)) throw new Error(`Path escapes workspace: ${path}`);
+  return resolved;
 }
 
 const VALID_GUEST_ID = /^[a-z0-9_-]{1,64}$/;
