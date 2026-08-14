@@ -70,7 +70,9 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '16';
+const STATIC_ASSET_VERSION = '17';
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
+const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
 const MAX_MEMORY_LENGTH = 50_000;
 
@@ -166,6 +168,25 @@ function guestRouteAllowed(method: string, pathname: string): boolean {
 
 function sessionCookie(token: string, maxAge = Math.floor(AUTH_SESSION_TTL_MS / 1_000)): string {
   return `taiwei_token=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+}
+
+function requestOrigin(request: IncomingMessage, config: TaiweiConfig): string {
+  const host = request.headers.host ?? `${config.gateway.host}:${config.gateway.port}`;
+  const forwardedProtocol = request.headers['x-forwarded-proto'];
+  const protocol = typeof forwardedProtocol === 'string' && forwardedProtocol.split(',')[0]?.trim() === 'https' ? 'https' : 'http';
+  return `${protocol}://${host}`;
+}
+
+function oauthProviderBaseUrl(value: string): string {
+  let url: URL;
+  try { url = new URL(value); }
+  catch { throw new HttpError(503, 'OAuth providerBaseUrl is not configured'); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new HttpError(503, 'OAuth providerBaseUrl must use http or https');
+  return url.toString().replace(/\/$/, '');
+}
+
+function safeInlineJson(value: string): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {
@@ -353,6 +374,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
     throw new Error('Gateway auth is enabled but no password is set. Set auth.password in ~/.taiwei/config.json or TAIWEI_AUTH_PASSWORD.');
   }
   const log = options.log ?? console.log;
+  const oauthStates = new Map<string, number>();
   const modelState: GatewayModelState = options.modelState ?? { getCurrentModel, resolveModels, setCurrentModel };
   const contextWindowFor = options.contextWindow ?? (async (model: string) => resolveContextWindow(await loadConfig(), model));
   const requireMcpBridge = () => {
@@ -399,9 +421,84 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         json(response, 200, { ok: true });
         return;
       }
+      if (method === 'POST' && pathname === '/api/oauth/start') {
+        const config = await configState.load();
+        if (!config.oauth.enabled) {
+          json(response, 404, { error: 'OAuth login is disabled' });
+          return;
+        }
+        const body = await readJson(request) as { state?: unknown };
+        const state = typeof body.state === 'string' ? body.state : '';
+        if (!/^[a-f0-9]{32,128}$/i.test(state)) throw new HttpError(400, 'Invalid OAuth state');
+        const now = Date.now();
+        for (const [key, expiresAt] of oauthStates) if (expiresAt <= now) oauthStates.delete(key);
+        const expiresAt = now + OAUTH_STATE_TTL_MS;
+        oauthStates.set(state, expiresAt);
+        const redirectUri = config.oauth.redirectUri.trim() || `${requestOrigin(request, config)}/api/oauth/callback`;
+        const authorizeUrl = new URL(`${oauthProviderBaseUrl(config.oauth.providerBaseUrl)}/api/oauth/authorize`);
+        authorizeUrl.searchParams.set('client_id', config.oauth.clientId);
+        authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+        authorizeUrl.searchParams.set('response_type', 'code');
+        authorizeUrl.searchParams.set('state', state);
+        json(response, 200, { authorizeUrl: authorizeUrl.toString(), state, expiresAt: new Date(expiresAt).toISOString() });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/oauth/callback') {
+        const url = new URL(request.url ?? '/', 'http://localhost');
+        const code = url.searchParams.get('code') ?? '';
+        const state = url.searchParams.get('state') ?? '';
+        const expiresAt = oauthStates.get(state);
+        oauthStates.delete(state);
+        if (!state || !expiresAt || expiresAt <= Date.now()) throw new HttpError(400, 'Invalid or expired OAuth state');
+        if (!code) throw new HttpError(400, 'Missing OAuth authorization code');
+        const config = await configState.load();
+        if (!config.oauth.enabled) throw new HttpError(400, 'OAuth login is disabled');
+        const providerBaseUrl = oauthProviderBaseUrl(config.oauth.providerBaseUrl);
+        let tokenResponse: Response;
+        try {
+          tokenResponse = await fetch(`${providerBaseUrl}/api/oauth/token`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              client_id: config.oauth.clientId,
+              client_secret: config.oauth.clientSecret,
+              code,
+              grant_type: 'authorization_code',
+            }),
+            signal: AbortSignal.timeout(OAUTH_REQUEST_TIMEOUT_MS),
+          });
+        } catch {
+          throw new HttpError(502, 'oauth token exchange failed');
+        }
+        if (!tokenResponse.ok) throw new HttpError(tokenResponse.status === 400 || tokenResponse.status === 401 ? 401 : 502, 'oauth token exchange failed');
+        const tokenBody = await tokenResponse.json().catch(() => undefined) as { access_token?: unknown } | undefined;
+        if (typeof tokenBody?.access_token !== 'string' || !tokenBody.access_token) throw new HttpError(502, 'oauth token exchange failed');
+        let userinfoResponse: Response;
+        try {
+          userinfoResponse = await fetch(`${providerBaseUrl}/api/oauth/userinfo`, {
+            headers: { authorization: `Bearer ${tokenBody.access_token}` },
+            signal: AbortSignal.timeout(OAUTH_REQUEST_TIMEOUT_MS),
+          });
+        } catch {
+          throw new HttpError(502, 'oauth userinfo failed');
+        }
+        if (!userinfoResponse.ok) throw new HttpError(502, 'oauth userinfo failed');
+        const userinfo = await userinfoResponse.json().catch(() => undefined) as { username?: unknown } | undefined;
+        const username = typeof userinfo?.username === 'string' ? userinfo.username.trim() : '';
+        if (!username) throw new HttpError(502, 'oauth userinfo failed');
+        const token = await authSessions.create(username, 'guest');
+        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录成功</title></head><body><p>登录成功，正在进入 taiwei…</p><script>localStorage.setItem('taiwei-token',${safeInlineJson(token)});localStorage.setItem('taiwei-role','guest');localStorage.setItem('taiwei-username',${safeInlineJson(username)});sessionStorage.removeItem('taiwei-oauth-state');sessionStorage.removeItem('taiwei-oauth-state-expires');window.location.replace('/');</script></body></html>`;
+        response.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+          'set-cookie': sessionCookie(token),
+          'content-length': Buffer.byteLength(html),
+        });
+        response.end(html);
+        return;
+      }
       if (method === 'POST' && pathname === '/api/login') {
-        const accessConfig = await configState.load();
-        if (!authEnabled && !accessConfig.guests.length) {
+        if (!authEnabled) {
           json(response, 404, { error: 'Authentication is disabled' });
           return;
         }
@@ -413,11 +510,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           && typeof body?.password === 'string'
           && constantTimeEqual(body.username, options.auth?.username ?? '')
           && verifyPassword(body.password, configuredPassword);
-        const guest = typeof body?.username === 'string' && typeof body?.password === 'string'
-          ? accessConfig.guests.find((item) => constantTimeEqual(body.username as string, item.username) && verifyPassword(body.password as string, item.password))
-          : undefined;
-        const valid = adminValid || Boolean(guest);
-        const attempt = await loginLocks.attempt(attemptedUsername, ip, valid);
+        const attempt = await loginLocks.attempt(attemptedUsername, ip, adminValid);
         if (attempt.lock) {
           log(`[taiwei] Warning: login lock ${attempt.lock} reached for ${ip} (${attemptedUsername || '<empty>'})`);
           json(response, 429, { error: lockMessage(attempt.lock) });
@@ -436,15 +529,9 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           }
           if (options.auth) options.auth.password = migratedPassword;
         }
-        if (guest && !isScryptPassword(guest.password)) {
-          const current = accessConfig.guests.find((item) => item.username === guest.username);
-          if (current) current.password = hashPassword(body.password as string);
-          await configState.save(accessConfig);
-        }
-        const role = adminValid ? 'admin' : 'guest';
-        const username = adminValid ? body.username as string : guest!.username;
-        const token = await authSessions.create(username, role);
-        json(response, 200, { token, role, username }, { 'set-cookie': sessionCookie(token) });
+        const username = body.username as string;
+        const token = await authSessions.create(username, 'admin');
+        json(response, 200, { token, role: 'admin', username }, { 'set-cookie': sessionCookie(token) });
         return;
       }
       let authenticatedToken: string | undefined;
@@ -453,7 +540,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       let guestId: string | undefined;
       const accessConfig = await configState.load();
       const presentedToken = requestToken(request) ?? requestShareToken(request);
-      const authRequired = authEnabled || Boolean(presentedToken);
+      const authRequired = authEnabled || accessConfig.oauth.enabled || Boolean(presentedToken);
       if (authRequired && pathname.startsWith('/api/')) {
         authenticatedToken = requestToken(request);
         const authenticated = authenticatedToken ? await authSessions.authenticate(authenticatedToken) : undefined;
@@ -578,34 +665,6 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       if (method === 'DELETE' && pathname === '/api/share') {
         const config = await configState.load();
         config.share.enabled = false;
-        await configState.save(config);
-        json(response, 200, { ok: true });
-        return;
-      }
-      if (method === 'GET' && pathname === '/api/guests') {
-        const config = await configState.load();
-        json(response, 200, config.guests.map(({ username, createdAt }) => ({ username, createdAt })));
-        return;
-      }
-      if (method === 'POST' && pathname === '/api/guests') {
-        const body = await readJson(request) as { username?: unknown; password?: unknown };
-        const username = typeof body.username === 'string' ? body.username.trim() : '';
-        if (!/^[A-Za-z0-9_-]{2,32}$/.test(username)) throw new HttpError(400, 'username must match [A-Za-z0-9_-]{2,32}');
-        if (typeof body.password !== 'string' || body.password.length < 4) throw new HttpError(400, 'password must contain at least 4 characters');
-        const config = await configState.load();
-        if (config.guests.some((item) => item.username.toLowerCase() === username.toLowerCase())) throw new HttpError(409, 'guest username already exists');
-        const guest = { username, password: hashPassword(body.password), createdAt: new Date().toISOString() };
-        config.guests.push(guest);
-        await configState.save(config);
-        json(response, 201, { username, createdAt: guest.createdAt });
-        return;
-      }
-      if (method === 'DELETE' && pathname === '/api/guests') {
-        const username = new URL(request.url ?? '/', 'http://localhost').searchParams.get('username') ?? '';
-        const config = await configState.load();
-        const index = config.guests.findIndex((item) => item.username === username);
-        if (index < 0) throw new HttpError(404, 'guest account not found');
-        config.guests.splice(index, 1);
         await configState.save(config);
         json(response, 200, { ok: true });
         return;

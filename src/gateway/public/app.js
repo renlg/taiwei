@@ -7,6 +7,9 @@ const elements = {
   loginPassword: $('#login-password'),
   loginError: $('#login-error'),
   loginSubmit: $('#login-submit'),
+  adminLoginFields: $('#admin-login-fields'),
+  oauthLoginPanel: $('#oauth-login-panel'),
+  oauthLogin: $('#oauth-login'),
   loginDescription: $('#login-description'),
   loginTabs: document.querySelectorAll('[data-login-role]'),
   appShell: $('#app-shell'),
@@ -148,10 +151,6 @@ const elements = {
   shareLinkRow: $('#share-link-row'),
   shareUrl: $('#share-url'),
   shareCopy: $('#share-copy'),
-  guestUsername: $('#guest-username'),
-  guestPassword: $('#guest-password'),
-  guestCreate: $('#guest-create'),
-  guestAccountList: $('#guest-account-list'),
   sidebarToggle: $('#sidebar-toggle'),
   sidebarClose: $('#sidebar-close'),
   scrim: $('#mobile-scrim'),
@@ -168,6 +167,7 @@ const state = {
   authToken: localStorage.getItem('taiwei-token') || '',
   shareToken: localStorage.getItem('taiwei_share_token') || '',
   role: localStorage.getItem('taiwei-role') || 'admin',
+  username: localStorage.getItem('taiwei-username') || '',
   loginRole: 'admin',
   models: [],
   currentModel: 'OpenAI compatible',
@@ -363,28 +363,15 @@ async function loadSettings() {
   return settings;
 }
 
-function renderSharing(share, guests) {
+function renderSharing(share) {
   elements.shareStatus.textContent = share.enabled ? '已开启' : '未开启';
   elements.shareDisable.hidden = !share.enabled;
   elements.shareLinkRow.hidden = !share.enabled || !share.url;
   elements.shareUrl.value = share.url || '';
-  elements.guestAccountList.replaceChildren();
-  if (!guests.length) renderResourceEmpty(elements.guestAccountList, '暂无普通用户账号');
-  for (const guest of guests) {
-    const row = document.createElement('div'); row.className = 'guest-account';
-    row.innerHTML = `<span><strong>${escapeHtml(guest.username)}</strong><br><small>${escapeHtml(new Date(guest.createdAt).toLocaleString())}</small></span><button class="knowledge-delete" type="button" aria-label="删除">×</button>`;
-    row.querySelector('button').addEventListener('click', async () => {
-      if (!confirm(`确定删除普通用户 ${guest.username} 吗？`)) return;
-      try { await requestJson(`/api/guests?username=${encodeURIComponent(guest.username)}`, { method: 'DELETE' }); await loadSharing(); }
-      catch (error) { elements.settingsError.textContent = error.message; }
-    });
-    elements.guestAccountList.append(row);
-  }
 }
 
 async function loadSharing() {
-  const [share, guests] = await Promise.all([requestJson('/api/share'), requestJson('/api/guests')]);
-  renderSharing(share, guests);
+  renderSharing(await requestJson('/api/share'));
 }
 
 async function openSettings() {
@@ -1201,10 +1188,12 @@ async function authenticatedFetch(path, options) {
 function showLogin() {
   localStorage.removeItem('taiwei-token');
   localStorage.removeItem('taiwei-role');
+  localStorage.removeItem('taiwei-username');
   localStorage.removeItem('taiwei_share_token');
   state.authToken = '';
   state.shareToken = '';
   state.role = 'admin';
+  state.username = '';
   elements.body.classList.remove('guest-mode');
   closeUserMenu();
   elements.appShell.hidden = true;
@@ -1220,7 +1209,10 @@ function showChat() {
 
 function applyRole(role, username = '') {
   state.role = role;
+  state.username = username;
   localStorage.setItem('taiwei-role', role);
+  if (username) localStorage.setItem('taiwei-username', username);
+  else localStorage.removeItem('taiwei-username');
   const guest = role === 'guest';
   elements.body.classList.toggle('guest-mode', guest);
   elements.guestModeLabel.hidden = !guest;
@@ -1728,13 +1720,6 @@ elements.shareCopy.addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(elements.shareUrl.value); showToast('分享链接已复制'); }
   catch { elements.shareUrl.select(); document.execCommand('copy'); }
 });
-elements.guestCreate.addEventListener('click', async () => {
-  elements.settingsError.textContent = '';
-  try {
-    await requestJson('/api/guests', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: elements.guestUsername.value, password: elements.guestPassword.value }) });
-    elements.guestUsername.value = ''; elements.guestPassword.value = ''; await loadSharing(); showToast('普通用户账号已创建');
-  } catch (error) { elements.settingsError.textContent = error.message; }
-});
 elements.workspaceInput.addEventListener('input', updateWorkspaceStatus);
 elements.customPromptInput.addEventListener('input', () => {
   elements.customPromptFeedback.textContent = '';
@@ -1879,8 +1864,14 @@ document.querySelectorAll('.new-chat').forEach((button) => button.addEventListen
 elements.loginTabs.forEach((tab) => tab.addEventListener('click', () => {
   state.loginRole = tab.dataset.loginRole;
   elements.loginTabs.forEach((item) => item.classList.toggle('active', item === tab));
-  elements.loginDescription.textContent = state.loginRole === 'guest' ? '请输入普通用户账号以继续。' : '请输入管理员账号以继续。';
-  elements.loginUsername.focus();
+  const oauth = state.loginRole === 'guest';
+  elements.loginDescription.textContent = oauth ? '使用 ai-connect 账号安全登录。' : '请输入管理员账号以继续。';
+  elements.adminLoginFields.hidden = oauth;
+  elements.oauthLoginPanel.hidden = !oauth;
+  elements.loginSubmit.hidden = oauth;
+  elements.loginError.textContent = '';
+  if (oauth) elements.oauthLogin.focus();
+  else elements.loginUsername.focus();
 }));
 elements.sidebarToggle.addEventListener('click', () => {
   if (matchMedia('(max-width: 680px)').matches) elements.body.classList.toggle('sidebar-open');
@@ -1894,6 +1885,7 @@ elements.scrim.addEventListener('click', () => elements.body.classList.remove('s
 
 elements.loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (state.loginRole !== 'admin') return;
   elements.loginError.textContent = '';
   elements.loginSubmit.disabled = true;
   elements.loginSubmit.textContent = '登录中…';
@@ -1917,6 +1909,29 @@ elements.loginForm.addEventListener('submit', async (event) => {
   } finally {
     elements.loginSubmit.disabled = false;
     elements.loginSubmit.textContent = '登录';
+  }
+});
+
+elements.oauthLogin.addEventListener('click', async () => {
+  elements.loginError.textContent = '';
+  elements.oauthLogin.disabled = true;
+  elements.oauthLogin.textContent = '正在前往 ai-connect…';
+  try {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    const oauthState = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    const expiresAt = Date.now() + 10 * 60 * 1000;
+    sessionStorage.setItem('taiwei-oauth-state', oauthState);
+    sessionStorage.setItem('taiwei-oauth-state-expires', String(expiresAt));
+    const response = await fetch('/api/oauth/start', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: oauthState }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || !body.authorizeUrl) throw new Error(body.error || `无法启动 OAuth 登录 (${response.status})`);
+    window.location.href = body.authorizeUrl;
+  } catch (error) {
+    elements.loginError.textContent = error.message;
+    elements.oauthLogin.disabled = false;
+    elements.oauthLogin.textContent = '通过 ai-connect 登录';
   }
 });
 
@@ -1950,7 +1965,7 @@ elements.theme.addEventListener('click', () => {
 async function loadChat() {
   try {
     if (state.role === 'guest' || state.shareToken) {
-      applyRole('guest');
+      applyRole('guest', state.username);
       const sessions = await requestJson('/api/sessions');
       showChat();
       state.sessions = sessions;
@@ -2000,6 +2015,8 @@ async function initialize() {
     state.authToken = '';
     localStorage.setItem('taiwei_share_token', shared);
     localStorage.removeItem('taiwei-token');
+    localStorage.removeItem('taiwei-username');
+    state.username = '';
     applyRole('guest');
     const clean = new URL(location.href); clean.searchParams.delete('share'); history.replaceState({}, '', clean);
   }

@@ -106,9 +106,17 @@ Add password login to the web gateway (it currently binds 0.0.0.0 with no auth �
 ## Gateway Sharing and Guest Roles (implemented)
 
 - Gateway identities are `admin` (full access) or `guest` (chat and guest-scoped sessions only).
-- Guests enter through an enabled random share token or through a username/password account in `config.guests`; both modes use the same authorization policy.
+- Guests enter through ai-connect OAuth2 or an enabled random share token; both modes use the same authorization policy.
 - Guest API access is limited to chat and session CRUD. Management endpoints return `403`.
 - Persistent login sessions record their role. Older session records without a role are treated as administrators for compatibility.
+
+## Gateway OAuth Login (implemented)
+
+- Local username/password login is administrator-only. Ordinary users select **普通用户登录** and authenticate through the configured ai-connect OAuth2 provider; taiwei does not maintain guest account passwords or a `config.guests` list.
+- `oauth` configuration contains `enabled`, `providerBaseUrl`, `clientId`, `clientSecret`, and `redirectUri`. An empty redirect URI is computed as `http://<request-host>/api/oauth/callback`; `OAUTH_TAIWEI_SECRET` and `OAUTH_TAIWEI_REDIRECT` provide environment overrides.
+- The browser creates a random state and registers it through `POST /api/oauth/start`. States are held in memory for ten minutes and consumed exactly once by the public `GET /api/oauth/callback` route.
+- The callback exchanges the code at ai-connect, fetches `/api/oauth/userinfo`, and stores a seven-day sliding `guest` session in `~/.taiwei/gateway-sessions.json`. The ai-connect username determines the sanitized `guest-<username>` memory/session directory.
+- Share-link guest entry remains independent of OAuth and continues to use `guest-<share-token-prefix>` storage.
 
 ## Core Requirements
 

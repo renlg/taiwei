@@ -62,6 +62,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 .login-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 14px 0; padding: 4px; border-radius: 10px; background: var(--surface-soft); }
 .login-tab { padding: 8px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
 .login-tab.active { color: var(--text); background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+.oauth-login-panel { padding: 18px 0 0; }
+.oauth-login-panel p { margin: 0 0 15px; color: var(--muted); text-align: center; font-size: 12px; line-height: 1.55; }
 .guest-mode-label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
 .guest-mode-label b { padding: 3px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 10px; }
 .guest-only { display: none !important; }
@@ -161,12 +163,9 @@ body.guest-mode .admin-only { display: none !important; }
 .hook-test-result { min-height: 0; max-height: 150px; margin: 8px 0 0; padding: 0; overflow: auto; color: var(--faint); background: transparent; font: 10.5px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
 .hook-test-result:empty { display: none; }
 .settings-explainer { margin: 0 0 12px; color: var(--muted); font-size: 11px; }
-.share-actions, .share-link-row, .guest-create-row { display: flex; gap: 8px; margin: 9px 0; }
-.share-link-row input, .guest-create-row input { min-width: 0; flex: 1; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); background: var(--bg); }
+.share-actions, .share-link-row { display: flex; gap: 8px; margin: 9px 0; }
+.share-link-row input { min-width: 0; flex: 1; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); background: var(--bg); }
 .share-settings h3 { margin: 18px 0 8px; font-size: 12px; }
-.guest-account-list { display: grid; gap: 6px; }
-.guest-account { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); font-size: 11px; }
-.guest-account small { color: var(--faint); }
 
 .management-card { width: min(900px, calc(100vw - 28px)); min-height: min(610px, calc(100dvh - 32px)); display: flex; flex-direction: column; overflow: hidden; }
 .management-error { min-height: 18px; margin: -8px 0 8px; color: var(--danger); font-size: 11px; }

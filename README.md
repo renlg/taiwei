@@ -52,12 +52,18 @@ Edit `~/.taiwei/config.json`, or set environment variables:
     "username": "admin",
     "password": ""
   },
+  "oauth": {
+    "enabled": false,
+    "providerBaseUrl": "",
+    "clientId": "taiwei",
+    "clientSecret": "taiwei-secret-2026",
+    "redirectUri": ""
+  },
   "share": {
     "enabled": false,
     "token": "",
     "createdAt": ""
   },
-  "guests": [],
   "workspace": {
     "dir": "~/workspace"
   },
@@ -71,7 +77,7 @@ Edit `~/.taiwei/config.json`, or set environment variables:
 }
 ```
 
-`TAIWEI_API_KEY`, `TAIWEI_BASE_URL`, `TAIWEI_MODEL`, and `TAIWEI_AUTH_PASSWORD` override the corresponding file values. `TAIWEI_HOME` can override the state directory (useful for isolated environments).
+`TAIWEI_API_KEY`, `TAIWEI_BASE_URL`, `TAIWEI_MODEL`, and `TAIWEI_AUTH_PASSWORD` override the corresponding file values. `OAUTH_TAIWEI_SECRET` overrides `oauth.clientSecret`, and `OAUTH_TAIWEI_REDIRECT` overrides `oauth.redirectUri`. `TAIWEI_HOME` can override the state directory (useful for isolated environments).
 
 The optional `models` array is the user-curated candidate list shown by the REPL and web gateway. taiwei never fetches the provider's upstream model list. Duplicate names are removed while preserving order; when `models` is absent or empty, only the current model is shown.
 
@@ -190,13 +196,40 @@ Authentication is opt-in. It is strongly recommended whenever the gateway binds 
 
 On config load/save, taiwei replaces a non-empty plaintext password with a salted scrypt value in the form `scrypt$<saltHex>$<hashHex>`. Existing plaintext configurations migrate automatically at startup or after their first successful login; login accepts both formats during migration. You may leave `auth.password` empty in the file and supply the plaintext `TAIWEI_AUTH_PASSWORD` only in the environment when starting the gateway. If authentication is enabled and neither source provides a password, `taiwei serve` refuses to start with setup instructions.
 
-Open the gateway and sign in through the login screen. Successful login creates a seven-day sliding session in `~/.taiwei/gateway-sessions.json`; the browser keeps both an HttpOnly cookie and a bearer token, and gateway restarts preserve active logins. Login lock state is persisted separately in `~/.taiwei/login-locks.json`: five failures for the same account and IP within a sliding ten-minute window trigger a ten-minute cooldown, ten cumulative failures permanently lock that account/IP pair, and ten failures across any accounts from one IP within a sliding ten-minute window lock the IP for ten minutes. A successful login resets the matching account/IP counters. Click the username in the top-right corner and choose **退出登录 / Logout** to invalidate the current token and return to login.
+Open the gateway and use **管理员登录** for the local administrator account. Successful login creates a seven-day sliding session in `~/.taiwei/gateway-sessions.json`; the browser keeps both an HttpOnly cookie and a bearer token, and gateway restarts preserve active logins. Login lock state is persisted separately in `~/.taiwei/login-locks.json`: five failures for the same account and IP within a sliding ten-minute window trigger a ten-minute cooldown, ten cumulative failures permanently lock that account/IP pair, and ten failures across any accounts from one IP within a sliding ten-minute window lock the IP for ten minutes. A successful login resets the matching account/IP counters. Click the username in the top-right corner and choose **退出登录 / Logout** to invalidate the current token and return to login.
 
 #### Sharing and ordinary users
 
-Administrators can open **设置 → 分享与普通用户** to rotate a share link or create username/password accounts. A share link carries a random 32-hex-character credential in `?share=...`; ordinary users instead choose **普通用户登录** and enter their account credentials. Both entry modes create the same guest role. Guest sessions may use chat and their own history only; all settings, model, skill, knowledge, MCP, tool, memory, share, and account-management APIs return `403 forbidden`.
+Ordinary users authenticate through ai-connect OAuth2; taiwei no longer stores or manages local guest username/password accounts. Configure the identity provider in `~/.taiwei/config.json`:
 
-Each ordinary user stores core memory under `~/.taiwei/guests/guest-<username>/memory.md`; a share credential uses `~/.taiwei/guests/guest-<token-prefix>/memory.md`. These files are isolated from the administrator and other guests. Guests can retrieve the administrator-managed knowledge and extended-memory RAG index but cannot modify it. Disabling sharing immediately invalidates the current share credential. Guest account and administrator passwords are stored as salted scrypt hashes when persisted.
+```json
+{
+  "oauth": {
+    "enabled": true,
+    "providerBaseUrl": "http://101.37.19.62",
+    "clientId": "taiwei",
+    "clientSecret": "taiwei-secret-2026",
+    "redirectUri": ""
+  }
+}
+```
+
+When `redirectUri` is empty, taiwei computes `http://<request-host>/api/oauth/callback`; set it explicitly, or use `OAUTH_TAIWEI_REDIRECT`, when taiwei is reached through a proxy, HTTPS, or a different public hostname. `OAUTH_TAIWEI_SECRET` is the recommended way to provide a non-default client secret. In the login screen choose **普通用户登录 → 通过 ai-connect 登录**. The browser registers a ten-minute OAuth state, redirects to ai-connect, and returns to taiwei, which exchanges the authorization code, reads the ai-connect username, and creates a durable seven-day sliding guest session.
+
+To exercise the complete flow against the real relay at `http://101.37.19.62` from the same machine as the browser:
+
+```bash
+# config.json: oauth.enabled=true and oauth.providerBaseUrl="http://101.37.19.62"
+OAUTH_TAIWEI_SECRET='taiwei-secret-2026' \
+OAUTH_TAIWEI_REDIRECT='http://127.0.0.1:8688/api/oauth/callback' \
+./bin/taiwei serve
+```
+
+Open `http://127.0.0.1:8688`, select **普通用户登录**, click **通过 ai-connect 登录**, sign in on ai-connect, and confirm that the browser returns directly to the chat page under the ai-connect username. If another device opens taiwei, replace `127.0.0.1` with the taiwei host that device can reach and ensure ai-connect accepts that exact callback URI.
+
+Administrators can still open **设置 → 分享** to rotate a share link. A share link carries a random 32-hex-character credential in `?share=...`; OAuth users and share-link visitors both receive the guest role. Guest sessions may use chat and their own history only; all settings, model, skill, knowledge, MCP, tool, memory, and share APIs return `403 forbidden`.
+
+Each OAuth user stores core memory under a sanitized `~/.taiwei/guests/guest-<ai-connect-username>/memory.md`; a share credential uses `~/.taiwei/guests/guest-<token-prefix>/memory.md`. These files are isolated from the administrator and other guests. Guests can retrieve the administrator-managed knowledge and extended-memory RAG index but cannot modify it. Disabling sharing immediately invalidates the current share credential. The administrator password remains stored as a salted scrypt hash when persisted.
 
 ## State and extensions
 

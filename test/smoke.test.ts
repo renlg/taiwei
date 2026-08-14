@@ -33,9 +33,13 @@ test('config initializes with defaults and honors environment overrides', async 
   const oldHome = process.env.TAIWEI_HOME;
   const oldModel = process.env.TAIWEI_MODEL;
   const oldAuthPassword = process.env.TAIWEI_AUTH_PASSWORD;
+  const oldOauthSecret = process.env.OAUTH_TAIWEI_SECRET;
+  const oldOauthRedirect = process.env.OAUTH_TAIWEI_REDIRECT;
   process.env.TAIWEI_HOME = directory;
   process.env.TAIWEI_MODEL = 'test-model';
   process.env.TAIWEI_AUTH_PASSWORD = 'environment-secret';
+  process.env.OAUTH_TAIWEI_SECRET = 'oauth-environment-secret';
+  process.env.OAUTH_TAIWEI_REDIRECT = 'http://localhost:9000/api/oauth/callback';
   try {
     const config = await loadConfig();
     assert.equal(config.model, 'test-model');
@@ -51,6 +55,10 @@ test('config initializes with defaults and honors environment overrides', async 
     assert.equal(config.auth.enabled, false);
     assert.equal(config.auth.username, 'admin');
     assert.equal(config.auth.password, 'environment-secret');
+    assert.equal(config.oauth.enabled, false);
+    assert.equal(config.oauth.clientId, 'taiwei');
+    assert.equal(config.oauth.clientSecret, 'oauth-environment-secret');
+    assert.equal(config.oauth.redirectUri, 'http://localhost:9000/api/oauth/callback');
     assert.equal(config.workspace.dir, '~/workspace');
     assert.equal(resolveWorkspaceDir(config), join(homedir(), 'workspace'));
     assert.equal(config.security.enabled, true);
@@ -59,6 +67,8 @@ test('config initializes with defaults and honors environment overrides', async 
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
     if (oldModel === undefined) delete process.env.TAIWEI_MODEL; else process.env.TAIWEI_MODEL = oldModel;
     if (oldAuthPassword === undefined) delete process.env.TAIWEI_AUTH_PASSWORD; else process.env.TAIWEI_AUTH_PASSWORD = oldAuthPassword;
+    if (oldOauthSecret === undefined) delete process.env.OAUTH_TAIWEI_SECRET; else process.env.OAUTH_TAIWEI_SECRET = oldOauthSecret;
+    if (oldOauthRedirect === undefined) delete process.env.OAUTH_TAIWEI_REDIRECT; else process.env.OAUTH_TAIWEI_REDIRECT = oldOauthRedirect;
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -93,6 +103,7 @@ test('config load migrates a stored plaintext password without persisting env ov
       model: 'stored-model',
       memoryFlush: false,
       auth: { enabled: true, username: 'admin', password: 'legacy secret' },
+      guests: [{ username: 'legacy', password: 'obsolete', createdAt: new Date().toISOString() }],
     }));
     const config = await loadConfig();
     const stored = JSON.parse(await readFile(join(directory, 'config.json'), 'utf8')) as TaiweiConfig;
@@ -101,6 +112,7 @@ test('config load migrates a stored plaintext password without persisting env ov
     assert.equal(stored.model, 'stored-model');
     assert.ok(isScryptPassword(stored.auth.password));
     assert.ok(verifyPassword('legacy secret', stored.auth.password));
+    assert.equal('guests' in stored, false);
   } finally {
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
     if (oldModel === undefined) delete process.env.TAIWEI_MODEL; else process.env.TAIWEI_MODEL = oldModel;

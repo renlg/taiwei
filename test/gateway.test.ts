@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import test from 'node:test';
 import type { AgentEvent } from '../src/agent/loop.js';
 import { AuthSessionStore } from '../src/gateway/auth.js';
@@ -158,7 +159,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=16/);
+    assert.match(pageBody, /logo\.png\?v=17/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -767,20 +768,42 @@ test('gateway login returns 429 after five failed account and IP attempts', asyn
   }
 });
 
-test('share and ordinary guest credentials are chat-only and share disable revokes access', async () => {
+test('ai-connect OAuth guests are chat-only, legacy guest login is removed, and share access still works', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-share-guest-test-'));
   const previousHome = process.env.TAIWEI_HOME;
   process.env.TAIWEI_HOME = directory;
+  let tokenRequestBody = '';
+  let userinfoAuthorization = '';
+  const provider = createServer(async (request, response) => {
+    if (request.method === 'POST' && request.url === '/api/oauth/token') {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      tokenRequestBody = Buffer.concat(chunks).toString('utf8');
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ access_token: 'provider-access-token', token_type: 'Bearer', expires_in: 3600, username: 'alice' }));
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/api/oauth/userinfo') {
+      userinfoAuthorization = request.headers.authorization ?? '';
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ username: 'Alice.Example' }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const providerPort = await listenGateway(provider, '127.0.0.1', 0);
   const config = structuredClone(DEFAULT_CONFIG);
   config.auth = { enabled: true, username: 'admin', password: 'admin-secret' };
-  config.guests = [{ username: 'alice', password: 'guest-secret', createdAt: new Date().toISOString() }];
+  config.oauth = { ...config.oauth, enabled: true, providerBaseUrl: `http://127.0.0.1:${providerPort}` };
+  const legacyConfig = { ...config, guests: [{ username: 'legacy', password: 'guest-secret', createdAt: new Date().toISOString() }] };
   const configState = {
-    load: async () => structuredClone(config),
-    save: async (next: TaiweiConfig) => { Object.assign(config, structuredClone(next)); },
+    load: async () => structuredClone(legacyConfig),
+    save: async (next: TaiweiConfig) => { Object.assign(config, structuredClone(next)); Object.assign(legacyConfig, structuredClone(next)); },
   };
+  const authFile = join(directory, 'gateway-sessions.json');
   const server = createGatewayServer({
     chat: new MockChat(), auth: config.auth, configState,
-    authSessions: new AuthSessionStore(join(directory, 'gateway-sessions.json')),
+    authSessions: new AuthSessionStore(authFile),
     loginLocks: new LoginLockStore(join(directory, 'login-locks.json')), log: () => {},
   });
   const port = await listenGateway(server, '127.0.0.1', 0);
@@ -794,14 +817,41 @@ test('share and ordinary guest credentials are chat-only and share disable revok
     assert.equal(admin.role, 'admin');
     const adminHeaders = { authorization: `Bearer ${admin.token}` };
 
-    const createdGuest = await fetch(`${baseUrl}/api/guests`, {
-      method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ username: 'bob', password: 'pass1234' }),
+    assert.equal((await login('legacy', 'guest-secret')).status, 401);
+    assert.equal((await fetch(`${baseUrl}/api/guests`, { headers: adminHeaders })).status, 404);
+
+    const badState = await fetch(`${baseUrl}/api/oauth/callback?code=valid&state=missing`);
+    assert.equal(badState.status, 400);
+
+    const oauthState = '0123456789abcdef0123456789abcdef';
+    const oauthStart = await fetch(`${baseUrl}/api/oauth/start`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: oauthState }),
     });
-    assert.equal(createdGuest.status, 201);
-    assert.equal((await fetch(`${baseUrl}/api/guests`, {
-      method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ username: 'bob', password: 'pass1234' }),
-    })).status, 409);
-    assert.equal((await fetch(`${baseUrl}/api/guests?username=bob`, { method: 'DELETE', headers: adminHeaders })).status, 200);
+    assert.equal(oauthStart.status, 200);
+    const { authorizeUrl } = await oauthStart.json() as { authorizeUrl: string };
+    const authorization = new URL(authorizeUrl);
+    assert.equal(authorization.pathname, '/api/oauth/authorize');
+    assert.equal(authorization.searchParams.get('client_id'), 'taiwei');
+    assert.equal(authorization.searchParams.get('redirect_uri'), `${baseUrl}/api/oauth/callback`);
+    assert.equal(authorization.searchParams.get('state'), oauthState);
+
+    const callback = await fetch(`${baseUrl}/api/oauth/callback?code=valid&state=${oauthState}`);
+    assert.equal(callback.status, 200);
+    assert.match(callback.headers.get('content-type') ?? '', /^text\/html/);
+    const callbackHtml = await callback.text();
+    assert.match(callbackHtml, /localStorage\.setItem\('taiwei-token'/);
+    assert.match(callbackHtml, /Alice\.Example/);
+    const oauthToken = callbackHtml.match(/localStorage\.setItem\('taiwei-token',"([a-f0-9]{64})"\)/)?.[1];
+    assert.ok(oauthToken);
+    assert.match(tokenRequestBody, /client_id=taiwei/);
+    assert.match(tokenRequestBody, /client_secret=taiwei-secret-2026/);
+    assert.match(tokenRequestBody, /code=valid/);
+    assert.equal(userinfoAuthorization, 'Bearer provider-access-token');
+    const persistedSessions = JSON.parse(await readFile(authFile, 'utf8')) as Record<string, { username: string; role: string }>;
+    assert.deepEqual({ username: persistedSessions[oauthToken].username, role: persistedSessions[oauthToken].role }, { username: 'Alice.Example', role: 'guest' });
+    const oauthHeaders = { authorization: `Bearer ${oauthToken}` };
+    assert.equal((await fetch(`${baseUrl}/api/sessions`, { headers: oauthHeaders })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/api/memory`, { headers: oauthHeaders })).status, 403);
 
     const shareResponse = await fetch(`${baseUrl}/api/share`, { method: 'POST', headers: adminHeaders });
     const share = await shareResponse.json() as { token: string };
@@ -818,21 +868,17 @@ test('share and ordinary guest credentials are chat-only and share disable revok
       assert.deepEqual(await denied.json(), { error: 'forbidden' });
     }
 
-    const guestLogin = await login('alice', 'guest-secret');
-    const guest = await guestLogin.json() as { token: string; role: string; username: string };
-    assert.deepEqual({ role: guest.role, username: guest.username }, { role: 'guest', username: 'alice' });
-    const guestHeaders = { authorization: `Bearer ${guest.token}` };
-    const guestSession = await (await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: guestHeaders })).json() as { id: string };
+    const guestSession = await (await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: oauthHeaders })).json() as { id: string };
     assert.equal((await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ message: 'hello', sessionId: guestSession.id }),
+      method: 'POST', headers: { ...oauthHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ message: 'hello', sessionId: guestSession.id }),
     })).status, 200);
-    assert.equal((await fetch(`${baseUrl}/api/memory`, { headers: guestHeaders })).status, 403);
-    assert.equal((await login('alice', 'wrong')).status, 401);
+    assert.ok((await stat(join(directory, 'guests', 'guest-alice-example', 'sessions', `${guestSession.id}.json`))).isFile());
 
     assert.equal((await fetch(`${baseUrl}/api/share`, { method: 'DELETE', headers: adminHeaders })).status, 200);
     assert.equal((await fetch(`${baseUrl}/api/sessions`, { headers: shareHeaders })).status, 401);
   } finally {
     await closeGateway(server);
+    await closeGateway(provider);
     if (previousHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = previousHome;
     await rm(directory, { recursive: true, force: true });
   }

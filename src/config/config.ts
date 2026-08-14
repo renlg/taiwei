@@ -39,8 +39,14 @@ export interface TaiweiConfig {
     username: string;
     password: string;
   };
+  oauth: {
+    enabled: boolean;
+    providerBaseUrl: string;
+    clientId: string;
+    clientSecret: string;
+    redirectUri: string;
+  };
   share: { enabled: boolean; token: string; createdAt: string };
-  guests: Array<{ username: string; password: string; createdAt: string }>;
   workspace: {
     dir: string;
   };
@@ -82,8 +88,14 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
     username: 'admin',
     password: '',
   },
+  oauth: {
+    enabled: false,
+    providerBaseUrl: '',
+    clientId: 'taiwei',
+    clientSecret: 'taiwei-secret-2026',
+    redirectUri: '',
+  },
   share: { enabled: false, token: '', createdAt: '' },
-  guests: [],
   workspace: {
     dir: '~/workspace',
   },
@@ -131,22 +143,23 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     }
     await saveConfig(DEFAULT_CONFIG);
   }
+  const { guests: _ignoredGuests, ...storedConfig } = stored as Partial<TaiweiConfig> & { guests?: unknown };
   const config: TaiweiConfig = {
     ...DEFAULT_CONFIG,
-    ...stored,
-    customPrompt: typeof stored.customPrompt === 'string' ? stored.customPrompt : DEFAULT_CONFIG.customPrompt,
-    compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...stored } as TaiweiConfig),
-    memoryFlush: typeof stored.memoryFlush === 'boolean' ? stored.memoryFlush : DEFAULT_CONFIG.memoryFlush,
-    hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
-    hooks: normalizeHooks(stored.hooks),
-    autoLoadSkills: stored.autoLoadSkills ?? DEFAULT_CONFIG.autoLoadSkills,
-    skillsDisabled: normalizeStringList(stored.skillsDisabled),
-    tools: normalizeToolSettings(stored.tools),
-    gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
-    auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
-    share: { ...DEFAULT_CONFIG.share, ...stored.share },
-    guests: normalizeGuests(stored.guests),
-    workspace: { ...DEFAULT_CONFIG.workspace, ...stored.workspace },
+    ...storedConfig,
+    customPrompt: typeof storedConfig.customPrompt === 'string' ? storedConfig.customPrompt : DEFAULT_CONFIG.customPrompt,
+    compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...storedConfig } as TaiweiConfig),
+    memoryFlush: typeof storedConfig.memoryFlush === 'boolean' ? storedConfig.memoryFlush : DEFAULT_CONFIG.memoryFlush,
+    hookTimeoutSeconds: normalizeHookTimeout(storedConfig.hookTimeoutSeconds),
+    hooks: normalizeHooks(storedConfig.hooks),
+    autoLoadSkills: storedConfig.autoLoadSkills ?? DEFAULT_CONFIG.autoLoadSkills,
+    skillsDisabled: normalizeStringList(storedConfig.skillsDisabled),
+    tools: normalizeToolSettings(storedConfig.tools),
+    gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },
+    auth: { ...DEFAULT_CONFIG.auth, ...storedConfig.auth },
+    oauth: { ...DEFAULT_CONFIG.oauth, ...storedConfig.oauth },
+    share: { ...DEFAULT_CONFIG.share, ...storedConfig.share },
+    workspace: { ...DEFAULT_CONFIG.workspace, ...storedConfig.workspace },
     security: {
       ...DEFAULT_CONFIG.security,
       ...stored.security,
@@ -168,15 +181,17 @@ export async function loadConfig(): Promise<TaiweiConfig> {
   config.baseUrl = process.env.TAIWEI_BASE_URL ?? config.baseUrl;
   config.model = process.env.TAIWEI_MODEL ?? config.model;
   if (process.env.TAIWEI_AUTH_PASSWORD !== undefined) config.auth.password = process.env.TAIWEI_AUTH_PASSWORD;
+  if (process.env.OAUTH_TAIWEI_SECRET !== undefined) config.oauth.clientSecret = process.env.OAUTH_TAIWEI_SECRET;
+  if (process.env.OAUTH_TAIWEI_REDIRECT !== undefined) config.oauth.redirectUri = process.env.OAUTH_TAIWEI_REDIRECT;
   return config;
 }
 
 export async function saveConfig(config: TaiweiConfig): Promise<void> {
   const paths = await ensureTaiweiHome();
+  const { guests: _ignoredGuests, ...configWithoutGuests } = config as TaiweiConfig & { guests?: unknown };
   const stored = {
-    ...config,
+    ...configWithoutGuests,
     auth: { ...config.auth, password: passwordForStorage(config.auth.password) },
-    guests: config.guests.map((guest) => ({ ...guest, password: passwordForStorage(guest.password) })),
   };
   await writeFile(paths.config, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
 }
@@ -185,21 +200,22 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
   const paths = await ensureTaiweiHome();
   try {
     const stored = JSON.parse(await readFile(paths.config, 'utf8')) as Partial<TaiweiConfig>;
-    const config = {
+    const { guests: _ignoredGuests, ...storedConfig } = stored as Partial<TaiweiConfig> & { guests?: unknown };
+    const config: TaiweiConfig = {
       ...DEFAULT_CONFIG,
-      ...stored,
-      customPrompt: typeof stored.customPrompt === 'string' ? stored.customPrompt : DEFAULT_CONFIG.customPrompt,
-      compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...stored } as TaiweiConfig),
-      memoryFlush: typeof stored.memoryFlush === 'boolean' ? stored.memoryFlush : DEFAULT_CONFIG.memoryFlush,
-      hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
-      hooks: normalizeHooks(stored.hooks),
-      skillsDisabled: normalizeStringList(stored.skillsDisabled),
-      tools: normalizeToolSettings(stored.tools),
-      gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
-      auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
-      share: { ...DEFAULT_CONFIG.share, ...stored.share },
-      guests: normalizeGuests(stored.guests),
-      workspace: { ...DEFAULT_CONFIG.workspace, ...stored.workspace },
+      ...storedConfig,
+      customPrompt: typeof storedConfig.customPrompt === 'string' ? storedConfig.customPrompt : DEFAULT_CONFIG.customPrompt,
+      compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...storedConfig } as TaiweiConfig),
+      memoryFlush: typeof storedConfig.memoryFlush === 'boolean' ? storedConfig.memoryFlush : DEFAULT_CONFIG.memoryFlush,
+      hookTimeoutSeconds: normalizeHookTimeout(storedConfig.hookTimeoutSeconds),
+      hooks: normalizeHooks(storedConfig.hooks),
+      skillsDisabled: normalizeStringList(storedConfig.skillsDisabled),
+      tools: normalizeToolSettings(storedConfig.tools),
+      gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },
+      auth: { ...DEFAULT_CONFIG.auth, ...storedConfig.auth },
+      oauth: { ...DEFAULT_CONFIG.oauth, ...storedConfig.oauth },
+      share: { ...DEFAULT_CONFIG.share, ...storedConfig.share },
+      workspace: { ...DEFAULT_CONFIG.workspace, ...storedConfig.workspace },
       security: {
         ...DEFAULT_CONFIG.security,
         ...stored.security,
@@ -218,8 +234,8 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       hooks: normalizeHooks(),
       gateway: { ...DEFAULT_CONFIG.gateway },
       auth: { ...DEFAULT_CONFIG.auth },
+      oauth: { ...DEFAULT_CONFIG.oauth },
       share: { ...DEFAULT_CONFIG.share },
-      guests: [],
       workspace: { ...DEFAULT_CONFIG.workspace },
       security: { ...DEFAULT_CONFIG.security, patterns: [], approvedPatterns: [] },
     };
@@ -250,17 +266,6 @@ function normalizeToolSettings(value: unknown): Record<string, ToolSettings> | u
     if (!name.trim() || !settings || typeof settings !== 'object' || Array.isArray(settings)) return [];
     return [[name, { ...settings as ToolSettings }]];
   }));
-}
-
-function normalizeGuests(value: unknown): TaiweiConfig['guests'] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const guest = item as Record<string, unknown>;
-    return typeof guest.username === 'string' && typeof guest.password === 'string'
-      ? [{ username: guest.username, password: guest.password, createdAt: typeof guest.createdAt === 'string' ? guest.createdAt : new Date().toISOString() }]
-      : [];
-  });
 }
 
 export function validateGatewayAuth<T extends Pick<TaiweiConfig, 'auth'>>(config: T): void {
