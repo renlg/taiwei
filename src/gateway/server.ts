@@ -70,7 +70,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '15';
+const STATIC_ASSET_VERSION = '16';
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
 const MAX_MEMORY_LENGTH = 50_000;
 

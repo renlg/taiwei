@@ -11,6 +11,7 @@ const elements = {
   loginTabs: document.querySelectorAll('[data-login-role]'),
   appShell: $('#app-shell'),
   logout: $('#logout'),
+  guestLogout: $('#guest-logout'),
   userMenu: $('#user-menu'),
   userTrigger: $('#user-trigger'),
   userPopover: $('#user-popover'),
@@ -1919,7 +1920,7 @@ elements.loginForm.addEventListener('submit', async (event) => {
   }
 });
 
-elements.logout.addEventListener('click', async () => {
+async function logout() {
   if (state.controller) {
     await rejectPendingConfirmations();
     state.controller.abort();
@@ -1929,7 +1930,10 @@ elements.logout.addEventListener('click', async () => {
   state.sessions = [];
   state.current = null;
   showLogin();
-});
+}
+
+elements.logout.addEventListener('click', logout);
+elements.guestLogout.addEventListener('click', logout);
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
