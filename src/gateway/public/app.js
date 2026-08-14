@@ -46,6 +46,14 @@ const elements = {
   settingsClose: $('#settings-close'),
   settingsError: $('#settings-error'),
   settingsReset: $('#settings-reset'),
+  customPromptSettings: $('.custom-prompt-settings'),
+  customPromptToggle: $('#custom-prompt-toggle'),
+  customPromptStatus: $('#custom-prompt-status'),
+  customPromptInput: $('#custom-prompt-input'),
+  customPromptCount: $('#custom-prompt-count'),
+  customPromptFeedback: $('#custom-prompt-feedback'),
+  customPromptSave: $('#custom-prompt-save'),
+  customPromptClear: $('#custom-prompt-clear'),
   skillsOpen: $('#skills-open'),
   skillsModal: $('#skills-modal'),
   skillsClose: $('#skills-close'),
@@ -147,6 +155,8 @@ const state = {
 const WORKSPACE_OPEN_STORAGE_KEY = 'taiwei-settings-workspace-open';
 const SECURITY_OPEN_STORAGE_KEY = 'taiwei-settings-security-open';
 const HOOKS_OPEN_STORAGE_KEY = 'taiwei-settings-hooks-open';
+const CUSTOM_PROMPT_OPEN_STORAGE_KEY = 'taiwei-settings-customprompt-open';
+const MAX_CUSTOM_PROMPT_LENGTH = 20000;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -266,6 +276,25 @@ function updateHooksStatus() {
   elements.hooksStatus.textContent = count ? `${count} 条命令` : '未配置';
 }
 
+function updateCustomPromptStatus() {
+  const value = elements.customPromptInput.value;
+  const words = value.trim() ? value.trim().split(/\s+/u).length : 0;
+  elements.customPromptStatus.textContent = value.trim() ? `已设置 · ${value.length} 字` : '未配置';
+  elements.customPromptCount.textContent = `${value.length} / ${MAX_CUSTOM_PROMPT_LENGTH} 字 · ${words} 词`;
+}
+
+function renderCustomPrompt({ customPrompt }) {
+  elements.customPromptInput.value = customPrompt;
+  elements.customPromptFeedback.textContent = '';
+  updateCustomPromptStatus();
+}
+
+async function loadCustomPrompt() {
+  const result = await requestJson('/api/settings/custom-prompt');
+  renderCustomPrompt(result);
+  return result;
+}
+
 function setSettingsCollapseOpen(section, toggle, storageKey, open, remember = false) {
   section.classList.toggle('is-open', open);
   toggle.setAttribute('aria-expanded', String(open));
@@ -302,7 +331,8 @@ async function loadSettings() {
 async function openSettings() {
   elements.settingsError.textContent = '';
   try {
-    await loadSettings();
+    await Promise.all([loadSettings(), loadCustomPrompt()]);
+    setSettingsCollapseOpen(elements.customPromptSettings, elements.customPromptToggle, CUSTOM_PROMPT_OPEN_STORAGE_KEY, localStorage.getItem(CUSTOM_PROMPT_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.workspaceSettings, elements.workspaceToggle, WORKSPACE_OPEN_STORAGE_KEY, localStorage.getItem(WORKSPACE_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.securitySettings, elements.securityToggle, SECURITY_OPEN_STORAGE_KEY, localStorage.getItem(SECURITY_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.hooksSettings, elements.hooksToggle, HOOKS_OPEN_STORAGE_KEY, localStorage.getItem(HOOKS_OPEN_STORAGE_KEY) === 'true');
@@ -912,7 +942,7 @@ function addMessage(message, options = {}) {
     avatar.className = 'avatar';
     const avatarImg = document.createElement('img');
     avatarImg.className = 'avatar-img';
-    avatarImg.src = '/logo.png?v={{ASSET_VERSION}}';
+    avatarImg.src = '/logo.png?v=12';
     avatarImg.alt = 'taiwei';
     avatar.append(avatarImg);
     row.append(avatar);
@@ -1499,6 +1529,9 @@ elements.knowledgeSearchForm.addEventListener('submit', async (event) => {
   finally { button.disabled = false; button.textContent = '搜索'; }
 });
 elements.patternAdd.addEventListener('click', () => addPatternRow());
+elements.customPromptToggle.addEventListener('click', () => {
+  setSettingsCollapseOpen(elements.customPromptSettings, elements.customPromptToggle, CUSTOM_PROMPT_OPEN_STORAGE_KEY, elements.customPromptToggle.getAttribute('aria-expanded') !== 'true', true);
+});
 elements.workspaceToggle.addEventListener('click', () => {
   setSettingsCollapseOpen(elements.workspaceSettings, elements.workspaceToggle, WORKSPACE_OPEN_STORAGE_KEY, elements.workspaceToggle.getAttribute('aria-expanded') !== 'true', true);
 });
@@ -1509,6 +1542,46 @@ elements.hooksToggle.addEventListener('click', () => {
   setSettingsCollapseOpen(elements.hooksSettings, elements.hooksToggle, HOOKS_OPEN_STORAGE_KEY, elements.hooksToggle.getAttribute('aria-expanded') !== 'true', true);
 });
 elements.workspaceInput.addEventListener('input', updateWorkspaceStatus);
+elements.customPromptInput.addEventListener('input', () => {
+  elements.customPromptFeedback.textContent = '';
+  updateCustomPromptStatus();
+});
+elements.customPromptSave.addEventListener('click', async () => {
+  elements.settingsError.textContent = '';
+  elements.customPromptFeedback.textContent = '';
+  elements.customPromptSave.disabled = true;
+  try {
+    const result = await requestJson('/api/settings/custom-prompt', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ customPrompt: elements.customPromptInput.value }),
+    });
+    renderCustomPrompt(result);
+    elements.customPromptFeedback.textContent = '已保存';
+    showToast('自定义提示词已保存');
+  } catch (error) { elements.settingsError.textContent = error.message; }
+  finally { elements.customPromptSave.disabled = false; }
+});
+elements.customPromptClear.addEventListener('click', async () => {
+  const previousValue = elements.customPromptInput.value;
+  elements.customPromptInput.value = '';
+  updateCustomPromptStatus();
+  elements.customPromptFeedback.textContent = '';
+  elements.customPromptClear.disabled = true;
+  try {
+    const result = await requestJson('/api/settings/custom-prompt', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ customPrompt: '' }),
+    });
+    renderCustomPrompt(result);
+    elements.customPromptFeedback.textContent = '已清除';
+    showToast('自定义提示词已清除');
+  } catch (error) {
+    elements.customPromptInput.value = previousValue;
+    updateCustomPromptStatus();
+    elements.settingsError.textContent = error.message;
+  }
+  finally { elements.customPromptClear.disabled = false; }
+});
 elements.securityEnabled.addEventListener('change', updateSecurityStatus);
 elements.patternList.addEventListener('input', updateSecurityStatus);
 elements.hookFields.addEventListener('input', updateHooksStatus);

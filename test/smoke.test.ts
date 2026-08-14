@@ -45,6 +45,7 @@ test('config initializes with defaults and honors environment overrides', async 
     assert.equal(config.compressThreshold, 0.7);
     assert.equal(resolveCompressThreshold({ ...config, compressThreshold: 0 }), 0.7);
     assert.equal(config.maxTurns, 50);
+    assert.equal(config.customPrompt, '');
     assert.equal(config.autoLoadSkills, true);
     assert.equal(config.auth.enabled, false);
     assert.equal(config.auth.username, 'admin');
@@ -64,12 +65,20 @@ test('config initializes with defaults and honors environment overrides', async 
 test('gateway auth validation rejects an enabled empty password', () => {
   assert.throws(() => validateGatewayAuth({
     model: 'test', embedModel: 'embeddings', baseUrl: 'http://localhost', apiKey: '', maxTurns: 1, requestTimeoutMs: 1,
+    customPrompt: '',
     hookTimeoutSeconds: 10, hooks: emptyHooks(),
     gateway: { host: '127.0.0.1', port: 0 },
     auth: { enabled: true, username: 'admin', password: '' },
     workspace: { dir: '~/workspace' },
     security: { enabled: true, patterns: [], timeoutSeconds: 60, remember: 'off', approvedPatterns: [] },
   }), /auth\.password.*TAIWEI_AUTH_PASSWORD/);
+});
+
+test('agent context includes non-empty custom instructions as a distinct prompt section', async () => {
+  const context = new AgentContext(new MemoryStore(), new SkillLoader());
+  const prompt = await context.systemPrompt('/tmp/workspace', '  Always answer in concise bullet points.  ');
+  assert.match(prompt, /Custom instructions \(from settings\):\nAlways answer in concise bullet points\./);
+  assert.doesNotMatch(await context.systemPrompt('/tmp/workspace', '   '), /Custom instructions/);
 });
 
 test('config load migrates a stored plaintext password without persisting env overrides', async () => {

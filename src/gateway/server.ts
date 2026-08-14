@@ -67,7 +67,8 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '11';
+const STATIC_ASSET_VERSION = '12';
+const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -442,6 +443,23 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           hooks: config.hooks,
           hookTimeoutSeconds: config.hookTimeoutSeconds,
         });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/settings/custom-prompt') {
+        const config = await configState.load();
+        json(response, 200, { customPrompt: config.customPrompt });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/settings/custom-prompt') {
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Request body must be an object');
+        const { customPrompt } = body as { customPrompt?: unknown };
+        if (typeof customPrompt !== 'string') throw new HttpError(400, 'customPrompt must be a string');
+        if (customPrompt.length > MAX_CUSTOM_PROMPT_LENGTH) throw new HttpError(400, `customPrompt must be at most ${MAX_CUSTOM_PROMPT_LENGTH} characters`);
+        const config = await configState.load();
+        config.customPrompt = customPrompt;
+        await configState.save(config);
+        json(response, 200, { customPrompt: config.customPrompt });
         return;
       }
       if (method === 'POST' && pathname === '/api/settings') {

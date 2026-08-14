@@ -13,9 +13,10 @@ export class AgentContext {
 
   constructor(private readonly memory: MemoryStore, private readonly skillLoader: SkillLoader) {}
 
-  async systemPrompt(workspace?: string): Promise<string> {
+  async systemPrompt(workspace?: string, customPrompt = ''): Promise<string> {
     const sections = [BASE_PERSONA, `Current date and time: ${new Date().toString()}`];
     if (workspace) sections.push(`Current workspace (default working directory for tools): ${workspace}`);
+    if (customPrompt.trim()) sections.push(`Custom instructions (from settings):\n${customPrompt.trim()}`);
     const availableSkills = renderSkillIndex([...this.availableSkills.values()].filter((skill) => !this.skillLoader.isDisabled(skill)));
     if (availableSkills) sections.push(availableSkills);
     const activeSkills = renderSkills([...this.activeSkills.values()].filter((skill) => !this.skillLoader.isDisabled(skill)));

@@ -89,7 +89,7 @@ export async function runAgentTurn(
   for (let turn = 0; turn < config.maxTurns; turn += 1) {
     if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
     const model = options.getModel ? await options.getModel() : config.model;
-    const systemPrompt = await context.systemPrompt(options.cwd);
+    const systemPrompt = await context.systemPrompt(options.cwd, config.customPrompt);
     const lastMessage = conversation.at(-1);
     const lastMessagePreview = typeof lastMessage?.content === 'string' ? lastMessage.content.slice(0, 500) : '';
     const beforeLLM = await options.hooks?.run('beforeLLM', {

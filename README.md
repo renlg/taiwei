@@ -26,6 +26,7 @@ Edit `~/.taiwei/config.json`, or set environment variables:
   "apiKey": "",
   "maxTurns": 50,
   "requestTimeoutMs": 120000,
+  "customPrompt": "",
   "hookTimeoutSeconds": 10,
   "hooks": {
     "beforeMessage": [],
@@ -119,7 +120,7 @@ Run `/model` to list the models configured in the `models` array and mark the cu
 
 Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The polished browser UI streams answer tokens and tool activity live, supports dark and light themes, includes a model switcher and local file attachments in the message composer, and provides a sidebar for creating, switching, and deleting conversations. Stop cancels the current LLM request or tool through the same cooperative interrupt mechanism as the CLI.
 
-The subtle sidebar label shows the resolved workspace. The gear button opens settings for the workspace, lifecycle hooks, and dangerous-command policy. `GET /api/settings` reads these values and `POST /api/settings` validates and persists updates to `~/.taiwei/config.json`; both follow the normal gateway authentication policy. The Hooks section also runs a selected event's first command against a sample payload through `POST /api/hooks/test`.
+The subtle sidebar label shows the resolved workspace. The gear button opens settings for persistent custom instructions, the workspace, lifecycle hooks, and dangerous-command policy. The custom prompt is injected as a distinct system-prompt section on every gateway, REPL, one-shot, and cron turn; edits take effect on the next turn. `GET/POST /api/settings/custom-prompt` loads and saves up to 20,000 characters, while `GET/POST /api/settings` handles the other settings. All of these routes follow the normal gateway authentication policy. The Hooks section also runs a selected event's first command against a sample payload through `POST /api/hooks/test`.
 
 The sidebar skill panel can enable or disable installed skills, and the tool panel controls every built-in, MCP, and plugin tool exposed to the model. Tool state and configurable defaults are stored in `config.json`: `skillsDisabled` contains disabled skill names, while `tools.<toolName>.enabled` and schema-backed fields hold tool settings. Omitting either section keeps everything enabled. Dynamic MCP and plugin tools recover their saved state when they are registered again after a reload.
 

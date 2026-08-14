@@ -157,7 +157,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=11/);
+    assert.match(pageBody, /logo\.png\?v=12/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -493,6 +493,20 @@ test('gateway settings persist workspace/security changes and confirmation pause
     assert.equal(config.hooks.afterLLM.length, 1);
     assert.equal((await stat(workspace)).isDirectory(), true);
 
+    const customPromptSaved = await fetch(`${baseUrl}/api/settings/custom-prompt`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ customPrompt: 'Always explain command risks.' }),
+    });
+    assert.equal(customPromptSaved.status, 200);
+    assert.deepEqual(await customPromptSaved.json(), { customPrompt: 'Always explain command risks.' });
+    assert.equal(config.customPrompt, 'Always explain command risks.');
+    const customPromptLoaded = await fetch(`${baseUrl}/api/settings/custom-prompt`);
+    assert.deepEqual(await customPromptLoaded.json(), { customPrompt: 'Always explain command risks.' });
+    assert.equal((await fetch(`${baseUrl}/api/settings/custom-prompt`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ customPrompt: 42 }),
+    })).status, 400);
+
     const hookTest = await fetch(`${baseUrl}/api/hooks/test`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ event: 'afterLLM', command: config.hooks.afterLLM[0] }),
@@ -579,6 +593,7 @@ test('gateway authenticates API requests and preserves tokens across restarts', 
     assert.equal((await fetch(`${baseUrl}/api/sessions`)).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/models`)).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/settings`)).status, 401);
+    assert.equal((await fetch(`${baseUrl}/api/settings/custom-prompt`)).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/hooks/test`, { method: 'POST' })).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/confirm`, { method: 'POST' })).status, 401);
     assert.equal((await fetch(`${baseUrl}/api/upload`, { method: 'POST', headers: { 'x-file-name': 'private.txt' }, body: 'private' })).status, 401);

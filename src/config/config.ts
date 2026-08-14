@@ -23,6 +23,7 @@ export interface TaiweiConfig {
   apiKey: string;
   maxTurns: number;
   requestTimeoutMs: number;
+  customPrompt: string;
   hookTimeoutSeconds: number;
   hooks: HookCommands;
   autoLoadSkills?: boolean;
@@ -58,6 +59,7 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   apiKey: '',
   maxTurns: 50,
   requestTimeoutMs: 120_000,
+  customPrompt: '',
   hookTimeoutSeconds: 10,
   hooks: {
     beforeMessage: [],
@@ -126,6 +128,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
   const config: TaiweiConfig = {
     ...DEFAULT_CONFIG,
     ...stored,
+    customPrompt: typeof stored.customPrompt === 'string' ? stored.customPrompt : DEFAULT_CONFIG.customPrompt,
     compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...stored } as TaiweiConfig),
     hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
     hooks: normalizeHooks(stored.hooks),
@@ -175,6 +178,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
     const config = {
       ...DEFAULT_CONFIG,
       ...stored,
+      customPrompt: typeof stored.customPrompt === 'string' ? stored.customPrompt : DEFAULT_CONFIG.customPrompt,
       compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...stored } as TaiweiConfig),
       hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
       hooks: normalizeHooks(stored.hooks),

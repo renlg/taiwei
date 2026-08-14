@@ -141,6 +141,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visib
 .settings-collapse.is-open .settings-collapse-content { grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows .25s ease, visibility 0s; }
 .settings-collapse-content-inner { min-height: 0; padding: 0 14px; overflow: hidden; border-top: 1px solid transparent; transition: padding .25s ease, border-color .25s ease; }
 .settings-collapse.is-open .settings-collapse-content-inner { padding-top: 13px; padding-bottom: 14px; border-color: var(--border); }
+.custom-prompt-settings textarea { min-height: 132px; resize: vertical; line-height: 1.55; }
+.custom-prompt-meta, .custom-prompt-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.custom-prompt-meta { min-height: 24px; margin-top: 5px; }
+.custom-prompt-feedback { color: var(--success) !important; }
+.custom-prompt-actions { justify-content: flex-end; margin-top: 8px; }
 .hook-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; margin-top: 8px; }
 .hook-fields label { min-width: 0; margin-top: 4px; font: 10.5px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .hook-fields textarea { display: block; min-height: 58px; margin-top: 5px; resize: vertical; font: 10.5px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }

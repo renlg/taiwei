@@ -82,6 +82,7 @@ Requirements:
 7. Zero new npm dependencies — node:http, SSE by hand. If that is impossible for some reason, document why.
 8. Update README (usage section: how to start and open the gateway). Add a smoke test: start server on a random port, POST a mocked chat (or health check + static page 200 + SSE headers), assert streaming works, then close. `npm test` must stay green.
 9. Keep `npm run build` passing (tsc). Frontend files under `src/gateway/public/` must be copied to `dist/` (adjust tsconfig/package.json build so dist has them — e.g. a small `cp` step in the build script or resolve paths from src in dev).
+10. **Gateway settings** include a persistent custom prompt that is injected as a distinct system-prompt section on every gateway, REPL, one-shot, and cron turn; changes apply from the next turn.
 
 ## Gateway Auth (v1.2 — ADD THIS)
 

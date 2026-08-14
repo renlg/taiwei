@@ -147,7 +147,27 @@
   </div>
   <dialog class="modal settings-modal" id="settings-modal">
     <form class="modal-card settings-card" id="settings-form" method="dialog">
-      <header><div><h2>设置</h2><p>工作区、Hooks 与命令安全策略</p></div><button class="icon-button" id="settings-close" type="button" aria-label="关闭">×</button></header>
+      <header><div><h2>设置</h2><p>自定义提示词、工作区、Hooks 与命令安全策略</p></div><button class="icon-button" id="settings-close" type="button" aria-label="关闭">×</button></header>
+      <section class="settings-collapse custom-prompt-settings">
+        <button class="settings-collapse-toggle" id="custom-prompt-toggle" type="button" aria-expanded="false" aria-controls="custom-prompt-content">
+          <span class="settings-collapse-title"><span class="settings-collapse-chevron" aria-hidden="true">▸</span><span class="settings-collapse-heading">自定义提示词</span></span>
+          <small class="settings-collapse-status" id="custom-prompt-status">未配置</small>
+        </button>
+        <div class="settings-collapse-content" id="custom-prompt-content">
+          <div class="settings-collapse-content-inner">
+            <label for="custom-prompt-input">持久指令</label>
+            <textarea id="custom-prompt-input" rows="7" maxlength="20000" placeholder="给 AI 的持久指令，每次对话都会注入 system prompt"></textarea>
+            <div class="custom-prompt-meta">
+              <small id="custom-prompt-count">0 / 20000 字 · 0 词</small>
+              <small class="custom-prompt-feedback" id="custom-prompt-feedback" role="status"></small>
+            </div>
+            <div class="custom-prompt-actions">
+              <button class="secondary-button danger-button" id="custom-prompt-clear" type="button">清除</button>
+              <button class="primary-button" id="custom-prompt-save" type="button">保存提示词</button>
+            </div>
+          </div>
+        </div>
+      </section>
       <section class="settings-collapse workspace-settings">
         <button class="settings-collapse-toggle" id="workspace-toggle" type="button" aria-expanded="false" aria-controls="workspace-content">
           <span class="settings-collapse-title"><span class="settings-collapse-chevron" aria-hidden="true">▸</span><span class="settings-collapse-heading">工作区</span></span>
