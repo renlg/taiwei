@@ -59,11 +59,13 @@ export function chunkText(text: string, maxChars = 1000, overlap = 150): string[
 export async function buildIndex(embedder?: Embedder): Promise<RagIndexData> {
   const paths = await ensureTaiweiHome();
   const chunks: RagChunk[] = [];
-  for (const path of await walk(paths.knowledge)) {
-    const source = relative(paths.knowledge, path);
-    chunkText(await readFile(path, 'utf8')).forEach((text, index) => {
-      chunks.push({ id: `${source}:${index}`, source, text, tokens: tokenize(text) });
-    });
+  for (const [prefix, directory] of [['knowledge', paths.knowledge], ['memory', paths.memoryDir]] as const) {
+    for (const path of await walk(directory)) {
+      const source = `${prefix}/${relative(directory, path)}`;
+      chunkText(await readFile(path, 'utf8')).forEach((text, index) => {
+        chunks.push({ id: `${source}:${index}`, source, text, tokens: tokenize(text) });
+      });
+    }
   }
   let vectors: number[][] | undefined;
   let embedModel: string | undefined;

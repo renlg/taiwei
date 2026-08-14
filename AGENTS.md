@@ -96,6 +96,20 @@ Add password login to the web gateway (it currently binds 0.0.0.0 with no auth â
 6. **Tests**: add tests for login (wrong password 401, correct 200+token, protected route without token 401, with token 200). `npm test` must stay green (existing 7 + new).
 7. Update README (auth section: enable + how to log in). Commit in logical chunks with clear English messages.
 
+## Layered Memory (implemented)
+
+- Tier 1 core memory is `~/.taiwei/memory.md` and its newest 2,000 characters are injected every turn.
+- Tier 2 extended memory is `~/.taiwei/memory/*.md`. It is indexed together with `knowledge/` in the shared BM25/vector RAG index and retrieved on demand rather than injected unconditionally.
+- Tier 3 conversation history remains `history.db` plus `session_search`.
+- Gateway guests receive a private Tier 1 file under `~/.taiwei/guests/<guest-id>/memory.md`; they share read-only retrieval from the administrator-managed RAG index and do not have extended-memory management.
+
+## Gateway Sharing and Guest Roles (implemented)
+
+- Gateway identities are `admin` (full access) or `guest` (chat and guest-scoped sessions only).
+- Guests enter through an enabled random share token or through a username/password account in `config.guests`; both modes use the same authorization policy.
+- Guest API access is limited to chat and session CRUD. Management endpoints return `403`.
+- Persistent login sessions record their role. Older session records without a role are treated as administrators for compatibility.
+
 ## Core Requirements
 
 1. **TypeScript, Node >= 20, ESM.** Prefer Node built-ins (node:fs, node:child_process, node:readline, node:http/https). Keep runtime dependencies minimal. Allowed deps: `@modelcontextprotocol/sdk` (MCP), `cron-parser` (cron expressions). Everything else should be zero-dep.

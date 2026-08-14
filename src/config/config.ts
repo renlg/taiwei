@@ -39,6 +39,8 @@ export interface TaiweiConfig {
     username: string;
     password: string;
   };
+  share: { enabled: boolean; token: string; createdAt: string };
+  guests: Array<{ username: string; password: string; createdAt: string }>;
   workspace: {
     dir: string;
   };
@@ -80,6 +82,8 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
     username: 'admin',
     password: '',
   },
+  share: { enabled: false, token: '', createdAt: '' },
+  guests: [],
   workspace: {
     dir: '~/workspace',
   },
@@ -140,6 +144,8 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     tools: normalizeToolSettings(stored.tools),
     gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
     auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
+    share: { ...DEFAULT_CONFIG.share, ...stored.share },
+    guests: normalizeGuests(stored.guests),
     workspace: { ...DEFAULT_CONFIG.workspace, ...stored.workspace },
     security: {
       ...DEFAULT_CONFIG.security,
@@ -170,6 +176,7 @@ export async function saveConfig(config: TaiweiConfig): Promise<void> {
   const stored = {
     ...config,
     auth: { ...config.auth, password: passwordForStorage(config.auth.password) },
+    guests: config.guests.map((guest) => ({ ...guest, password: passwordForStorage(guest.password) })),
   };
   await writeFile(paths.config, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
 }
@@ -190,6 +197,8 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       tools: normalizeToolSettings(stored.tools),
       gateway: { ...DEFAULT_CONFIG.gateway, ...stored.gateway },
       auth: { ...DEFAULT_CONFIG.auth, ...stored.auth },
+      share: { ...DEFAULT_CONFIG.share, ...stored.share },
+      guests: normalizeGuests(stored.guests),
       workspace: { ...DEFAULT_CONFIG.workspace, ...stored.workspace },
       security: {
         ...DEFAULT_CONFIG.security,
@@ -209,6 +218,8 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       hooks: normalizeHooks(),
       gateway: { ...DEFAULT_CONFIG.gateway },
       auth: { ...DEFAULT_CONFIG.auth },
+      share: { ...DEFAULT_CONFIG.share },
+      guests: [],
       workspace: { ...DEFAULT_CONFIG.workspace },
       security: { ...DEFAULT_CONFIG.security, patterns: [], approvedPatterns: [] },
     };
@@ -241,7 +252,18 @@ function normalizeToolSettings(value: unknown): Record<string, ToolSettings> | u
   }));
 }
 
-export function validateGatewayAuth(config: TaiweiConfig): void {
+function normalizeGuests(value: unknown): TaiweiConfig['guests'] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const guest = item as Record<string, unknown>;
+    return typeof guest.username === 'string' && typeof guest.password === 'string'
+      ? [{ username: guest.username, password: guest.password, createdAt: typeof guest.createdAt === 'string' ? guest.createdAt : new Date().toISOString() }]
+      : [];
+  });
+}
+
+export function validateGatewayAuth<T extends Pick<TaiweiConfig, 'auth'>>(config: T): void {
   if (config.auth.enabled && !config.auth.password) {
     throw new Error('Gateway auth is enabled but no password is set. Set auth.password in ~/.taiwei/config.json or TAIWEI_AUTH_PASSWORD.');
   }

@@ -11,7 +11,7 @@ export class AgentContext {
   private readonly activeSkills = new Map<string, Skill>();
   private retrievedContext = '';
 
-  constructor(private readonly memory: MemoryStore, private readonly skillLoader: SkillLoader) {}
+  constructor(readonly memory: MemoryStore, private readonly skillLoader: SkillLoader, readonly extendedMemory = true) {}
 
   async systemPrompt(workspace?: string, customPrompt = ''): Promise<string> {
     const sections = [BASE_PERSONA, `Current date and time: ${new Date().toString()}`];

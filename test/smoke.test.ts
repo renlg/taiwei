@@ -9,7 +9,7 @@ import { nextRun, parseInterval } from '../src/cron/scheduler.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { streamChat } from '../src/llm/client.js';
 import { PluginLoader } from '../src/plugins/loader.js';
-import { chunkText, type RagIndexData } from '../src/rag/index.js';
+import { buildIndex, chunkText, type RagIndexData } from '../src/rag/index.js';
 import { retrieve, searchIndex, searchIndexHybrid } from '../src/rag/retrieve.js';
 import { OpenAICompatibleEmbedder } from '../src/rag/embedding.js';
 import { getCurrentModel, resolveModels, setCurrentModel } from '../src/config/model.js';
@@ -691,6 +691,23 @@ test('RAG chunker bounds oversized paragraphs and preserves overlap', () => {
   assert.equal(chunks.length, 3);
   assert(chunks.every((chunk) => chunk.length <= 1_000));
   assert.equal(chunks[0].slice(-100), chunks[1].slice(0, 100));
+});
+
+test('RAG index includes knowledge and extended-memory files with source prefixes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-layered-rag-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  try {
+    await mkdir(join(directory, 'knowledge'), { recursive: true });
+    await mkdir(join(directory, 'memory'), { recursive: true });
+    await writeFile(join(directory, 'knowledge', 'guide.md'), 'knowledge alpha');
+    await writeFile(join(directory, 'memory', 'details.md'), 'memory beta');
+    const index = await buildIndex({ embed: async (texts) => texts.map(() => [1, 0]) });
+    assert.deepEqual(new Set(index.chunks.map((chunk) => chunk.source)), new Set(['knowledge/guide.md', 'memory/details.md']));
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('RAG hybrid search fuses lexical and semantic rankings and lexical fallback remains available', () => {

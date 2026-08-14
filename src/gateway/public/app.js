@@ -7,12 +7,15 @@ const elements = {
   loginPassword: $('#login-password'),
   loginError: $('#login-error'),
   loginSubmit: $('#login-submit'),
+  loginDescription: $('#login-description'),
+  loginTabs: document.querySelectorAll('[data-login-role]'),
   appShell: $('#app-shell'),
   logout: $('#logout'),
   userMenu: $('#user-menu'),
   userTrigger: $('#user-trigger'),
   userPopover: $('#user-popover'),
   userAvatar: $('.user-avatar'),
+  guestModeLabel: $('#guest-mode-label'),
   usernameLabels: document.querySelectorAll('[data-username]'),
   sessionList: $('#session-list'),
   sessionCount: $('#session-count'),
@@ -111,6 +114,9 @@ const elements = {
   memoryFeedback: $('#memory-feedback'),
   memoryClear: $('#memory-clear'),
   memorySave: $('#memory-save'),
+  memoryRebuild: $('#memory-rebuild'),
+  memoryIndexStatus: $('#memory-index-status'),
+  extendedMemoryList: $('#extended-memory-list'),
   workspaceInput: $('#workspace-input'),
   workspaceResolved: $('#workspace-resolved'),
   workspaceLabel: $('#workspace-label'),
@@ -133,6 +139,18 @@ const elements = {
   hookTestEvent: $('#hook-test-event'),
   hookTest: $('#hook-test'),
   hookTestResult: $('#hook-test-result'),
+  shareSettings: $('.share-settings'),
+  shareToggle: $('#share-toggle'),
+  shareStatus: $('#share-status'),
+  shareCreate: $('#share-create'),
+  shareDisable: $('#share-disable'),
+  shareLinkRow: $('#share-link-row'),
+  shareUrl: $('#share-url'),
+  shareCopy: $('#share-copy'),
+  guestUsername: $('#guest-username'),
+  guestPassword: $('#guest-password'),
+  guestCreate: $('#guest-create'),
+  guestAccountList: $('#guest-account-list'),
   sidebarToggle: $('#sidebar-toggle'),
   sidebarClose: $('#sidebar-close'),
   scrim: $('#mobile-scrim'),
@@ -147,6 +165,9 @@ const state = {
   loadVersion: 0,
   toastTimer: 0,
   authToken: localStorage.getItem('taiwei-token') || '',
+  shareToken: localStorage.getItem('taiwei_share_token') || '',
+  role: localStorage.getItem('taiwei-role') || 'admin',
+  loginRole: 'admin',
   models: [],
   currentModel: 'OpenAI compatible',
   switchingModel: false,
@@ -168,6 +189,7 @@ const WORKSPACE_OPEN_STORAGE_KEY = 'taiwei-settings-workspace-open';
 const SECURITY_OPEN_STORAGE_KEY = 'taiwei-settings-security-open';
 const HOOKS_OPEN_STORAGE_KEY = 'taiwei-settings-hooks-open';
 const CUSTOM_PROMPT_OPEN_STORAGE_KEY = 'taiwei-settings-customprompt-open';
+const SHARE_OPEN_STORAGE_KEY = 'taiwei-settings-share-open';
 const MAX_CUSTOM_PROMPT_LENGTH = 20000;
 
 function escapeHtml(value) {
@@ -340,14 +362,39 @@ async function loadSettings() {
   return settings;
 }
 
+function renderSharing(share, guests) {
+  elements.shareStatus.textContent = share.enabled ? '已开启' : '未开启';
+  elements.shareDisable.hidden = !share.enabled;
+  elements.shareLinkRow.hidden = !share.enabled || !share.url;
+  elements.shareUrl.value = share.url || '';
+  elements.guestAccountList.replaceChildren();
+  if (!guests.length) renderResourceEmpty(elements.guestAccountList, '暂无普通用户账号');
+  for (const guest of guests) {
+    const row = document.createElement('div'); row.className = 'guest-account';
+    row.innerHTML = `<span><strong>${escapeHtml(guest.username)}</strong><br><small>${escapeHtml(new Date(guest.createdAt).toLocaleString())}</small></span><button class="knowledge-delete" type="button" aria-label="删除">×</button>`;
+    row.querySelector('button').addEventListener('click', async () => {
+      if (!confirm(`确定删除普通用户 ${guest.username} 吗？`)) return;
+      try { await requestJson(`/api/guests?username=${encodeURIComponent(guest.username)}`, { method: 'DELETE' }); await loadSharing(); }
+      catch (error) { elements.settingsError.textContent = error.message; }
+    });
+    elements.guestAccountList.append(row);
+  }
+}
+
+async function loadSharing() {
+  const [share, guests] = await Promise.all([requestJson('/api/share'), requestJson('/api/guests')]);
+  renderSharing(share, guests);
+}
+
 async function openSettings() {
   elements.settingsError.textContent = '';
   try {
-    await Promise.all([loadSettings(), loadCustomPrompt()]);
+    await Promise.all([loadSettings(), loadCustomPrompt(), loadSharing()]);
     setSettingsCollapseOpen(elements.customPromptSettings, elements.customPromptToggle, CUSTOM_PROMPT_OPEN_STORAGE_KEY, localStorage.getItem(CUSTOM_PROMPT_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.workspaceSettings, elements.workspaceToggle, WORKSPACE_OPEN_STORAGE_KEY, localStorage.getItem(WORKSPACE_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.securitySettings, elements.securityToggle, SECURITY_OPEN_STORAGE_KEY, localStorage.getItem(SECURITY_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.hooksSettings, elements.hooksToggle, HOOKS_OPEN_STORAGE_KEY, localStorage.getItem(HOOKS_OPEN_STORAGE_KEY) === 'true');
+    setSettingsCollapseOpen(elements.shareSettings, elements.shareToggle, SHARE_OPEN_STORAGE_KEY, localStorage.getItem(SHARE_OPEN_STORAGE_KEY) === 'true');
     elements.settingsModal.showModal();
     elements.workspaceToggle.focus();
   } catch (error) { showToast(error.message); }
@@ -714,9 +761,24 @@ function updateMemoryControls() {
 }
 
 function renderMemory(data) {
-  state.savedMemory = data.content;
-  elements.memoryContent.value = data.content;
-  elements.memoryStatus.textContent = `${data.chars} 字 · ${data.lines} 行`;
+  const core = data.core || data;
+  state.savedMemory = core.content ?? data.content ?? '';
+  elements.memoryContent.value = state.savedMemory;
+  elements.memoryStatus.textContent = `${core.chars ?? data.chars} 字 · ${core.lines ?? data.lines} 行`;
+  const index = data.indexStatus || { exists: false, chunks: 0, hasVectors: false };
+  elements.memoryIndexStatus.textContent = index.exists ? `${index.chunks} chunks · ${index.hasVectors ? 'BM25 + 向量' : '仅 BM25'}` : '尚未建立索引';
+  elements.extendedMemoryList.replaceChildren();
+  if (!data.extended?.length) renderResourceEmpty(elements.extendedMemoryList, '暂无扩展记忆');
+  for (const item of data.extended || []) {
+    const row = document.createElement('div'); row.className = 'extended-memory-item';
+    row.innerHTML = `<span><strong>${escapeHtml(item.name)}.md</strong> <small>${item.chars} 字</small></span><button class="knowledge-delete" type="button" aria-label="删除">×</button>`;
+    row.querySelector('button').addEventListener('click', async () => {
+      if (!confirm(`确定删除扩展记忆 ${item.name}.md 吗？`)) return;
+      try { await requestJson(`/api/memory/extended?name=${encodeURIComponent(item.name)}`, { method: 'DELETE' }); await loadMemory(); }
+      catch (error) { elements.memoryError.textContent = error.message; }
+    });
+    elements.extendedMemoryList.append(row);
+  }
   updateMemoryControls();
 }
 
@@ -1126,7 +1188,8 @@ function renderConversation(session) {
 
 function authenticatedOptions(options = {}) {
   const headers = new Headers(options.headers || {});
-  if (state.authToken) headers.set('authorization', `Bearer ${state.authToken}`);
+  const credential = state.shareToken || state.authToken;
+  if (credential) headers.set('authorization', `Bearer ${credential}`);
   return { ...options, headers };
 }
 
@@ -1136,7 +1199,12 @@ async function authenticatedFetch(path, options) {
 
 function showLogin() {
   localStorage.removeItem('taiwei-token');
+  localStorage.removeItem('taiwei-role');
+  localStorage.removeItem('taiwei_share_token');
   state.authToken = '';
+  state.shareToken = '';
+  state.role = 'admin';
+  elements.body.classList.remove('guest-mode');
   closeUserMenu();
   elements.appShell.hidden = true;
   elements.loginScreen.hidden = false;
@@ -1147,6 +1215,15 @@ function showLogin() {
 function showChat() {
   elements.loginScreen.hidden = true;
   elements.appShell.hidden = false;
+}
+
+function applyRole(role, username = '') {
+  state.role = role;
+  localStorage.setItem('taiwei-role', role);
+  const guest = role === 'guest';
+  elements.body.classList.toggle('guest-mode', guest);
+  elements.guestModeLabel.hidden = !guest;
+  if (guest) elements.guestModeLabel.querySelector('b').textContent = username && username !== '访客' ? username : '访客';
 }
 
 async function requestJson(path, options) {
@@ -1530,6 +1607,12 @@ elements.memoryClear.addEventListener('click', async () => {
   } catch (error) { elements.memoryError.textContent = error.message; }
   finally { elements.memoryClear.disabled = false; }
 });
+elements.memoryRebuild.addEventListener('click', async () => {
+  elements.memoryRebuild.disabled = true; elements.memoryRebuild.textContent = '重建中…';
+  try { await requestJson('/api/knowledge/rebuild', { method: 'POST' }); await loadMemory(); setMemoryFeedback('索引已重建'); }
+  catch (error) { elements.memoryError.textContent = error.message; }
+  finally { elements.memoryRebuild.disabled = false; elements.memoryRebuild.textContent = '重建索引'; }
+});
 elements.mcpModal.addEventListener('close', closeMcpForm);
 elements.mcpAdd.addEventListener('click', () => openMcpForm());
 elements.mcpFormClose.addEventListener('click', closeMcpForm);
@@ -1627,6 +1710,29 @@ elements.securityToggle.addEventListener('click', () => {
 });
 elements.hooksToggle.addEventListener('click', () => {
   setSettingsCollapseOpen(elements.hooksSettings, elements.hooksToggle, HOOKS_OPEN_STORAGE_KEY, elements.hooksToggle.getAttribute('aria-expanded') !== 'true', true);
+});
+elements.shareToggle.addEventListener('click', () => {
+  setSettingsCollapseOpen(elements.shareSettings, elements.shareToggle, SHARE_OPEN_STORAGE_KEY, elements.shareToggle.getAttribute('aria-expanded') !== 'true', true);
+});
+elements.shareCreate.addEventListener('click', async () => {
+  try { await requestJson('/api/share', { method: 'POST' }); await loadSharing(); showToast('已生成新的分享链接'); }
+  catch (error) { elements.settingsError.textContent = error.message; }
+});
+elements.shareDisable.addEventListener('click', async () => {
+  if (!confirm('关闭分享后，现有分享链接将立即失效。确定继续吗？')) return;
+  try { await requestJson('/api/share', { method: 'DELETE' }); await loadSharing(); }
+  catch (error) { elements.settingsError.textContent = error.message; }
+});
+elements.shareCopy.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(elements.shareUrl.value); showToast('分享链接已复制'); }
+  catch { elements.shareUrl.select(); document.execCommand('copy'); }
+});
+elements.guestCreate.addEventListener('click', async () => {
+  elements.settingsError.textContent = '';
+  try {
+    await requestJson('/api/guests', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: elements.guestUsername.value, password: elements.guestPassword.value }) });
+    elements.guestUsername.value = ''; elements.guestPassword.value = ''; await loadSharing(); showToast('普通用户账号已创建');
+  } catch (error) { elements.settingsError.textContent = error.message; }
 });
 elements.workspaceInput.addEventListener('input', updateWorkspaceStatus);
 elements.customPromptInput.addEventListener('input', () => {
@@ -1769,6 +1875,12 @@ document.addEventListener('keydown', (event) => {
 });
 
 document.querySelectorAll('.new-chat').forEach((button) => button.addEventListener('click', createSession));
+elements.loginTabs.forEach((tab) => tab.addEventListener('click', () => {
+  state.loginRole = tab.dataset.loginRole;
+  elements.loginTabs.forEach((item) => item.classList.toggle('active', item === tab));
+  elements.loginDescription.textContent = state.loginRole === 'guest' ? '请输入普通用户账号以继续。' : '请输入管理员账号以继续。';
+  elements.loginUsername.focus();
+}));
 elements.sidebarToggle.addEventListener('click', () => {
   if (matchMedia('(max-width: 680px)').matches) elements.body.classList.toggle('sidebar-open');
   else {
@@ -1793,7 +1905,10 @@ elements.loginForm.addEventListener('submit', async (event) => {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || `登录失败 (${response.status})`);
     state.authToken = body.token;
+    state.shareToken = '';
+    localStorage.removeItem('taiwei_share_token');
     localStorage.setItem('taiwei-token', body.token);
+    applyRole(body.role || 'admin', body.username || elements.loginUsername.value);
     await loadChat();
   } catch (error) {
     elements.loginError.textContent = error.message;
@@ -1830,6 +1945,17 @@ elements.theme.addEventListener('click', () => {
 
 async function loadChat() {
   try {
+    if (state.role === 'guest' || state.shareToken) {
+      applyRole('guest');
+      const sessions = await requestJson('/api/sessions');
+      showChat();
+      state.sessions = sessions;
+      renderSessionList();
+      if (sessions.length) await loadSession(sessions[0].id);
+      else renderConversation(null);
+      elements.input.focus();
+      return;
+    }
     const modelsRequest = requestJson('/api/models').catch(() => null);
     const [sessions, info, models] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/info'), modelsRequest]);
     showChat();
@@ -1843,6 +1969,7 @@ async function loadChat() {
     if (!state.models.includes(state.currentModel)) state.models.unshift(state.currentModel);
     renderModels();
     const username = info.username || '';
+    applyRole(info.role || 'admin', username);
     elements.usernameLabels.forEach((element) => { element.textContent = username; });
     elements.userAvatar.textContent = Array.from(username)[0]?.toUpperCase() || 'U';
     elements.userTrigger.hidden = !info.authEnabled;
@@ -1863,6 +1990,15 @@ async function initialize() {
   applyTheme(savedTheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
   if (localStorage.getItem('taiwei-sidebar-collapsed') === '1') elements.body.classList.add('sidebar-collapsed');
   resizeInput();
+  const shared = new URL(location.href).searchParams.get('share');
+  if (shared) {
+    state.shareToken = shared;
+    state.authToken = '';
+    localStorage.setItem('taiwei_share_token', shared);
+    localStorage.removeItem('taiwei-token');
+    applyRole('guest');
+    const clean = new URL(location.href); clean.searchParams.delete('share'); history.replaceState({}, '', clean);
+  }
   await loadChat();
 }
 

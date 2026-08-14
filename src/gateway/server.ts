@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -55,6 +55,7 @@ export interface GatewayServerOptions {
   toolRegistry?: ToolRegistry;
   knowledgeDirectory?: string;
   ragIndexPath?: string;
+  memoryDirectory?: string;
   memoryStore?: Pick<MemoryStore, 'read' | 'replace' | 'clear'>;
   buildKnowledgeIndex?: () => Promise<RagIndexData>;
   searchKnowledge?: (query: string, limit: number) => Promise<SearchResult[]>;
@@ -69,7 +70,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '13';
+const STATIC_ASSET_VERSION = '15';
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
 const MAX_MEMORY_LENGTH = 50_000;
 
@@ -136,6 +137,31 @@ function requestToken(request: IncomingMessage): string | undefined {
     }
   }
   return undefined;
+}
+
+function requestShareToken(request: IncomingMessage): string | undefined {
+  const header = request.headers['x-share-token'];
+  if (typeof header === 'string' && header.trim()) return header.trim();
+  const urlToken = new URL(request.url ?? '/', 'http://localhost').searchParams.get('share');
+  if (urlToken) return urlToken;
+  for (const cookie of request.headers.cookie?.split(';') ?? []) {
+    const [name, ...parts] = cookie.trim().split('=');
+    if (name === 'taiwei_share_token') {
+      try { return decodeURIComponent(parts.join('=')); } catch { return undefined; }
+    }
+  }
+  return undefined;
+}
+
+function guestIdForUsername(username: string): string {
+  const safe = username.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+  return `guest-${safe || 'user'}`;
+}
+
+function guestRouteAllowed(method: string, pathname: string): boolean {
+  if (method === 'POST' && pathname === '/api/chat') return true;
+  if ((method === 'GET' || method === 'POST') && pathname === '/api/sessions') return true;
+  return (method === 'GET' || method === 'DELETE') && /^\/api\/sessions\/[^/]+$/.test(pathname);
 }
 
 function sessionCookie(token: string, maxAge = Math.floor(AUTH_SESSION_TTL_MS / 1_000)): string {
@@ -316,6 +342,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const toolRegistry = options.toolRegistry;
   const knowledgeDirectory = resolve(options.knowledgeDirectory ?? taiweiPaths.knowledge);
   const ragIndexPath = resolve(options.ragIndexPath ?? taiweiPaths.ragIndex);
+  const memoryDirectory = resolve(options.memoryDirectory ?? taiweiPaths.memoryDir);
   const mcpConfigPath = resolve(options.mcpConfigPath ?? taiweiPaths.mcp);
   const memoryStore = options.memoryStore ?? new MemoryStore();
   let mcpInitialized = false;
@@ -373,21 +400,26 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'POST' && pathname === '/api/login') {
-        if (!authEnabled) {
+        const accessConfig = await configState.load();
+        if (!authEnabled && !accessConfig.guests.length) {
           json(response, 404, { error: 'Authentication is disabled' });
           return;
         }
         const body = await readJson(request) as { username?: unknown; password?: unknown };
         const ip = request.socket.remoteAddress ?? 'unknown';
-        const username = typeof body?.username === 'string' ? body.username : '';
+        const attemptedUsername = typeof body?.username === 'string' ? body.username : '';
         const configuredPassword = options.auth?.password ?? '';
-        const valid = typeof body?.username === 'string'
+        const adminValid = authEnabled && typeof body?.username === 'string'
           && typeof body?.password === 'string'
           && constantTimeEqual(body.username, options.auth?.username ?? '')
           && verifyPassword(body.password, configuredPassword);
-        const attempt = await loginLocks.attempt(username, ip, valid);
+        const guest = typeof body?.username === 'string' && typeof body?.password === 'string'
+          ? accessConfig.guests.find((item) => constantTimeEqual(body.username as string, item.username) && verifyPassword(body.password as string, item.password))
+          : undefined;
+        const valid = adminValid || Boolean(guest);
+        const attempt = await loginLocks.attempt(attemptedUsername, ip, valid);
         if (attempt.lock) {
-          log(`[taiwei] Warning: login lock ${attempt.lock} reached for ${ip} (${username || '<empty>'})`);
+          log(`[taiwei] Warning: login lock ${attempt.lock} reached for ${ip} (${attemptedUsername || '<empty>'})`);
           json(response, 429, { error: lockMessage(attempt.lock) });
           return;
         }
@@ -395,7 +427,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           json(response, 401, { error: 'Invalid username or password' });
           return;
         }
-        if (!options.authPasswordFromEnvironment && !isScryptPassword(configuredPassword)) {
+        if (adminValid && !options.authPasswordFromEnvironment && !isScryptPassword(configuredPassword)) {
           const migratedPassword = hashPassword(body.password as string);
           const config = await configState.load();
           if (config.auth.password === configuredPassword) {
@@ -404,21 +436,52 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           }
           if (options.auth) options.auth.password = migratedPassword;
         }
-        const token = await authSessions.create(body.username as string);
-        json(response, 200, { token }, { 'set-cookie': sessionCookie(token) });
+        if (guest && !isScryptPassword(guest.password)) {
+          const current = accessConfig.guests.find((item) => item.username === guest.username);
+          if (current) current.password = hashPassword(body.password as string);
+          await configState.save(accessConfig);
+        }
+        const role = adminValid ? 'admin' : 'guest';
+        const username = adminValid ? body.username as string : guest!.username;
+        const token = await authSessions.create(username, role);
+        json(response, 200, { token, role, username }, { 'set-cookie': sessionCookie(token) });
         return;
       }
       let authenticatedToken: string | undefined;
       let authenticatedUsername: string | undefined;
-      if (authEnabled && pathname.startsWith('/api/')) {
+      let authenticatedRole: 'admin' | 'guest' = 'admin';
+      let guestId: string | undefined;
+      const accessConfig = await configState.load();
+      const presentedToken = requestToken(request) ?? requestShareToken(request);
+      const authRequired = authEnabled || Boolean(presentedToken);
+      if (authRequired && pathname.startsWith('/api/')) {
         authenticatedToken = requestToken(request);
         const authenticated = authenticatedToken ? await authSessions.authenticate(authenticatedToken) : undefined;
-        if (!authenticated) {
+        if (authenticated) {
+          authenticatedUsername = authenticated.username;
+          authenticatedRole = authenticated.role ?? 'admin';
+          if (authenticatedRole === 'guest') guestId = guestIdForUsername(authenticated.username);
+        } else {
+          const shareToken = requestShareToken(request) ?? authenticatedToken;
+          if (accessConfig.share.enabled && shareToken && constantTimeEqual(shareToken, accessConfig.share.token)) {
+            authenticatedRole = 'guest';
+            authenticatedUsername = '访客';
+            guestId = `guest-${shareToken.slice(0, 8).toLowerCase()}`;
+            authenticatedToken = undefined;
+          } else {
           json(response, 401, { error: 'unauthorized' });
           return;
+          }
         }
-        authenticatedUsername = authenticated.username;
+        if (authenticatedRole === 'guest' && !guestRouteAllowed(method, pathname)) {
+          json(response, 403, { error: 'forbidden' });
+          return;
+        }
       }
+      const activeSessions = guestId
+        ? new SessionStore(join(taiweiPaths.guests, guestId, 'sessions'))
+        : sessions;
+      const turnMemory = guestId ? MemoryStore.forGuest(guestId) : undefined;
       if (method === 'POST' && pathname === '/api/logout') {
         if (authenticatedToken) await authSessions.delete(authenticatedToken);
         json(response, 200, { ok: true }, { 'set-cookie': sessionCookie('', 0) });
@@ -431,6 +494,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           model,
           contextWindow: await contextWindowFor(model),
           authEnabled,
+          role: authenticatedRole,
           workspace: resolveWorkspaceDir(config),
           ...(authenticatedUsername ? { username: authenticatedUsername } : {}),
         });
@@ -460,7 +524,12 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       }
       if (method === 'GET' && pathname === '/api/memory') {
         const content = await memoryStore.read();
-        json(response, 200, { content, ...memoryStats(content) });
+        await mkdir(memoryDirectory, { recursive: true });
+        const extended = await Promise.all((await readdir(memoryDirectory, { withFileTypes: true }))
+          .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+          .map(async (entry) => ({ name: entry.name.slice(0, -3), chars: (await readFile(join(memoryDirectory, entry.name), 'utf8')).length })));
+        const indexStatus = await knowledgeIndexStatus(ragIndexPath);
+        json(response, 200, { content, core: { content, ...memoryStats(content) }, extended, indexStatus: { exists: indexStatus.exists, chunks: indexStatus.chunks, hasVectors: indexStatus.hasVectors }, ...memoryStats(content) });
         return;
       }
       if (method === 'POST' && pathname === '/api/memory') {
@@ -475,6 +544,69 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       }
       if (method === 'DELETE' && pathname === '/api/memory') {
         await memoryStore.clear();
+        json(response, 200, { ok: true });
+        return;
+      }
+      if (method === 'DELETE' && pathname === '/api/memory/extended') {
+        const name = new URL(request.url ?? '/', 'http://localhost').searchParams.get('name') ?? '';
+        if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) throw new HttpError(400, 'name must match [A-Za-z0-9_-]{1,32}');
+        const target = resolve(memoryDirectory, `${name}.md`);
+        if (!withinDirectory(target, memoryDirectory)) throw new HttpError(400, '扩展记忆路径无效');
+        await unlink(target).catch((error) => {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new HttpError(404, '扩展记忆不存在');
+          throw error;
+        });
+        json(response, 200, { ok: true });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/share') {
+        const config = await configState.load();
+        const host = request.headers.host ?? `${config.gateway.host}:${config.gateway.port}`;
+        const protocol = request.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+        json(response, 200, { ...config.share, url: config.share.token ? `${protocol}://${host}/?share=${encodeURIComponent(config.share.token)}` : '' });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/share') {
+        const config = await configState.load();
+        config.share = { enabled: true, token: randomBytes(16).toString('hex'), createdAt: new Date().toISOString() };
+        await configState.save(config);
+        const host = request.headers.host ?? `${config.gateway.host}:${config.gateway.port}`;
+        const protocol = request.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+        json(response, 200, { ...config.share, url: `${protocol}://${host}/?share=${config.share.token}` });
+        return;
+      }
+      if (method === 'DELETE' && pathname === '/api/share') {
+        const config = await configState.load();
+        config.share.enabled = false;
+        await configState.save(config);
+        json(response, 200, { ok: true });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/guests') {
+        const config = await configState.load();
+        json(response, 200, config.guests.map(({ username, createdAt }) => ({ username, createdAt })));
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/guests') {
+        const body = await readJson(request) as { username?: unknown; password?: unknown };
+        const username = typeof body.username === 'string' ? body.username.trim() : '';
+        if (!/^[A-Za-z0-9_-]{2,32}$/.test(username)) throw new HttpError(400, 'username must match [A-Za-z0-9_-]{2,32}');
+        if (typeof body.password !== 'string' || body.password.length < 4) throw new HttpError(400, 'password must contain at least 4 characters');
+        const config = await configState.load();
+        if (config.guests.some((item) => item.username.toLowerCase() === username.toLowerCase())) throw new HttpError(409, 'guest username already exists');
+        const guest = { username, password: hashPassword(body.password), createdAt: new Date().toISOString() };
+        config.guests.push(guest);
+        await configState.save(config);
+        json(response, 201, { username, createdAt: guest.createdAt });
+        return;
+      }
+      if (method === 'DELETE' && pathname === '/api/guests') {
+        const username = new URL(request.url ?? '/', 'http://localhost').searchParams.get('username') ?? '';
+        const config = await configState.load();
+        const index = config.guests.findIndex((item) => item.username === username);
+        if (index < 0) throw new HttpError(404, 'guest account not found');
+        config.guests.splice(index, 1);
+        await configState.save(config);
         json(response, 200, { ok: true });
         return;
       }
@@ -693,8 +825,6 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       }
       if (method === 'POST' && pathname === '/api/knowledge/rebuild') {
         await mkdir(knowledgeDirectory, { recursive: true });
-        const files = await walkKnowledge(knowledgeDirectory);
-        if (!files.length) throw new HttpError(400, '知识库为空，请先上传 .md 或 .txt 文件');
         let index: RagIndexData;
         try { index = await buildKnowledgeIndex(); }
         catch (error) { throw new HttpError(500, `重建知识库索引失败：${(error as Error).message}`); }
@@ -785,22 +915,22 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'GET' && pathname === '/api/sessions') {
-        json(response, 200, await sessions.list());
+        json(response, 200, await activeSessions.list());
         return;
       }
       if (method === 'POST' && pathname === '/api/sessions') {
-        json(response, 201, await sessions.create());
+        json(response, 201, await activeSessions.create());
         return;
       }
       const sessionRoute = pathname.match(/^\/api\/sessions\/([^/]+)$/);
       if (sessionRoute && method === 'GET') {
-        const session = await sessions.get(decodeURIComponent(sessionRoute[1]));
+        const session = await activeSessions.get(decodeURIComponent(sessionRoute[1]));
         if (!session) json(response, 404, { error: 'Session not found' });
         else json(response, 200, session);
         return;
       }
       if (sessionRoute && method === 'DELETE') {
-        const deleted = await sessions.delete(decodeURIComponent(sessionRoute[1]));
+        const deleted = await activeSessions.delete(decodeURIComponent(sessionRoute[1]));
         if (!deleted) json(response, 404, { error: 'Session not found' });
         else { response.writeHead(204); response.end(); }
         return;
@@ -837,7 +967,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           json(response, 400, { error: 'sessionId must be a string' });
           return;
         }
-        const session = typeof body.sessionId === 'string' ? await sessions.get(body.sessionId) : await sessions.create();
+        const session = typeof body.sessionId === 'string' ? await activeSessions.get(body.sessionId) : await activeSessions.create();
         if (!session) {
           json(response, 404, { error: 'Session not found' });
           return;
@@ -855,10 +985,10 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           }
         }
         const agentMessage = `${message}${await attachmentContext(body.files, uploadsDirectory)}`;
-        const history = sessions.toChatHistory(session);
+        const history = activeSessions.toChatHistory(session);
         const activeModel = await modelState.getCurrentModel();
         const activeContextWindow = await contextWindowFor(activeModel);
-        if (!session.messages.some((item) => item.role === 'user')) session.title = sessions.titleFrom(message) || session.title;
+        if (!session.messages.some((item) => item.role === 'user')) session.title = activeSessions.titleFrom(message) || session.title;
         session.messages.push({ role: 'user', content: message, ...(agentMessage !== message ? { agentContent: agentMessage } : {}), timestamp: new Date().toISOString() });
         openSse(response);
         let completed = false;
@@ -899,7 +1029,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             sendSse(response, 'confirm', request);
             return confirmations.wait(request);
           },
-        }, history, session.id);
+        }, history, session.id, turnMemory);
         const content = finalText ?? answer;
         if (finalText !== undefined || content || toolCalls.length || turnError) {
           const stopped = turnError?.message === 'Turn cancelled';
@@ -912,8 +1042,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           });
         }
         session.updatedAt = new Date().toISOString();
-        await sessions.save(session);
-        if (historyIndex) {
+        await activeSessions.save(session);
+        if (historyIndex && !guestId) {
           try {
             await historyIndex.upsertSession({
               id: session.id, title: session.title, source: 'gateway', model: session.usage?.model,

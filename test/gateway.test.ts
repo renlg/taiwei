@@ -19,6 +19,7 @@ import { AgentContext } from '../src/agent/context.js';
 import { MemoryStore } from '../src/memory/store.js';
 import { SkillLoader } from '../src/skills/loader.js';
 import type { TaiweiApp } from '../src/app.js';
+import { createMemoryTools, writeExtendedMemory } from '../src/tools/impl/memory.js';
 
 class MockChat implements ChatBridge {
   stopped = false;
@@ -157,7 +158,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=13/);
+    assert.match(pageBody, /logo\.png\?v=15/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -336,7 +337,9 @@ test('gateway memory API reads, replaces, validates, and clears persistent memor
   });
   try {
     const current = await (await fetch(`${baseUrl}/api/memory`)).json() as { content: string; chars: number; lines: number };
-    assert.deepEqual(current, { content: initialContent, chars: initialContent.length, lines: 3 });
+    assert.equal(current.content, initialContent);
+    assert.equal(current.chars, initialContent.length);
+    assert.equal(current.lines, 3);
 
     const replacement = 'Remember the project name.\nUse TypeScript.';
     const saved = await post({ content: replacement });
@@ -353,7 +356,8 @@ test('gateway memory API reads, replaces, validates, and clears persistent memor
     assert.equal(cleared.status, 200);
     assert.deepEqual(await cleared.json(), { ok: true });
     assert.equal(await readFile(memoryPath, 'utf8'), '');
-    assert.deepEqual(await (await fetch(`${baseUrl}/api/memory`)).json(), { content: '', chars: 0, lines: 0 });
+    const empty = await (await fetch(`${baseUrl}/api/memory`)).json() as { content: string; chars: number; lines: number };
+    assert.deepEqual({ content: empty.content, chars: empty.chars, lines: empty.lines }, { content: '', chars: 0, lines: 0 });
   } finally {
     await closeGateway(server);
     await rm(directory, { recursive: true, force: true });
@@ -759,6 +763,111 @@ test('gateway login returns 429 after five failed account and IP attempts', asyn
     assert.deepEqual(await locked.json(), { error: '失败次数过多，请稍后再试' });
   } finally {
     await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('share and ordinary guest credentials are chat-only and share disable revokes access', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-share-guest-test-'));
+  const previousHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  const config = structuredClone(DEFAULT_CONFIG);
+  config.auth = { enabled: true, username: 'admin', password: 'admin-secret' };
+  config.guests = [{ username: 'alice', password: 'guest-secret', createdAt: new Date().toISOString() }];
+  const configState = {
+    load: async () => structuredClone(config),
+    save: async (next: TaiweiConfig) => { Object.assign(config, structuredClone(next)); },
+  };
+  const server = createGatewayServer({
+    chat: new MockChat(), auth: config.auth, configState,
+    authSessions: new AuthSessionStore(join(directory, 'gateway-sessions.json')),
+    loginLocks: new LoginLockStore(join(directory, 'login-locks.json')), log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const login = async (username: string, password: string) => fetch(`${baseUrl}/api/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }),
+  });
+  try {
+    const adminLogin = await login('admin', 'admin-secret');
+    const admin = await adminLogin.json() as { token: string; role: string; username: string };
+    assert.equal(admin.role, 'admin');
+    const adminHeaders = { authorization: `Bearer ${admin.token}` };
+
+    const createdGuest = await fetch(`${baseUrl}/api/guests`, {
+      method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ username: 'bob', password: 'pass1234' }),
+    });
+    assert.equal(createdGuest.status, 201);
+    assert.equal((await fetch(`${baseUrl}/api/guests`, {
+      method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ username: 'bob', password: 'pass1234' }),
+    })).status, 409);
+    assert.equal((await fetch(`${baseUrl}/api/guests?username=bob`, { method: 'DELETE', headers: adminHeaders })).status, 200);
+
+    const shareResponse = await fetch(`${baseUrl}/api/share`, { method: 'POST', headers: adminHeaders });
+    const share = await shareResponse.json() as { token: string };
+    const shareHeaders = { authorization: `Bearer ${share.token}` };
+    const shareSessionResponse = await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: shareHeaders });
+    assert.equal(shareSessionResponse.status, 201);
+    const shareSession = await shareSessionResponse.json() as { id: string };
+    assert.equal((await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST', headers: { ...shareHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ message: 'hello', sessionId: shareSession.id }),
+    })).status, 200);
+    for (const route of ['/api/skills', '/api/tools', '/api/memory', '/api/settings']) {
+      const denied = await fetch(`${baseUrl}${route}`, { headers: shareHeaders });
+      assert.equal(denied.status, 403, route);
+      assert.deepEqual(await denied.json(), { error: 'forbidden' });
+    }
+
+    const guestLogin = await login('alice', 'guest-secret');
+    const guest = await guestLogin.json() as { token: string; role: string; username: string };
+    assert.deepEqual({ role: guest.role, username: guest.username }, { role: 'guest', username: 'alice' });
+    const guestHeaders = { authorization: `Bearer ${guest.token}` };
+    const guestSession = await (await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: guestHeaders })).json() as { id: string };
+    assert.equal((await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ message: 'hello', sessionId: guestSession.id }),
+    })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/api/memory`, { headers: guestHeaders })).status, 403);
+    assert.equal((await login('alice', 'wrong')).status, 401);
+
+    assert.equal((await fetch(`${baseUrl}/api/share`, { method: 'DELETE', headers: adminHeaders })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/api/sessions`, { headers: shareHeaders })).status, 401);
+  } finally {
+    await closeGateway(server);
+    if (previousHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = previousHome;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('layered and guest memories stay isolated and extended-memory deletion rejects traversal', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-layered-memory-test-'));
+  const previousHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  try {
+    const adminMemory = new MemoryStore(join(directory, 'memory.md'));
+    const guestA = MemoryStore.forGuest('guest-a');
+    const guestB = MemoryStore.forGuest('guest-b');
+    const registry = new ToolRegistry();
+    for (const tool of createMemoryTools(adminMemory)) registry.register(tool);
+    const skills = new SkillLoader();
+    await registry.dispatch('memory_append', { text: 'A only' }, { cwd: directory, agentContext: new AgentContext(guestA, skills, false) });
+    assert.match(await guestA.read(), /A only/);
+    assert.equal(await guestB.read(), '');
+    assert.equal(await adminMemory.read(), '');
+
+    await writeExtendedMemory('project_notes', 'Extended detail');
+    assert.equal(await readFile(join(directory, 'memory', 'project_notes.md'), 'utf8'), 'Extended detail');
+    await assert.rejects(writeExtendedMemory('../escape', 'bad'), /name must match/);
+
+    const server = createGatewayServer({ chat: new MockChat(), memoryDirectory: join(directory, 'memory'), log: () => {} });
+    const port = await listenGateway(server, '127.0.0.1', 0);
+    try {
+      const traversal = await fetch(`http://127.0.0.1:${port}/api/memory/extended?name=${encodeURIComponent('../escape')}`, { method: 'DELETE' });
+      assert.equal(traversal.status, 400);
+      const removed = await fetch(`http://127.0.0.1:${port}/api/memory/extended?name=project_notes`, { method: 'DELETE' });
+      assert.equal(removed.status, 200);
+    } finally { await closeGateway(server); }
+  } finally {
+    if (previousHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = previousHome;
     await rm(directory, { recursive: true, force: true });
   }
 });

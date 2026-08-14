@@ -1,9 +1,11 @@
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { ensureTaiweiHome } from '../util/paths.js';
+import { ensureTaiweiHome, guestMemory } from '../util/paths.js';
 
 export class MemoryStore {
   constructor(private readonly memoryPath?: string) {}
+
+  static forGuest(guestId: string): MemoryStore { return new MemoryStore(guestMemory(guestId)); }
 
   private async path(): Promise<string> {
     if (!this.memoryPath) return (await ensureTaiweiHome()).memory;

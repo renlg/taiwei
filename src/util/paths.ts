@@ -8,6 +8,7 @@ export interface TaiweiPaths {
   cron: string;
   mcp: string;
   memory: string;
+  memoryDir: string;
   skills: string;
   knowledge: string;
   ragIndex: string;
@@ -17,6 +18,7 @@ export interface TaiweiPaths {
   gatewaySessions: string;
   loginLocks: string;
   uploads: string;
+  guests: string;
 }
 
 export function getPaths(): TaiweiPaths {
@@ -27,6 +29,7 @@ export function getPaths(): TaiweiPaths {
     cron: join(home, 'cron.json'),
     mcp: join(home, 'mcp.json'),
     memory: join(home, 'memory.md'),
+    memoryDir: join(home, 'memory'),
     skills: join(home, 'skills'),
     knowledge: join(home, 'knowledge'),
     ragIndex: join(home, 'rag-index.json'),
@@ -36,7 +39,15 @@ export function getPaths(): TaiweiPaths {
     gatewaySessions: join(home, 'gateway-sessions.json'),
     loginLocks: join(home, 'login-locks.json'),
     uploads: join(home, 'uploads'),
+    guests: join(home, 'guests'),
   };
+}
+
+const VALID_GUEST_ID = /^[a-z0-9_-]{1,64}$/;
+
+export function guestMemory(guestId: string): string {
+  if (!VALID_GUEST_ID.test(guestId)) throw new Error('Invalid guest id');
+  return join(getPaths().guests, guestId, 'memory.md');
 }
 
 async function writeIfMissing(path: string, content: string): Promise<void> {
@@ -53,9 +64,11 @@ export async function ensureTaiweiHome(): Promise<TaiweiPaths> {
     mkdir(paths.home, { recursive: true }),
     mkdir(paths.skills, { recursive: true }),
     mkdir(paths.knowledge, { recursive: true }),
+    mkdir(paths.memoryDir, { recursive: true }),
     mkdir(paths.plugins, { recursive: true }),
     mkdir(paths.sessions, { recursive: true }),
     mkdir(paths.uploads, { recursive: true }),
+    mkdir(paths.guests, { recursive: true }),
   ]);
   await Promise.all([
     writeIfMissing(paths.cron, '[]\n'),

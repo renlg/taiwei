@@ -7,6 +7,7 @@ export const AUTH_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
 export interface AuthSession {
   username: string;
+  role?: 'admin' | 'guest';
   createdAt: string;
   expiresAt: string;
 }
@@ -38,13 +39,14 @@ export class AuthSessionStore {
     });
   }
 
-  async create(username: string): Promise<string> {
+  async create(username: string, role: 'admin' | 'guest' = 'admin'): Promise<string> {
     await this.initialize();
     return this.serial(async () => {
       const token = randomBytes(32).toString('hex');
       const now = new Date();
       this.sessions[token] = {
         username,
+        role,
         createdAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + AUTH_SESSION_TTL_MS).toISOString(),
       };

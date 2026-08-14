@@ -14,7 +14,11 @@
     <form class="login-card" id="login-form">
       <img class="login-mark" src="/logo.png?v={{ASSET_VERSION}}" alt="taiwei">
       <h1>登录 taiwei</h1>
-      <p>请输入网关账号以继续。</p>
+      <p id="login-description">请输入管理员账号以继续。</p>
+      <div class="login-tabs" role="tablist">
+        <button class="login-tab active" type="button" data-login-role="admin">管理员登录</button>
+        <button class="login-tab" type="button" data-login-role="guest">普通用户登录</button>
+      </div>
       <label for="login-username">用户名</label>
       <input id="login-username" name="username" autocomplete="username" required>
       <label for="login-password">密码</label>
@@ -30,7 +34,7 @@
         <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="关闭侧边栏">×</button>
       </div>
       <button class="new-chat sidebar-new" type="button"><span>+</span><span class="sidebar-label">新对话</span></button>
-      <nav class="sidebar-sections" aria-label="资源管理">
+      <nav class="sidebar-sections admin-only" aria-label="资源管理">
         <button class="sidebar-section-button" id="skills-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">✦</span><span class="sidebar-label">技能</span></button>
         <button class="sidebar-section-button" id="knowledge-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">▤</span><span class="sidebar-label">知识库</span></button>
         <button class="sidebar-section-button" id="mcp-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⌘</span><span class="sidebar-label">MCP</span></button>
@@ -60,9 +64,10 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <button class="icon-button" id="settings-open" type="button" aria-label="设置" title="设置">⚙</button>
+          <span class="guest-mode-label" id="guest-mode-label" hidden><b>访客</b> 访客模式 · 仅聊天</span>
+          <button class="icon-button admin-only" id="settings-open" type="button" aria-label="设置" title="设置">⚙</button>
           <button class="icon-button" id="theme-toggle" type="button" aria-label="切换主题">☾</button>
-          <div class="user-menu" id="user-menu">
+          <div class="user-menu admin-only" id="user-menu">
             <button class="user-trigger" id="user-trigger" type="button" aria-haspopup="menu" aria-expanded="false" hidden>
               <span class="user-avatar" aria-hidden="true"></span>
               <span class="username" data-username></span>
@@ -105,7 +110,7 @@
       <div class="composer-dock">
         <form class="composer" id="composer">
           <div class="composer-main">
-            <button class="attachment-button" id="attachment-button" type="button" aria-label="添加附件" title="添加附件">📎</button>
+            <button class="attachment-button admin-only" id="attachment-button" type="button" aria-label="添加附件" title="添加附件">📎</button>
             <input id="file-input" type="file" multiple hidden>
             <div class="composer-content">
               <div class="attachment-list" id="attachment-list" aria-live="polite"></div>
@@ -122,7 +127,7 @@
           </div>
           <div class="composer-footer">
             <div class="composer-controls">
-              <div class="model-switcher" id="model-switcher">
+              <div class="model-switcher admin-only" id="model-switcher">
                 <button class="model-trigger" id="model-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
                   <span class="model-spark" aria-hidden="true">✦</span>
                   <span class="model-name" id="model-name">OpenAI compatible</span>
@@ -224,6 +229,20 @@
           </div>
         </div>
       </section>
+      <section class="settings-collapse share-settings">
+        <button class="settings-collapse-toggle" id="share-toggle" type="button" aria-expanded="false" aria-controls="share-content">
+          <span class="settings-collapse-title"><span class="settings-collapse-chevron" aria-hidden="true">▸</span><span class="settings-collapse-heading">分享与普通用户</span></span>
+          <small class="settings-collapse-status" id="share-status">未开启</small>
+        </button>
+        <div class="settings-collapse-content" id="share-content"><div class="settings-collapse-content-inner">
+          <p class="settings-explainer">访客只能聊天,无法修改任何配置,各自独立记忆</p>
+          <div class="share-actions"><button class="small-button" id="share-create" type="button">生成分享链接</button><button class="small-button danger" id="share-disable" type="button" hidden>关闭分享</button></div>
+          <div class="share-link-row" id="share-link-row" hidden><input id="share-url" readonly><button class="small-button" id="share-copy" type="button">复制</button></div>
+          <h3>普通用户账号</h3>
+          <div class="guest-create-row"><input id="guest-username" placeholder="用户名" maxlength="32"><input id="guest-password" type="password" placeholder="密码（至少 4 位）"><button class="small-button" id="guest-create" type="button">添加账号</button></div>
+          <div class="guest-account-list" id="guest-account-list"></div>
+        </div></div>
+      </section>
       <div class="modal-error" id="settings-error" role="alert"></div>
       <footer><button class="secondary-button" id="settings-reset" type="button">重置安全默认值</button><button class="primary-button" id="settings-save" type="submit">保存设置</button></footer>
     </form>
@@ -315,12 +334,17 @@
         <button class="secondary-button" id="memory-refresh" type="button">刷新</button>
       </div>
       <div class="management-error" id="memory-error" role="alert"></div>
-      <label class="memory-editor-label" for="memory-content">memory.md</label>
+      <label class="memory-editor-label" for="memory-content">核心记忆 · memory.md</label>
       <textarea id="memory-content" rows="12" maxlength="50000" spellcheck="false" placeholder="持久记忆为空"></textarea>
       <footer class="memory-actions">
         <span class="memory-feedback" id="memory-feedback" role="status"></span>
         <div><button class="secondary-button memory-clear" id="memory-clear" type="button">清空</button><button class="primary-button" id="memory-save" type="button" disabled>保存</button></div>
       </footer>
+      <section class="extended-memory-section">
+        <div class="extended-memory-heading"><div><h3>扩展记忆</h3><p>重建索引后扩展记忆才可被检索</p></div><button class="secondary-button" id="memory-rebuild" type="button">重建索引</button></div>
+        <div class="index-status" id="memory-index-status">索引尚未加载</div>
+        <div class="extended-memory-list" id="extended-memory-list"></div>
+      </section>
     </div>
   </dialog>
   <div class="toast" id="toast" role="status"></div>

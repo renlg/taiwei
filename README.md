@@ -52,6 +52,12 @@ Edit `~/.taiwei/config.json`, or set environment variables:
     "username": "admin",
     "password": ""
   },
+  "share": {
+    "enabled": false,
+    "token": "",
+    "createdAt": ""
+  },
+  "guests": [],
   "workspace": {
     "dir": "~/workspace"
   },
@@ -109,7 +115,7 @@ Ctrl+C cancels an active LLM request or tool. Scheduled turns wait for an active
 
 ### Local RAG
 
-Put Markdown or text files under `~/.taiwei/knowledge/`, then run `/rag index` to rebuild the index. Indexing embeds chunks in batches of up to 32 and stores vectors alongside the BM25 data in `~/.taiwei/rag-index.json`. Searches fuse the top BM25 and cosine-similarity candidates with Reciprocal Rank Fusion and return the best five results. The web gateway performs this retrieval automatically before every user message and injects matching knowledge into that turn.
+Put Markdown or text files under `~/.taiwei/knowledge/`, then run `/rag index` to rebuild the index. The same index also includes Markdown files in `~/.taiwei/memory/`; sources retain a `knowledge/` or `memory/` prefix. Indexing embeds chunks in batches of up to 32 and stores vectors alongside the BM25 data in `~/.taiwei/rag-index.json`. Searches fuse the top BM25 and cosine-similarity candidates with Reciprocal Rank Fusion and return the best five results. The web gateway performs this retrieval automatically before every user message and injects matching knowledge into that turn.
 
 If query embedding fails because of a timeout, network error, or upstream response, search automatically falls back to BM25. Legacy indexes without vectors also remain readable and use BM25; run `/rag index` to add vectors.
 
@@ -123,7 +129,7 @@ Run `./bin/taiwei serve`, then open `http://127.0.0.1:8688`. The polished browse
 
 The subtle sidebar label shows the resolved workspace. The gear button opens settings for persistent custom instructions, the workspace, lifecycle hooks, and dangerous-command policy. The custom prompt is injected as a distinct system-prompt section on every gateway, REPL, one-shot, and cron turn; edits take effect on the next turn. `GET/POST /api/settings/custom-prompt` loads and saves up to 20,000 characters, while `GET/POST /api/settings` handles the other settings. All of these routes follow the normal gateway authentication policy. The Hooks section also runs a selected event's first command against a sample payload through `POST /api/hooks/test`.
 
-The sidebar panels manage installed skills, knowledge files, MCP servers, tools, and persistent memory. The persistent-memory editor replaces or clears `~/.taiwei/memory.md`; every turn receives only its newest 2,000 characters. The tool panel controls every built-in, MCP, and plugin tool exposed to the model. Tool state and configurable defaults are stored in `config.json`: `skillsDisabled` contains disabled skill names, while `tools.<toolName>.enabled` and schema-backed fields hold tool settings. Omitting either section keeps everything enabled. Dynamic MCP and plugin tools recover their saved state when they are registered again after a reload.
+The sidebar panels manage installed skills, knowledge files, MCP servers, tools, and layered memory. Core memory remains `~/.taiwei/memory.md`; every turn receives only its newest 2,000 characters. Larger extended notes live as `~/.taiwei/memory/<name>.md`, are not injected automatically, and become searchable on demand after rebuilding the shared RAG index. `memory_read` and `memory_append` operate on small core facts; `memory_extend` writes a named extended note and `memory_list` reports both tiers. Historical conversation search remains backed by `history.db` and `session_search`.
 
 Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so history and agent context survive browser refreshes and gateway restarts. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
 
@@ -186,6 +192,12 @@ On config load/save, taiwei replaces a non-empty plaintext password with a salte
 
 Open the gateway and sign in through the login screen. Successful login creates a seven-day sliding session in `~/.taiwei/gateway-sessions.json`; the browser keeps both an HttpOnly cookie and a bearer token, and gateway restarts preserve active logins. Login lock state is persisted separately in `~/.taiwei/login-locks.json`: five failures for the same account and IP within a sliding ten-minute window trigger a ten-minute cooldown, ten cumulative failures permanently lock that account/IP pair, and ten failures across any accounts from one IP within a sliding ten-minute window lock the IP for ten minutes. A successful login resets the matching account/IP counters. Click the username in the top-right corner and choose **退出登录 / Logout** to invalidate the current token and return to login.
 
+#### Sharing and ordinary users
+
+Administrators can open **设置 → 分享与普通用户** to rotate a share link or create username/password accounts. A share link carries a random 32-hex-character credential in `?share=...`; ordinary users instead choose **普通用户登录** and enter their account credentials. Both entry modes create the same guest role. Guest sessions may use chat and their own history only; all settings, model, skill, knowledge, MCP, tool, memory, share, and account-management APIs return `403 forbidden`.
+
+Each ordinary user stores core memory under `~/.taiwei/guests/guest-<username>/memory.md`; a share credential uses `~/.taiwei/guests/guest-<token-prefix>/memory.md`. These files are isolated from the administrator and other guests. Guests can retrieve the administrator-managed knowledge and extended-memory RAG index but cannot modify it. Disabling sharing immediately invalidates the current share credential. Guest account and administrator passwords are stored as salted scrypt hashes when persisted.
+
 ## State and extensions
 
 All durable state lives in `~/.taiwei/`:
@@ -195,11 +207,13 @@ config.json       model and provider settings
 cron.json         scheduled jobs
 mcp.json          MCP server definitions
 memory.md         durable agent memory
+memory/           extended Markdown memory indexed with the knowledge base
 rag-index.json    generated BM25 and embedding index
 knowledge/        .md and .txt knowledge documents
 skills/           <name>/SKILL.md skills
 plugins/          <name>/plugin.js plugins
 sessions/         durable web chat conversations
+guests/           guest-scoped core memory and web sessions
 gateway-sessions.json  durable gateway login tokens
 login-locks.json   durable login failure and lock state
 uploads/           local web-chat attachments

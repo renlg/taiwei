@@ -76,9 +76,9 @@ async function flushMemory(
   config: TaiweiConfig,
   model: string,
   signal?: AbortSignal,
+  memory = new MemoryStore(),
 ): Promise<boolean> {
   if (!boundary) return false;
-  const memory = new MemoryStore();
   const memoryTail = (await memory.tail(MEMORY_FLUSH_TAIL_CHARS)).trim();
   const result = await streamChat({
     baseUrl: config.baseUrl,
@@ -170,7 +170,7 @@ export async function runAgentTurn(
         compressionAttempted = true;
         const boundary = compressionBoundary(conversation);
         if (config.memoryFlush) {
-          try { await flushMemory(conversation, boundary, config, model, options.signal); }
+          try { await flushMemory(conversation, boundary, config, model, options.signal, context.memory); }
           catch (error) {
             if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
             console.debug(`[taiwei] Memory flush skipped: ${error instanceof Error ? error.message : String(error)}`);
