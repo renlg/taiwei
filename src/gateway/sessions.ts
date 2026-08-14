@@ -35,6 +35,8 @@ export interface GatewaySession {
   messages: SessionMessage[];
   usage?: SessionUsage;
   agentId?: string;
+  providerId?: string;
+  currentModel?: string;
 }
 
 export interface SessionSummary {

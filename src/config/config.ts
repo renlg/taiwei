@@ -5,6 +5,7 @@ import { ensureTaiweiHome } from '../util/paths.js';
 import { HOOK_EVENTS, type HookCommands } from '../hooks/runner.js';
 import { passwordForStorage } from './password.js';
 import type { PolicyConfig } from '../security/policy.js';
+import type { ProviderConfig } from '../llm/providers/types.js';
 
 export type SecurityRememberMode = 'off' | 'session' | 'permanent';
 
@@ -22,7 +23,11 @@ export interface TaiweiConfig {
   compressThreshold?: number;
   memoryFlush: boolean;
   baseUrl: string;
+  /** Legacy alias accepted on read. Prefer baseUrl or providers[].baseUrl. */
+  apiBaseUrl?: string;
   apiKey: string;
+  providers: ProviderConfig[];
+  defaultProvider: string;
   maxTurns: number;
   requestTimeoutMs: number;
   fallbackModel?: string;
@@ -37,6 +42,7 @@ export interface TaiweiConfig {
   autoLoadSkills?: boolean;
   skillsDisabled?: string[];
   tools?: Record<string, ToolSettings>;
+  plugins?: Record<string, { enabled?: boolean; config?: Record<string, unknown> }>;
   delegation: { maxConcurrent: number; maxDepth: number };
   browser: { headless: boolean; userDataDir: string; idleMinutes: number };
   gateway: {
@@ -76,6 +82,8 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   memoryFlush: true,
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
+  providers: [],
+  defaultProvider: 'default',
   maxTurns: 50,
   requestTimeoutMs: 120_000,
   tokenEstimateCharsPerToken: 4,
@@ -168,6 +176,8 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     await saveConfig(DEFAULT_CONFIG);
   }
   const { guests: _ignoredGuests, ...storedConfig } = stored as Partial<TaiweiConfig> & { guests?: unknown };
+  const legacyBaseUrl = typeof (storedConfig as { apiBaseUrl?: unknown }).apiBaseUrl === 'string'
+    ? (storedConfig as { apiBaseUrl: string }).apiBaseUrl : storedConfig.baseUrl;
   const config: TaiweiConfig = {
     ...DEFAULT_CONFIG,
     ...storedConfig,
@@ -197,7 +207,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
       approvedPatterns: [...(stored.security?.approvedPatterns ?? DEFAULT_CONFIG.security.approvedPatterns)],
     },
     apiKey: stored.apiKey ?? DEFAULT_CONFIG.apiKey,
-    baseUrl: stored.baseUrl ?? DEFAULT_CONFIG.baseUrl,
+    baseUrl: legacyBaseUrl ?? DEFAULT_CONFIG.baseUrl,
     model: stored.model ?? DEFAULT_CONFIG.model,
     embedModel: stored.embedModel ?? DEFAULT_CONFIG.embedModel,
   };
@@ -210,10 +220,37 @@ export async function loadConfig(): Promise<TaiweiConfig> {
   config.apiKey = process.env.TAIWEI_API_KEY ?? config.apiKey;
   config.baseUrl = process.env.TAIWEI_BASE_URL ?? config.baseUrl;
   config.model = process.env.TAIWEI_MODEL ?? config.model;
+  config.providers = normalizeProviders(config.providers, config);
+  config.defaultProvider = config.providers.some((provider) => provider.id === config.defaultProvider) ? config.defaultProvider : config.providers[0]!.id;
   if (process.env.TAIWEI_AUTH_PASSWORD !== undefined) config.auth.password = process.env.TAIWEI_AUTH_PASSWORD;
   if (process.env.OAUTH_TAIWEI_SECRET !== undefined) config.oauth.clientSecret = process.env.OAUTH_TAIWEI_SECRET;
   if (process.env.OAUTH_TAIWEI_REDIRECT !== undefined) config.oauth.redirectUri = process.env.OAUTH_TAIWEI_REDIRECT;
   return config;
+}
+
+function normalizeProviders(value: unknown, legacy: Pick<TaiweiConfig, 'baseUrl' | 'apiKey' | 'model' | 'models' | 'contextWindow'>): ProviderConfig[] {
+  const configured = Array.isArray(value) ? value.flatMap((item): ProviderConfig[] => {
+    if (!item || typeof item !== 'object') return [];
+    const candidate = item as Partial<ProviderConfig>;
+    if (typeof candidate.id !== 'string' || !/^[a-z0-9-]{1,64}$/.test(candidate.id)
+      || typeof candidate.name !== 'string' || typeof candidate.baseUrl !== 'string'
+      || !['openai-compatible', 'anthropic', 'responses'].includes(candidate.type ?? '')) return [];
+    return [{ ...candidate, apiKey: candidate.apiKey ?? '' } as ProviderConfig];
+  }) : [];
+  if (configured.length) return configured.map((provider) => provider.id === 'default' ? {
+    ...provider,
+    baseUrl: process.env.TAIWEI_BASE_URL ?? provider.baseUrl,
+    apiKey: process.env.TAIWEI_API_KEY ?? provider.apiKey,
+    defaultModel: process.env.TAIWEI_MODEL ?? provider.defaultModel,
+  } : provider);
+  return [{
+    id: 'default', name: 'Default', type: 'openai-compatible', baseUrl: legacy.baseUrl,
+    apiKey: legacy.apiKey, defaultModel: legacy.model,
+    models: (legacy.models?.length ? legacy.models : [legacy.model]).map((id) => ({
+      id, provider: 'default', displayName: id,
+      capabilities: { tools: true, vision: false, reasoning: false, streaming: true, contextWindow: legacy.contextWindow ?? 256_000 },
+    })),
+  }];
 }
 
 export async function saveConfig(config: TaiweiConfig): Promise<void> {

@@ -5,7 +5,7 @@ import { nextRun } from '../cron/scheduler.js';
 import { renderRetrievedContext } from '../rag/prompt.js';
 import { buildIndex } from '../rag/index.js';
 import { retrieve } from '../rag/retrieve.js';
-import { resolveModels, setCurrentModel } from '../config/model.js';
+import { resolveModelCatalog, resolveModels, setCurrentModel } from '../config/model.js';
 import { expandHome, saveConfig } from '../config/config.js';
 import { mkdir, stat } from 'node:fs/promises';
 import type { ConfirmationHandler } from '../security/commands.js';
@@ -63,10 +63,27 @@ function output(message: string): void { process.stdout.write(`${message}\n`); }
 export async function handleModelCommand(app: TaiweiApp, name?: string): Promise<string> {
   const available = await resolveModels();
   if (!name) {
-    const lines = available.models.map((model) => `${model === available.current ? '*' : ' '} ${model}`);
-    return `Current model: ${available.current}\nAvailable models:\n${lines.join('\n')}`;
+    const catalog = await resolveModelCatalog();
+    if ((catalog.providers?.length ?? 0) === 1 && catalog.providers?.[0]?.id === 'default') {
+      const lines = available.models.map((model) => `${model === available.current ? '*' : ' '} ${model}`);
+      return `Current model: ${available.current}\nAvailable models:\n${lines.join('\n')}`;
+    }
+    const lines = catalog.providers?.flatMap((provider) => [`${provider.name} (${provider.id})`, ...provider.models.map((model) => `${provider.id === catalog.currentProvider && model.id === available.current ? '*' : ' '}   ${model.id}`)])
+      ?? available.models.map((model) => `${model === available.current ? '*' : ' '} ${model}`);
+    return `Current model: ${catalog.currentProvider ?? 'default'}/${available.current}\nAvailable models:\n${lines.join('\n')}`;
   }
   const model = name.trim();
+  const catalog = await resolveModelCatalog();
+  const separator = model.indexOf('/');
+  if (separator > 0) {
+    const providerId = model.slice(0, separator); const modelId = model.slice(separator + 1);
+    const provider = catalog.providers?.find((item) => item.id === providerId);
+    if (provider) {
+      if (!provider.models.some((item) => item.id === modelId)) throw new Error(`Unknown model: ${modelId} for provider ${providerId}`);
+      app.config.defaultProvider = providerId; app.config.model = modelId; await saveConfig(app.config);
+      return `[taiwei] Default provider/model set to ${providerId}/${modelId}.`;
+    }
+  }
   const known = available.models.includes(model);
   if (!known && available.source !== 'fallback') {
     throw new Error(`Unknown model: ${model}. Available models:\n${available.models.join('\n')}`);

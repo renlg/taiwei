@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { TaiweiApp } from './app.js';
 import { runOnce } from './cli/once.js';
 import { runRepl } from './cli/repl.js';
+import { runTui } from './tui/index.js';
 import { initializeConfig, validateGatewayAuth } from './config/config.js';
 import { AuthSessionStore } from './gateway/auth.js';
 import { AgentChatBridge } from './gateway/chat.js';
@@ -14,7 +15,8 @@ const VERSION = '0.1.0';
 const USAGE = `taiwei — proactive terminal AI agent
 
 Usage:
-  taiwei                     Start the interactive REPL
+  taiwei                     Start the interactive TUI (REPL when non-TTY)
+  taiwei --repl              Start the legacy readline REPL
   taiwei "prompt"            Run one agent turn
   taiwei serve [--port N]    Start the local web chat gateway
   taiwei cron list|run|history|remove ...
@@ -40,7 +42,9 @@ async function main(): Promise<void> {
   try {
     const serve = args[0] === 'serve';
     const cronCommand = args[0] === 'cron';
-    await app.initialize({ scheduler: args.length === 0 || serve });
+    const replRequested = args.length === 1 && args[0] === '--repl';
+    const interactive = args.length === 0 || replRequested;
+    await app.initialize({ scheduler: interactive || serve });
     if (serve) {
       validateGatewayAuth(app.config);
       let port = app.config.gateway.port;
@@ -64,6 +68,7 @@ async function main(): Promise<void> {
         mcpBridge: app.mcp,
         cronJobs: app.cronJobs,
         cronScheduler: app.scheduler,
+        pluginLoader: app.plugins,
       });
       const boundPort = await listenGateway(server, app.config.gateway.host, port);
       console.log(`[taiwei] Gateway listening at http://${app.config.gateway.host}:${boundPort}`);
@@ -82,8 +87,9 @@ async function main(): Promise<void> {
       else if (action === 'history') console.log(JSON.stringify(await app.scheduler.ledger.list(args[2]), null, 2));
       else if (action === 'remove' && args[2]) console.log((await app.cronJobs.remove(args[2])) ? 'removed' : 'not found');
       else throw new Error('Usage: taiwei cron list | run <id> | history [id] | remove <id>');
-    } else if (args.length) process.exitCode = await runOnce(app, args.join(' '));
-    else await runRepl(app);
+    } else if (replRequested || (args.length === 0 && (!process.stdin.isTTY || !process.stdout.isTTY))) await runRepl(app);
+    else if (args.length) process.exitCode = await runOnce(app, args.join(' '));
+    else await runTui(app);
   } catch (error) {
     console.error(`[taiwei] ${(error as Error).message}`); process.exitCode = 1;
   } finally { await app.close(); }

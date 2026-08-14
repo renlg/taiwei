@@ -9,7 +9,7 @@ export interface Skill {
   path: string;
 }
 
-function parseFrontmatter(source: string, path: string): Skill {
+export function parseSkill(source: string, path: string): Skill {
   const match = source.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
   if (!match) throw new Error(`Skill ${path} is missing YAML frontmatter`);
   const fields = new Map<string, string>();
@@ -45,7 +45,7 @@ export class SkillLoader {
       if (!entry.isDirectory()) continue;
       const path = join(skills, entry.name, 'SKILL.md');
       try {
-        const skill = parseFrontmatter(await readFile(path, 'utf8'), path);
+        const skill = parseSkill(await readFile(path, 'utf8'), path);
         if (options.includeDisabled || !this.isDisabled(skill)) loaded.push(skill);
       } catch { /* skip invalid skills in listings */ }
     }

@@ -25,6 +25,8 @@ Edit `~/.taiwei/config.json`, or set environment variables:
   "memoryFlush": true,
   "baseUrl": "https://api.openai.com/v1",
   "apiKey": "",
+  "defaultProvider": "default",
+  "providers": [],
   "maxTurns": 50,
   "requestTimeoutMs": 120000,
   "fallbackModel": "",
@@ -51,6 +53,7 @@ Edit `~/.taiwei/config.json`, or set environment variables:
     "bash": { "enabled": true, "defaultCwd": "" },
     "search_files": { "enabled": true, "maxResults": 50 }
   },
+  "plugins": {},
   "gateway": {
     "host": "127.0.0.1",
     "port": 8688
@@ -87,7 +90,9 @@ Edit `~/.taiwei/config.json`, or set environment variables:
 
 `TAIWEI_API_KEY`, `TAIWEI_BASE_URL`, `TAIWEI_MODEL`, and `TAIWEI_AUTH_PASSWORD` override the corresponding file values. `OAUTH_TAIWEI_SECRET` overrides `oauth.clientSecret`, and `OAUTH_TAIWEI_REDIRECT` overrides `oauth.redirectUri`. `TAIWEI_HOME` can override the state directory (useful for isolated environments).
 
-The optional `models` array is the user-curated candidate list shown by the REPL and web gateway. taiwei never fetches the provider's upstream model list. Duplicate names are removed while preserving order; when `models` is absent or empty, only the current model is shown.
+`providers` is the provider/model capability catalog. An empty array preserves the legacy behavior by synthesizing a `default` OpenAI-compatible provider from `baseUrl`, `apiKey`, `model`, and `models`. The historical `apiBaseUrl` spelling is also accepted as a legacy alias. Explicit providers use `{id,name,type,baseUrl,apiKey?,defaultModel?,models?}`; types are `openai-compatible` and `anthropic` (`responses` is reserved but not implemented). Each model declares `capabilities: {tools,vision,reasoning,streaming,contextWindow}` and optional per-million-token costs. Models without tool support receive no tool definitions.
+
+The optional legacy `models` array remains the user-curated candidate list for the default provider. taiwei never fetches an upstream model list.
 
 `contextWindows` can override the context-window size for individual model names. `contextWindow` is the fallback for models without an entry and defaults to 256,000 tokens when omitted or invalid. When prompt usage exceeds `contextWindow * compressThreshold`, taiwei summarizes older complete turns while retaining recent history; `compressThreshold` defaults to `0.7`, and zero or invalid values use that default. Before compression, `memoryFlush` (default `true`) asks the model to preserve durable facts from the discarded history in `memory.md`; set it to `false` to skip this step. Flush-driven appends retain only the newest approximately 60 KiB of memory.
 
@@ -98,7 +103,8 @@ The optional `models` array is the user-curated candidate list shown by the REPL
 ## Usage
 
 ```bash
-./bin/taiwei                         # interactive REPL
+./bin/taiwei                         # zero-dependency ANSI TUI on a TTY
+./bin/taiwei --repl                  # legacy readline REPL
 ./bin/taiwei "summarize this repo"   # one-shot agent turn
 ./bin/taiwei serve                   # local web chat at http://127.0.0.1:8688
 ./bin/taiwei serve --port 9000       # override the configured port
@@ -108,7 +114,7 @@ The optional `models` array is the user-curated candidate list shown by the REPL
 ./bin/taiwei --version
 ```
 
-The REPL commands are:
+The TUI starts with a recent-session picker and supports streamed messages/tool activity, input history, command completion, resize handling, `/resume <id>`, `/export <path>`, `/agent <plan|build>`, and session-local `/model <provider>/<model>`. Ctrl+C cancels an active turn or clears the draft, Ctrl+D exits, and Ctrl+L clears the pane. Non-TTY input automatically uses the readline REPL. The REPL commands are:
 
 ```text
 /help  /exit  /stop  /clear  /model [name]  /agent list|use|reset
@@ -149,7 +155,7 @@ If query embedding fails because of a timeout, network error, or upstream respon
 
 The workspace defaults to `~/workspace` (with `~` expanded using the operating-system home directory). taiwei creates it on startup and uses it as the default working directory for bash and other filesystem tools; it is a starting directory, not a jail, so commands may still use `cd`. Run `/workspace <path>` or use the web settings panel to change it. A running turn keeps its original directory, while later turns use the saved value.
 
-Run `/model` to list the models configured in the `models` array and mark the current one, or `/model <name>` to switch. With a configured list, switching to any other name is rejected. When the list is absent or empty, any non-empty model name is allowed. The choice is written to `~/.taiwei/config.json` and is shared immediately by the REPL, one-shot commands, scheduled turns, and the gateway.
+Run `/model` in the TUI to list providers and models, or `/model <provider>/<model>` to switch only the current terminal session. The browser model switcher is also session-local. The legacy REPL `/model <name>` command still updates the global default for backward compatibility.
 
 ### Local web chat
 
@@ -299,7 +305,7 @@ Disabled skills remain visible in the gateway manager but are omitted from CLI s
 
 ### MCP
 
-`mcp.json` is an array. Both stdio and legacy HTTP SSE transports are supported through the official MCP SDK:
+`mcp.json` is an array. Stdio, legacy HTTP SSE, and modern Streamable HTTP transports are supported through the official MCP SDK. Streamable HTTP sends JSON-RPC POST requests accepting JSON or SSE, supports custom headers, and uses reconnect backoff. MCP tool-list change notifications refresh registered schemas.
 
 ```json
 [
@@ -313,8 +319,9 @@ Disabled skills remain visible in the gateway manager but are omitted from CLI s
   },
   {
     "name": "remote",
-    "transport": "sse",
-    "url": "https://example.test/sse",
+    "transport": "streamable-http",
+    "url": "https://example.test/mcp",
+    "headers": { "Authorization": "Bearer ..." },
     "enabled": false
   }
 ]
@@ -324,29 +331,27 @@ MCP tools are exposed as `mcp_<server>_<tool>`.
 
 ### Plugins
 
-Each `~/.taiwei/plugins/<directory>/plugin.js` may be ESM or CommonJS and exports `{ name, tools?, skills?, init? }`. Tool entries use the same shape as built-in tools: `{ name, description, parameters, execute(args, context) }`.
+Plugin API v1 uses `~/.taiwei/plugins/<directory>/manifest.json` (or a `package.json` `taiwei` field):
+
+```json
+{"name":"example","version":"1.0.0","apiVersion":1,"description":"Example","author":"You","capabilities":["tools"],"main":"index.js","skills":[]}
+```
+
+The main ESM/CommonJS module receives `{log, registerTool, registerSkill, config, policyCheck}` in `init(api)` and may export `dispose()`. Per-plugin settings live at `plugins.<name>.{enabled,config}` and can be changed with `GET /api/plugins` and `POST /api/plugins/:name`. Pending tool work is awaited before disposal; thrown handlers mark the plugin crashed and subsequent calls return an error. Legacy `plugin.js` exports remain supported.
 
 ```js
 export default {
-  name: 'example',
-  tools: [{
+  init(api) {
+    api.registerTool({
     name: 'hello',
     description: 'Return a greeting',
-    parameters: { type: 'object', properties: {} },
-    execute: async () => 'hello from a plugin'
-  }],
-  skills: [{
-    name: 'friendly',
-    description: 'Use a friendly voice.',
-    body: 'Be warm and direct.'
-  }],
-  async init({ home }) {
-    // Optional startup hook.
+    parameters: { type: 'object', properties: {} }
+    }, async () => 'hello from a plugin');
   }
 };
 ```
 
-Plugin tools receive a `plugin_<plugin>_` prefix. Reloading plugins removes previously registered plugin-prefixed tools before loading the current files.
+Plugin tools receive a `plugin_<plugin>_` prefix. The current implementation uses guarded main-process execution rather than worker threads; crash containment handles thrown/rejected handlers but cannot isolate a native process crash or infinite synchronous loop.
 
 ## Development
 

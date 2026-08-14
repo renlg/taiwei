@@ -13,6 +13,8 @@ import { applyContextBudget, limitTextTokens, limitToolsTokens } from './budget.
 import { PolicyEngine } from '../security/policy.js';
 import { appendAudit } from '../observability/audit.js';
 import { emitEvent } from '../observability/events.js';
+import { filterToolsForModel, resolveModel } from '../llm/catalog.js';
+import { selectionFor } from '../config/model.js';
 
 export interface RunTurnOptions {
   signal?: AbortSignal;
@@ -32,6 +34,8 @@ export interface RunTurnOptions {
   workspaceRoot?: string;
   runId?: string;
   policy?: PolicyEngine;
+  providerId?: string;
+  model?: string;
 }
 
 export type AgentEvent =
@@ -160,10 +164,16 @@ export async function runAgentTurn(
   const maxTurns = options.agentProfile?.maxTurns ?? config.maxTurns;
   try { for (let turn = 0; turn < maxTurns; turn += 1) {
     if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
-    const model = options.getModel ? await options.getModel() : config.model;
+    const model = options.model ?? (options.getModel ? await options.getModel() : config.model);
+    const selection = selectionFor(config, options.providerId, model);
+    const resolved = resolveModel(config.providers.length ? config.providers : [{
+      id: 'default', name: 'Default', type: 'openai-compatible', baseUrl: config.baseUrl, apiKey: config.apiKey, defaultModel: config.model,
+      models: [{ id: model, provider: 'default', displayName: model, capabilities: { tools: true, vision: false, reasoning: false, streaming: true, contextWindow: resolveContextWindow(config, model) } }],
+    }], selection);
     let systemPrompt = limitTextTokens(await context.systemPrompt(options.cwd, config.customPrompt), config.budget.systemMax, config.tokenEstimateCharsPerToken);
-    const tools = limitToolsTokens(registry.list({ profile: options.agentProfile }).map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters })), config.budget.toolsMax, config.tokenEstimateCharsPerToken);
-    const contextWindow = resolveContextWindow(config, model);
+    const availableTools = registry.list({ profile: options.agentProfile }).map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters }));
+    const tools = limitToolsTokens(filterToolsForModel(availableTools, resolved.model), config.budget.toolsMax, config.tokenEstimateCharsPerToken);
+    const contextWindow = resolved.model.capabilities.contextWindow || resolveContextWindow(config, model);
     let budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
     if (budgetResult.needsCompression && !compressionAttempted) {
       compressionAttempted = true;
@@ -184,7 +194,8 @@ export async function runAgentTurn(
     });
     if (beforeLLM?.extraContext) systemPrompt = limitTextTokens(`${systemPrompt}\n\n${beforeLLM.extraContext}`, config.budget.systemMax, config.tokenEstimateCharsPerToken);
     const result = await streamChat({
-      baseUrl: config.baseUrl, apiKey: config.apiKey, model,
+      baseUrl: resolved.provider.baseUrl, apiKey: resolved.provider.apiKey ?? '', model,
+      provider: resolved.provider,
       messages: [{ role: 'system', content: systemPrompt }, ...conversation],
       tools,
       signal: options.signal, timeoutMs: config.requestTimeoutMs,

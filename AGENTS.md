@@ -135,6 +135,10 @@ Add password login to the web gateway (it currently binds 0.0.0.0 with no auth â
 - Security and execution events append to `~/.taiwei/audit.jsonl`; argument keys matching `key|token|secret|password|apiKey` are recursively redacted. Cron audit events reference `cron-runs.jsonl`.
 - `GET /api/audit?limit=&offset=` and the settings audit viewer are administrator-only.
 
+## Plugin API v1 isolation note
+
+- Plugin manifests, lifecycle disposal, policy checks, configuration, crash guards, and enable/disable APIs are implemented. Plugins currently execute in the main process: thrown or rejected handlers are contained and mark the plugin crashed, but native crashes and infinite synchronous loops are not worker-isolated yet.
+
 ## Core Requirements
 
 1. **TypeScript, Node >= 20, ESM.** Prefer Node built-ins (node:fs, node:child_process, node:readline, node:http/https). Core runtime dependencies stay minimal. Allowed deps: `@modelcontextprotocol/sdk` (MCP), `cron-parser` (cron expressions), plus optional-heavy `playwright`, which must be loaded lazily so core startup never depends on a browser binary.

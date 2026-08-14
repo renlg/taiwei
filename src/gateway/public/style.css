@@ -544,3 +544,5 @@ body.sidebar-collapsed .sidebar-footer { flex-direction: column; justify-content
 .cron-run { padding:9px 4px; border-bottom:1px solid var(--border); font-size:12px; }
 .cron-run.error,.cron-run.timeout { color:var(--danger); }
 @media (max-width:680px) { .cron-layout { grid-template-columns:1fr; } }
+.model-provider-label { padding: 8px 12px 4px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.management-subheading { margin: 22px 0 10px; font-size: 14px; }

@@ -109,6 +109,7 @@ const elements = {
   toolsError: $('#tools-error'),
   toolsReload: $('#tools-reload'),
   toolsList: $('#tools-list'),
+  pluginsList: $('#plugins-list'),
   memoryOpen: $('#memory-open'),
   memoryModal: $('#memory-modal'),
   memoryClose: $('#memory-close'),
@@ -173,6 +174,8 @@ const state = {
   username: localStorage.getItem('taiwei-username') || '',
   loginRole: 'admin',
   models: [],
+  providers: [],
+  currentProvider: 'default',
   currentModel: 'OpenAI compatible',
   currentAgent: 'build',
   switchingModel: false,
@@ -186,6 +189,7 @@ const state = {
   mcpStatuses: [],
   editingMcp: null,
   tools: [],
+  plugins: [],
   savedMemory: '',
   memoryFeedbackTimer: 0,
 };
@@ -769,10 +773,32 @@ function renderManagedTools(data) {
   }
 }
 
+function renderPlugins(data) {
+  state.plugins = data?.plugins || [];
+  elements.pluginsList.replaceChildren();
+  if (!state.plugins.length) { renderResourceEmpty(elements.pluginsList, '未安装插件'); return; }
+  for (const plugin of state.plugins) {
+    const card = document.createElement('article'); card.className = `tool-card${plugin.enabled ? '' : ' disabled'}`;
+    const top = document.createElement('div'); top.className = 'tool-card-top';
+    const copy = document.createElement('div'); copy.className = 'tool-card-copy';
+    const name = document.createElement('strong'); name.className = 'tool-card-name'; name.textContent = `${plugin.name}${plugin.version ? ` · ${plugin.version}` : ''}`;
+    const description = document.createElement('p'); description.className = 'tool-card-description'; description.textContent = plugin.error || `${plugin.tools} tools · ${plugin.skills} skills${plugin.crashed ? ' · crashed' : ''}`;
+    copy.append(name, description);
+    const toggleLabel = document.createElement('label'); toggleLabel.className = 'mcp-switch';
+    const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = plugin.enabled; const track = document.createElement('span'); toggleLabel.append(toggle, track); top.append(copy, toggleLabel); card.append(top);
+    toggle.addEventListener('change', async () => {
+      toggle.disabled = true;
+      try { const result = await requestJson(`/api/plugins/${encodeURIComponent(plugin.name)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: toggle.checked }) }); renderPlugins(result); await loadTools(); }
+      catch (error) { elements.toolsError.textContent = error.message; toggle.checked = !toggle.checked; toggle.disabled = false; }
+    });
+    elements.pluginsList.append(card);
+  }
+}
+
 async function loadTools(reload = false) {
   elements.toolsError.textContent = '';
   renderResourceEmpty(elements.toolsList, '加载中…');
-  try { renderManagedTools(await requestJson(reload ? '/api/tools/reload' : '/api/tools', reload ? { method: 'POST' } : {})); }
+  try { const [tools, plugins] = await Promise.all([requestJson(reload ? '/api/tools/reload' : '/api/tools', reload ? { method: 'POST' } : {}), requestJson('/api/plugins').catch(() => ({ plugins: [] }))]); renderManagedTools(tools); renderPlugins(plugins); }
   catch (error) { elements.toolsError.textContent = error.message; renderResourceEmpty(elements.toolsList, '工具加载失败'); }
 }
 
@@ -1291,22 +1317,31 @@ function renderModels() {
   elements.model.textContent = state.currentModel;
   elements.modelTrigger.title = `当前模型：${state.currentModel}`;
   elements.modelOptions.replaceChildren();
-  for (const name of state.models) {
+  const groups = state.providers.length ? state.providers : [{ id: state.currentProvider, name: 'Default', models: state.models.map((id) => ({ id, displayName: id })) }];
+  for (const provider of groups) {
+    const heading = document.createElement('div');
+    heading.className = 'model-provider-label'; heading.textContent = provider.name;
+    elements.modelOptions.append(heading);
+    for (const model of provider.models) {
+    const name = model.id;
     const option = document.createElement('button');
-    const active = name === state.currentModel;
+    const active = name === state.currentModel && provider.id === state.currentProvider;
     option.type = 'button';
     option.className = `model-option${active ? ' active' : ''}`;
     option.dataset.model = name;
+    option.dataset.provider = provider.id;
     option.setAttribute('role', 'option');
     option.setAttribute('aria-selected', String(active));
-    option.innerHTML = `<span class="model-option-mark">${active ? '✓' : ''}</span><span>${escapeHtml(name)}</span>`;
+    option.innerHTML = `<span class="model-option-mark">${active ? '✓' : ''}</span><span>${escapeHtml(model.displayName || name)}</span>`;
     elements.modelOptions.append(option);
+    }
   }
 }
 
-async function selectModel(name) {
-  if (state.switchingModel || name === state.currentModel) { closeModelMenu(); return; }
+async function selectModel(name, provider = state.currentProvider) {
+  if (state.switchingModel || (name === state.currentModel && provider === state.currentProvider)) { closeModelMenu(); return; }
   const previous = state.currentModel;
+  const previousProvider = state.currentProvider;
   state.switchingModel = true;
   elements.modelSwitcher.classList.add('loading');
   elements.modelError.textContent = '';
@@ -1314,9 +1349,11 @@ async function selectModel(name) {
     const result = await requestJson('/api/model', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: name }),
+      body: JSON.stringify({ model: name, provider, sessionId: state.current?.id }),
     });
     state.currentModel = result.current;
+    state.currentProvider = result.provider || provider;
+    if (state.current) { state.current.currentModel = result.current; state.current.providerId = state.currentProvider; }
     state.contextWindow = result.contextWindow || state.contextWindow;
     state.usage = { ...state.usage, contextWindow: state.contextWindow, model: state.currentModel };
     if (state.current) state.current.usage = state.usage;
@@ -1327,6 +1364,7 @@ async function selectModel(name) {
     showToast(`已切换到 ${result.current}`);
   } catch (error) {
     state.currentModel = previous;
+    state.currentProvider = previousProvider;
     elements.modelError.textContent = error.message;
     renderModels();
   } finally {
@@ -1345,7 +1383,7 @@ elements.modelTrigger.addEventListener('click', () => {
 
 elements.modelOptions.addEventListener('click', (event) => {
   const option = event.target.closest('[data-model]');
-  if (option) selectModel(option.dataset.model);
+  if (option) selectModel(option.dataset.model, option.dataset.provider);
 });
 
 elements.userTrigger.addEventListener('click', () => {
@@ -1366,11 +1404,14 @@ async function loadSession(id) {
     const session = await requestJson(`/api/sessions/${encodeURIComponent(id)}`);
     if (version !== state.loadVersion) return;
     state.current = session;
+    state.currentModel = session.currentModel || state.currentModel;
+    state.currentProvider = session.providerId || state.currentProvider;
     state.currentAgent = session.agentId || 'build';
     elements.agentSelector.value = state.currentAgent;
     state.attachments = [];
     renderAttachments();
     renderConversation(session);
+    renderModels();
     renderSessionList();
     elements.body.classList.remove('sidebar-open');
     setStatus('idle', '就绪');
@@ -1382,6 +1423,8 @@ async function createSession() {
   try {
     const session = await requestJson('/api/sessions', { method: 'POST' });
     state.current = session;
+    state.currentModel = session.currentModel || state.currentModel;
+    state.currentProvider = session.providerId || state.currentProvider;
     state.currentAgent = session.agentId || 'build';
     elements.agentSelector.value = state.currentAgent;
     state.attachments = [];
@@ -2049,6 +2092,8 @@ async function loadChat() {
     showChat();
     state.sessions = sessions;
     state.currentModel = models?.current || info.model || state.currentModel;
+    state.currentProvider = models?.currentProvider || state.currentProvider;
+    state.providers = models?.providers || [];
     state.contextWindow = info.contextWindow || state.contextWindow;
     state.workspace = info.workspace || '';
     elements.workspaceLabel.textContent = state.workspace;

@@ -71,7 +71,7 @@ export class TaiweiApp {
     if (options.scheduler !== false) { await this.scheduler.start(); console.log(`[taiwei] Scheduler started (${(await this.cronJobs.list()).filter((job) => job.enabled).length} enabled jobs)`); }
   }
 
-  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string } = {}): Promise<string> {
+  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string; providerId?: string; model?: string } = {}): Promise<string> {
     const runtimeSessionId = options.runtimeSessionId ?? options.sessionId ?? 'local';
     return this.runtime.run(runtimeSessionId, async (runtimeSignal) => {
       const localSignal = options.sessionId ? undefined : this.interrupt.beginTurn();
@@ -94,7 +94,8 @@ export class TaiweiApp {
           retainConversation: options.retainConversation,
           onText: options.stream ? (text) => process.stdout.write(text) : undefined,
           onEvent: options.onEvent,
-          getModel: getCurrentModel,
+          getModel: options.model ? undefined : getCurrentModel,
+          providerId: options.providerId, model: options.model,
           confirmDanger: options.confirmDanger,
           authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(command, workspace, this.config.security, handler, commandSignal),
           hooks: this.hooks,
@@ -173,5 +174,5 @@ export class TaiweiApp {
     this.interrupt.notify({ title: `cron job "${job.name}" ${run.status}`, message: summary });
   }
 
-  async close(): Promise<void> { this.scheduler.stop(); await this.browser.close(); await this.mcp.close(); }
+  async close(): Promise<void> { this.scheduler.stop(); await this.browser.close(); await this.plugins.close(); await this.mcp.close(); }
 }

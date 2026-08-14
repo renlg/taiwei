@@ -8,7 +8,7 @@ import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
 import { LoginLockStore, type LoginLock } from './login-locks.js';
 import { SessionStore, type SessionToolCall } from './sessions.js';
 import { openSse, sendSse } from './sse.js';
-import { getCurrentModel, resolveModels, setCurrentModel, type ModelListResult } from '../config/model.js';
+import { getCurrentModel, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
 import { DEFAULT_CONFIG, expandHome, loadConfig, resolveContextWindow, resolveToolSettings, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
 import { hashPassword, isScryptPassword, verifyPassword } from '../config/password.js';
 import { getPaths } from '../util/paths.js';
@@ -28,6 +28,7 @@ import { CronJobStore, type CronJobInput } from '../cron/jobs.js';
 import { CronScheduler, jobNextRun } from '../cron/scheduler.js';
 import { BUILTIN_AGENTS, getAgentProfile } from '../agents/profiles.js';
 import { readAudit } from '../observability/audit.js';
+import type { PluginLoader } from '../plugins/loader.js';
 
 export interface GatewayHistoryIndex {
   upsertSession(meta: HistorySessionMeta): Promise<void>;
@@ -73,6 +74,7 @@ export interface GatewayServerOptions {
   history?: GatewayHistoryIndex | false;
   cronJobs?: CronJobStore;
   cronScheduler?: CronScheduler;
+  pluginLoader?: Pick<PluginLoader, 'list' | 'setEnabled'>;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
@@ -267,11 +269,11 @@ async function knowledgeIndexStatus(path: string): Promise<{ exists: boolean; ch
   }
 }
 
-type McpPublicServer = Omit<McpServerConfig, 'env'> & { envKeys: string[] };
+type McpPublicServer = Omit<McpServerConfig, 'env' | 'headers'> & { envKeys: string[]; headerKeys?: string[] };
 
 function publicMcpServer(config: McpServerConfig): McpPublicServer {
-  const { env, ...safe } = config;
-  return { ...safe, envKeys: Object.keys(env ?? {}) };
+  const { env, headers, ...safe } = config;
+  return { ...safe, envKeys: Object.keys(env ?? {}), ...(headers ? { headerKeys: Object.keys(headers) } : {}) };
 }
 
 function validateMcpServer(value: unknown): McpServerConfig & { preserveEnv?: boolean } {
@@ -279,15 +281,15 @@ function validateMcpServer(value: unknown): McpServerConfig & { preserveEnv?: bo
   const body = value as Record<string, unknown>;
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) throw new HttpError(400, 'name must match [A-Za-z0-9_-]{1,32}');
-  if (body.transport !== 'stdio' && body.transport !== 'sse') throw new HttpError(400, 'transport must be stdio or sse');
+  if (body.transport !== 'stdio' && body.transport !== 'sse' && body.transport !== 'streamable-http') throw new HttpError(400, 'transport must be stdio, sse, or streamable-http');
   const command = typeof body.command === 'string' ? body.command.trim() : '';
   const url = typeof body.url === 'string' ? body.url.trim() : '';
   if (body.transport === 'stdio' && !command) throw new HttpError(400, 'stdio transport requires command');
-  if (body.transport === 'sse') {
+  if (body.transport === 'sse' || body.transport === 'streamable-http') {
     let parsed: URL;
     try { parsed = new URL(url); }
-    catch { throw new HttpError(400, 'sse transport requires a valid url'); }
-    if (!['http:', 'https:'].includes(parsed.protocol)) throw new HttpError(400, 'sse url must use http or https');
+    catch { throw new HttpError(400, 'HTTP transport requires a valid url'); }
+    if (!['http:', 'https:'].includes(parsed.protocol)) throw new HttpError(400, 'HTTP url must use http or https');
   }
   if (body.args !== undefined && (!Array.isArray(body.args) || !body.args.every((arg) => typeof arg === 'string'))) {
     throw new HttpError(400, 'args must be an array of strings');
@@ -296,6 +298,8 @@ function validateMcpServer(value: unknown): McpServerConfig & { preserveEnv?: bo
     || !Object.entries(body.env as Record<string, unknown>).every(([key, item]) => key.trim() && typeof item === 'string'))) {
     throw new HttpError(400, 'env must be an object with non-empty keys and string values');
   }
+  if (body.headers !== undefined && (!body.headers || typeof body.headers !== 'object' || Array.isArray(body.headers)
+    || !Object.entries(body.headers as Record<string, unknown>).every(([key, item]) => key.trim() && typeof item === 'string'))) throw new HttpError(400, 'headers must be an object with string values');
   if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be boolean');
   if (body.preserveEnv !== undefined && typeof body.preserveEnv !== 'boolean') throw new HttpError(400, 'preserveEnv must be boolean');
   return {
@@ -304,6 +308,7 @@ function validateMcpServer(value: unknown): McpServerConfig & { preserveEnv?: bo
     ...(body.transport === 'stdio' ? { command } : { url }),
     ...(body.args !== undefined ? { args: [...body.args as string[]] } : {}),
     ...(body.env !== undefined ? { env: { ...body.env as Record<string, string> } } : {}),
+    ...(body.headers !== undefined ? { headers: { ...body.headers as Record<string, string> } } : {}),
     enabled: body.enabled !== false,
     ...(body.preserveEnv === true ? { preserveEnv: true } : {}),
   };
@@ -382,7 +387,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   }
   const log = options.log ?? console.log;
   const oauthStates = new Map<string, number>();
-  const modelState: GatewayModelState = options.modelState ?? { getCurrentModel, resolveModels, setCurrentModel };
+  const modelState: GatewayModelState = options.modelState ?? { getCurrentModel, resolveModels: resolveModelCatalog, setCurrentModel };
   const contextWindowFor = options.contextWindow ?? (async (model: string) => resolveContextWindow(await loadConfig(), model));
   const requireMcpBridge = () => {
     if (!options.mcpBridge) throw new HttpError(503, 'MCP bridge is unavailable');
@@ -610,6 +615,18 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           hookTimeoutSeconds: config.hookTimeoutSeconds,
         });
         return;
+      }
+      if (method === 'GET' && pathname === '/api/plugins') {
+        if (!options.pluginLoader) throw new HttpError(503, 'Plugin loader is unavailable');
+        json(response, 200, { plugins: options.pluginLoader.list() }); return;
+      }
+      const pluginRoute = pathname.match(/^\/api\/plugins\/([^/]+)$/);
+      if (method === 'POST' && pluginRoute) {
+        if (!options.pluginLoader) throw new HttpError(503, 'Plugin loader is unavailable');
+        const body = await readJson(request) as { enabled?: unknown };
+        if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be boolean');
+        await options.pluginLoader.setEnabled(decodeURIComponent(pluginRoute[1]), body.enabled);
+        json(response, 200, { ok: true, plugins: options.pluginLoader.list() }); return;
       }
       if (method === 'GET' && pathname === '/api/settings/custom-prompt') {
         const config = await configState.load();
@@ -956,7 +973,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       }
       if (method === 'GET' && pathname === '/api/models') {
         const listed = await modelState.resolveModels();
-        json(response, 200, { models: listed.models, current: listed.current });
+        json(response, 200, { models: listed.models, current: listed.current, currentProvider: listed.currentProvider, providers: listed.providers });
         return;
       }
       if (method === 'GET' && pathname === '/api/agents') {
@@ -1005,24 +1022,34 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         json(response, 200, { runs: await options.cronScheduler.ledger.list(url.searchParams.get('jobId') ?? undefined, Number(url.searchParams.get('limit') ?? 100)) }); return;
       }
       if (method === 'GET' && pathname === '/api/model') {
-        json(response, 200, { current: await modelState.getCurrentModel() });
+        const sessionId = new URL(request.url ?? '/', 'http://localhost').searchParams.get('sessionId');
+        const session = sessionId ? await activeSessions.get(sessionId) : undefined;
+        json(response, 200, { current: session?.currentModel ?? await modelState.getCurrentModel(), provider: session?.providerId });
         return;
       }
       if (method === 'POST' && pathname === '/api/model') {
-        const body = await readJson(request) as { model?: unknown };
+        const body = await readJson(request) as { model?: unknown; provider?: unknown; sessionId?: unknown };
         if (typeof body?.model !== 'string' || !body.model.trim()) {
           json(response, 400, { error: 'model must be a non-empty string' });
           return;
         }
         const model = body.model.trim();
         const listed = await modelState.resolveModels();
-        const known = listed.models.includes(model);
+        const provider = typeof body.provider === 'string' ? body.provider.trim() : listed.currentProvider;
+        const selectedProvider = listed.providers?.find((item) => item.id === provider);
+        const known = selectedProvider ? selectedProvider.models.some((item) => item.id === model) : listed.models.includes(model);
         if (!known && listed.source !== 'fallback') {
           json(response, 400, { error: `Unknown model: ${model}`, models: listed.models });
           return;
         }
-        await modelState.setCurrentModel(model);
-        json(response, 200, { ok: true, current: model, contextWindow: await contextWindowFor(model) });
+        if (body.sessionId !== undefined) {
+          if (typeof body.sessionId !== 'string') throw new HttpError(400, 'sessionId must be a string');
+          const session = await activeSessions.get(body.sessionId);
+          if (!session) throw new HttpError(404, 'Session not found');
+          session.currentModel = model; session.providerId = provider; session.updatedAt = new Date().toISOString();
+          await activeSessions.save(session);
+        } else await modelState.setCurrentModel(model);
+        json(response, 200, { ok: true, current: model, provider, contextWindow: selectedProvider?.models.find((item) => item.id === model)?.capabilities.contextWindow ?? await contextWindowFor(model) });
         return;
       }
       if (method === 'GET' && pathname === '/api/sessions') {
@@ -1105,7 +1132,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         }
         const agentMessage = `${message}${await attachmentContext(body.files, uploadsDirectory)}`;
         const history = activeSessions.toChatHistory(session);
-        const activeModel = await modelState.getCurrentModel();
+        const activeModel = session.currentModel ?? await modelState.getCurrentModel();
         const activeContextWindow = await contextWindowFor(activeModel);
         if (!session.messages.some((item) => item.role === 'user')) session.title = activeSessions.titleFrom(message) || session.title;
         session.messages.push({ role: 'user', content: message, ...(agentMessage !== message ? { agentContent: agentMessage } : {}), timestamp: new Date().toISOString() });
@@ -1149,7 +1176,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             sendSse(response, 'confirm', request);
             return confirmations.wait(request);
           },
-        }, history, session.id, turnMemory, session.agentId ?? 'build', authenticatedRole, authenticatedUsername ?? authenticatedRole, runtimeSessionId);
+        }, history, session.id, turnMemory, session.agentId ?? 'build', authenticatedRole, authenticatedUsername ?? authenticatedRole, runtimeSessionId, session.providerId, session.currentModel);
         const content = finalText ?? answer;
         if (finalText !== undefined || content || toolCalls.length || turnError) {
           const stopped = turnError?.message === 'Turn cancelled';

@@ -1,5 +1,6 @@
 import type { OpenAIToolSchema } from './tools.js';
 import { parseRetryAfter, ProviderHttpError, retryableProviderError, withProviderRetry, type RetryOptions } from './retry.js';
+import type { ProviderConfig } from './providers/types.js';
 
 export interface ToolCall {
   id: string;
@@ -32,6 +33,7 @@ export interface ChatRequest {
   fallbackModel?: string;
   retry?: Omit<RetryOptions, 'onRetry'>;
   onAttempt?: (event: { model: string; attempt: number; delayMs?: number; outcome: 'start' | 'retry' | 'success' | 'fallback' }) => void;
+  provider?: ProviderConfig;
 }
 
 interface ProviderUsage {
@@ -120,7 +122,7 @@ async function streamChatOnce(request: ChatRequest, model: string): Promise<Chat
   return { content, toolCalls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call), usage, model };
 }
 
-export async function streamChat(request: ChatRequest): Promise<ChatResult> {
+export async function openAICompatibleStream(request: ChatRequest): Promise<ChatResult> {
   const retry = request.retry ?? { maxAttempts: 1, baseDelayMs: 1_000, maxDelayMs: 30_000 };
   const runModel = async (model: string) => withProviderRetry(async (attempt) => {
     request.onAttempt?.({ model, attempt, outcome: 'start' });
@@ -140,4 +142,14 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
     const result = await streamChatOnce(request, request.fallbackModel);
     return { ...result, attempts: retry.maxAttempts + 1 };
   }
+}
+
+export async function streamChat(request: ChatRequest): Promise<ChatResult> {
+  if (!request.provider || request.provider.type === 'openai-compatible') return openAICompatibleStream(request);
+  const { providerAdapter } = await import('./providers/index.js');
+  return providerAdapter(request.provider.type).stream({
+    provider: request.provider, model: request.model, messages: request.messages, tools: request.tools,
+    signal: request.signal, timeoutMs: request.timeoutMs, onText: request.onText,
+    fallbackModel: request.fallbackModel, retry: request.retry, onAttempt: request.onAttempt,
+  });
 }
