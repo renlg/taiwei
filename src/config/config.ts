@@ -19,6 +19,7 @@ export interface TaiweiConfig {
   contextWindow?: number;
   contextWindows?: Record<string, number>;
   compressThreshold?: number;
+  memoryFlush: boolean;
   baseUrl: string;
   apiKey: string;
   maxTurns: number;
@@ -55,6 +56,7 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   embedModel: 'embeddings',
   contextWindow: 256_000,
   compressThreshold: 0.7,
+  memoryFlush: true,
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
   maxTurns: 50,
@@ -130,6 +132,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     ...stored,
     customPrompt: typeof stored.customPrompt === 'string' ? stored.customPrompt : DEFAULT_CONFIG.customPrompt,
     compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...stored } as TaiweiConfig),
+    memoryFlush: typeof stored.memoryFlush === 'boolean' ? stored.memoryFlush : DEFAULT_CONFIG.memoryFlush,
     hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
     hooks: normalizeHooks(stored.hooks),
     autoLoadSkills: stored.autoLoadSkills ?? DEFAULT_CONFIG.autoLoadSkills,
@@ -180,6 +183,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       ...stored,
       customPrompt: typeof stored.customPrompt === 'string' ? stored.customPrompt : DEFAULT_CONFIG.customPrompt,
       compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...stored } as TaiweiConfig),
+      memoryFlush: typeof stored.memoryFlush === 'boolean' ? stored.memoryFlush : DEFAULT_CONFIG.memoryFlush,
       hookTimeoutSeconds: normalizeHookTimeout(stored.hookTimeoutSeconds),
       hooks: normalizeHooks(stored.hooks),
       skillsDisabled: normalizeStringList(stored.skillsDisabled),

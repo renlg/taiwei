@@ -117,6 +117,8 @@ Add password login to the web gateway (it currently binds 0.0.0.0 with no auth �
 
 8. **Memory** (`memory/`): persistent markdown file `~/.taiwei/memory.md`. The agent gets a `memory_read` + `memory_append` tool. Memory is also auto-injected into the system prompt (trimmed to last N chars, e.g. 2000) every turn. `/memory show`, `/memory clear` commands.
 
+   Before conversation compression discards old turns, memory flush distills durable facts from that exact history slice into `memory.md`; `memoryFlush` defaults to `true` and flush failures never block compression.
+
 9. **RAG** (`rag/`): documents in `~/.taiwei/knowledge/**` (markdown/txt). `/rag index` chunks them (by paragraphs/headings, chunk size ~1000 chars with overlap) and builds an in-memory/JSON-file index. `/rag search <query>` retrieves top-k chunks and injects them as context. Default retrieval: keyword/BM25 scoring over chunks (implement a simple tokenizer + IDF scoring — no external vector DB). Leave a pluggable `Embedder` interface (embedding API optional, not required for v1). Expose a `rag_search` tool to the agent.
 
 10. **Plugins** (`plugins/`): `~/.taiwei/plugins/` — each subdir has `plugin.js` (CommonJS or ESM) exporting `{ name, tools?: [], skills?: [], init?: async (ctx) => void }`. `plugins/loader.ts` loads them at startup; plugin-registered tools are added to ToolRegistry with a `plugin_<name>_` prefix. `/plugin list`, `/plugin reload`. This is the extension mechanism — keep the interface minimal and documented in README.

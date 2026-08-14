@@ -6,6 +6,7 @@ import { toOpenAITool } from '../llm/tools.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ConfirmationHandler } from '../security/commands.js';
 import type { HookRunner } from '../hooks/runner.js';
+import { MemoryStore } from '../memory/store.js';
 
 export interface RunTurnOptions {
   signal?: AbortSignal;
@@ -28,6 +29,11 @@ export type AgentEvent =
   | { type: 'done'; text: string };
 
 const COMPRESSION_PROMPT = 'Compress the following conversation history into a concise factual summary preserving key facts, decisions, user preferences, file paths, and unresolved tasks. Output only the summary.';
+const FLUSH_PROMPT = 'Extract ONLY durable, long-term-worthy facts from the conversation history: user preferences, personal facts, project decisions, file paths, conventions, recurring constraints, and tasks the user wants remembered. Exclude transient chatter, greetings, and one-off questions with no lasting value. Avoid facts already present in the supplied memory tail. Output plain text lines with no markdown headers or JSON wrapper. If nothing is worth remembering, output exactly NO_MEMORY.';
+const NO_MEMORY = 'NO_MEMORY';
+const MEMORY_FLUSH_TAIL_CHARS = 800;
+const MEMORY_FLUSH_MAX_CHARS = 60 * 1024;
+const FLUSH_TOOL_RESULT_CHARS = 2_000;
 
 function compressionBoundary(conversation: ChatMessage[]): number {
   const retainedCount = Math.max(20, Math.ceil(conversation.length / 3));
@@ -49,13 +55,59 @@ function renderHistory(messages: ChatMessage[]): string {
   }).join('\n\n');
 }
 
-async function compressConversation(
+function renderFlushHistory(messages: ChatMessage[]): string {
+  return messages.map((message) => {
+    if (message.role === 'tool') {
+      const content = message.content.length > FLUSH_TOOL_RESULT_CHARS
+        ? `${message.content.slice(0, FLUSH_TOOL_RESULT_CHARS)}…[truncated]`
+        : message.content;
+      return `tool (${message.name ?? message.tool_call_id}): ${content}`;
+    }
+    if (message.role === 'assistant' && message.tool_calls?.length) {
+      return `assistant: ${message.content ?? ''}\ntool calls: ${JSON.stringify(message.tool_calls)}`;
+    }
+    return `${message.role}: ${message.content}`;
+  }).join('\n');
+}
+
+async function flushMemory(
   conversation: ChatMessage[],
+  boundary: number,
   config: TaiweiConfig,
   model: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  const boundary = compressionBoundary(conversation);
+  if (!boundary) return false;
+  const memory = new MemoryStore();
+  const memoryTail = (await memory.tail(MEMORY_FLUSH_TAIL_CHARS)).trim();
+  const result = await streamChat({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    model,
+    messages: [
+      { role: 'system', content: FLUSH_PROMPT },
+      {
+        role: 'user',
+        content: `Existing memory tail:\n${memoryTail || '(empty)'}\n\nHistory being discarded:\n${renderFlushHistory(conversation.slice(0, boundary))}`,
+      },
+    ],
+    tools: [],
+    signal,
+    timeoutMs: 60_000,
+  });
+  const durableMemory = result.content.trim();
+  if (!durableMemory || durableMemory === NO_MEMORY) return false;
+  await memory.append(`## flushed ${new Date().toISOString()}\n${durableMemory}`, MEMORY_FLUSH_MAX_CHARS);
+  return true;
+}
+
+async function compressConversation(
+  conversation: ChatMessage[],
+  boundary: number,
+  config: TaiweiConfig,
+  model: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
   if (!boundary) return false;
   const result = await streamChat({
     baseUrl: config.baseUrl,
@@ -116,7 +168,15 @@ export async function runAgentTurn(
       options.onEvent?.({ type: 'usage', usage: { ...result.usage, contextWindow }, model });
       if (!compressionAttempted && result.usage.promptTokens > contextWindow * resolveCompressThreshold(config)) {
         compressionAttempted = true;
-        try { await compressConversation(conversation, config, model, options.signal); }
+        const boundary = compressionBoundary(conversation);
+        if (config.memoryFlush) {
+          try { await flushMemory(conversation, boundary, config, model, options.signal); }
+          catch (error) {
+            if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
+            console.debug(`[taiwei] Memory flush skipped: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        try { await compressConversation(conversation, boundary, config, model, options.signal); }
         catch (error) {
           if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
           console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`);

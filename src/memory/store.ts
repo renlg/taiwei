@@ -12,10 +12,17 @@ export class MemoryStore {
     return content.slice(-maxChars);
   }
 
-  async append(text: string): Promise<void> {
+  async append(text: string, maxChars?: number): Promise<void> {
     const { memory } = await ensureTaiweiHome();
-    const prefix = (await this.read()).trim() ? '\n\n' : '';
-    await appendFile(memory, `${prefix}${text.trim()}\n`, 'utf8');
+    const content = await this.read();
+    const prefix = content.trim() ? '\n\n' : '';
+    const addition = `${prefix}${text.trim()}\n`;
+    if (maxChars && content.length + addition.length > maxChars) {
+      // Flush appends are capped by retaining the newest approximate 60 KiB.
+      await writeFile(memory, `${content}${addition}`.slice(-maxChars), 'utf8');
+      return;
+    }
+    await appendFile(memory, addition, 'utf8');
   }
 
   async clear(): Promise<void> {

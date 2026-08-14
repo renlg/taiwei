@@ -43,6 +43,7 @@ test('config initializes with defaults and honors environment overrides', async 
     assert.equal(config.baseUrl, 'https://api.openai.com/v1');
     assert.equal(config.contextWindow, 256_000);
     assert.equal(config.compressThreshold, 0.7);
+    assert.equal(config.memoryFlush, true);
     assert.equal(resolveCompressThreshold({ ...config, compressThreshold: 0 }), 0.7);
     assert.equal(config.maxTurns, 50);
     assert.equal(config.customPrompt, '');
@@ -65,7 +66,7 @@ test('config initializes with defaults and honors environment overrides', async 
 test('gateway auth validation rejects an enabled empty password', () => {
   assert.throws(() => validateGatewayAuth({
     model: 'test', embedModel: 'embeddings', baseUrl: 'http://localhost', apiKey: '', maxTurns: 1, requestTimeoutMs: 1,
-    customPrompt: '',
+    customPrompt: '', memoryFlush: true,
     hookTimeoutSeconds: 10, hooks: emptyHooks(),
     gateway: { host: '127.0.0.1', port: 0 },
     auth: { enabled: true, username: 'admin', password: '' },
@@ -90,11 +91,13 @@ test('config load migrates a stored plaintext password without persisting env ov
   try {
     await writeFile(join(directory, 'config.json'), JSON.stringify({
       model: 'stored-model',
+      memoryFlush: false,
       auth: { enabled: true, username: 'admin', password: 'legacy secret' },
     }));
     const config = await loadConfig();
     const stored = JSON.parse(await readFile(join(directory, 'config.json'), 'utf8')) as TaiweiConfig;
     assert.equal(config.model, 'environment-model');
+    assert.equal(config.memoryFlush, false);
     assert.equal(stored.model, 'stored-model');
     assert.ok(isScryptPassword(stored.auth.password));
     assert.ok(verifyPassword('legacy secret', stored.auth.password));
@@ -381,17 +384,22 @@ test('agent turn compresses old complete turns above the configured context thre
   process.env.TAIWEI_HOME = directory;
   let requests = 0;
   let compressionInput = '';
+  let flushInput = '';
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { messages: Array<{ role: string; content: string }> };
     const compressing = payload.messages[0]?.content.includes('Compress the following conversation history');
+    const flushing = payload.messages[0]?.content.includes('Extract ONLY durable, long-term-worthy facts');
     requests += 1;
     if (compressing) compressionInput = payload.messages[1]?.content ?? '';
+    if (flushing) flushInput = payload.messages[1]?.content ?? '';
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({
-      choices: [{ message: { content: compressing ? 'Key fact: the original preference was blue.' : 'Final answer', tool_calls: [] } }],
-      usage: compressing
+      choices: [{ message: { content: flushing
+        ? 'The user prefers blue for this project.'
+        : compressing ? 'Key fact: the original preference was blue.' : 'Final answer', tool_calls: [] } }],
+      usage: compressing || flushing
         ? { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 }
         : { prompt_tokens: 71, completion_tokens: 2, total_tokens: 73 },
     }));
@@ -401,6 +409,7 @@ test('agent turn compresses old complete turns above the configured context thre
     const address = server.address();
     assert(address && typeof address === 'object');
     const context = new AgentContext(new MemoryStore(), new SkillLoader());
+    await writeFile(join(directory, 'memory.md'), 'Existing durable fact.\n');
     for (let index = 0; index < 15; index += 1) {
       context.messages.push({ role: 'user', content: `old-user-${index}` });
       context.messages.push({ role: 'assistant', content: `old-assistant-${index}` });
@@ -416,9 +425,15 @@ test('agent turn compresses old complete turns above the configured context thre
       onEvent: (event) => { if (event.type === 'usage') usageEvents.push(event.usage); },
     });
     assert.equal(answer, 'Final answer');
-    assert.equal(requests, 2);
+    assert.equal(requests, 3);
     assert.match(compressionInput, /old-user-0/);
     assert.doesNotMatch(compressionInput, /old-user-14/);
+    assert.match(flushInput, /Existing memory tail:\nExisting durable fact\./);
+    assert.match(flushInput, /old-user-0/);
+    assert.doesNotMatch(flushInput, /old-user-14/);
+    const memory = await readFile(join(directory, 'memory.md'), 'utf8');
+    assert.match(memory, /## flushed \d{4}-\d{2}-\d{2}T/);
+    assert.match(memory, /The user prefers blue for this project\./);
     assert.equal(context.messages[0]?.role, 'system');
     assert.match(String(context.messages[0]?.content), /Key fact: the original preference was blue/);
     assert(!context.messages.some((message) => message.role === 'user' && message.content === 'old-user-0'));
@@ -470,6 +485,7 @@ test('agent turn silently keeps history when conversation compression fails', as
       baseUrl: `http://127.0.0.1:${address.port}`,
       contextWindow: 100,
       compressThreshold: 0.7,
+      memoryFlush: false,
     };
     assert.equal(await runAgentTurn('latest', context, new ToolRegistry(), config), 'Answer survives');
     assert.equal(requests, 2);
@@ -478,6 +494,137 @@ test('agent turn silently keeps history when conversation compression fails', as
     assert.match(warning, /Conversation compression skipped.*summary unavailable/);
   } finally {
     console.warn = originalWarn;
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('memory flush sentinel and empty output do not append', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-memory-flush-empty-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  let flushes = 0;
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { messages: Array<{ content: string }> };
+    const flushing = payload.messages[0]?.content.includes('Extract ONLY durable, long-term-worthy facts');
+    const compressing = payload.messages[0]?.content.includes('Compress the following conversation history');
+    if (flushing) flushes += 1;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({
+      choices: [{ message: { content: flushing ? (flushes === 1 ? 'NO_MEMORY' : '   ') : compressing ? 'Summary' : 'Answer', tool_calls: [] } }],
+      usage: { prompt_tokens: flushing || compressing ? 10 : 71, completion_tokens: 1, total_tokens: flushing || compressing ? 11 : 72 },
+    }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    await writeFile(join(directory, 'memory.md'), 'Keep this memory unchanged.\n');
+    const config = { ...structuredClone(DEFAULT_CONFIG), baseUrl: `http://127.0.0.1:${address.port}`, contextWindow: 100 };
+    for (let run = 0; run < 2; run += 1) {
+      const context = new AgentContext(new MemoryStore(), new SkillLoader());
+      for (let index = 0; index < 15; index += 1) {
+        context.messages.push({ role: 'user', content: `user-${run}-${index}` });
+        context.messages.push({ role: 'assistant', content: `assistant-${run}-${index}` });
+      }
+      assert.equal(await runAgentTurn('latest', context, new ToolRegistry(), config), 'Answer');
+    }
+    assert.equal(flushes, 2);
+    assert.equal(await readFile(join(directory, 'memory.md'), 'utf8'), 'Keep this memory unchanged.\n');
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('memoryFlush false skips flush while conversation compression still runs', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-memory-flush-disabled-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  let flushes = 0;
+  let compressions = 0;
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { messages: Array<{ content: string }> };
+    const flushing = payload.messages[0]?.content.includes('Extract ONLY durable, long-term-worthy facts');
+    const compressing = payload.messages[0]?.content.includes('Compress the following conversation history');
+    if (flushing) flushes += 1;
+    if (compressing) compressions += 1;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({
+      choices: [{ message: { content: compressing ? 'Disabled-flush summary' : 'Answer', tool_calls: [] } }],
+      usage: { prompt_tokens: compressing ? 10 : 71, completion_tokens: 1, total_tokens: compressing ? 11 : 72 },
+    }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    const context = new AgentContext(new MemoryStore(), new SkillLoader());
+    for (let index = 0; index < 15; index += 1) {
+      context.messages.push({ role: 'user', content: `user-${index}` });
+      context.messages.push({ role: 'assistant', content: `assistant-${index}` });
+    }
+    const config = { ...structuredClone(DEFAULT_CONFIG), baseUrl: `http://127.0.0.1:${address.port}`, contextWindow: 100, memoryFlush: false };
+    assert.equal(await runAgentTurn('latest', context, new ToolRegistry(), config), 'Answer');
+    assert.equal(flushes, 0);
+    assert.equal(compressions, 1);
+    assert.match(String(context.messages[0]?.content), /Disabled-flush summary/);
+    assert.equal(await readFile(join(directory, 'memory.md'), 'utf8'), '');
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('memory flush failure does not block conversation compression', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-memory-flush-failure-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  const originalDebug = console.debug;
+  process.env.TAIWEI_HOME = directory;
+  let debug = '';
+  let compressions = 0;
+  console.debug = (message?: unknown) => { debug = String(message); };
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { messages: Array<{ content: string }> };
+    const flushing = payload.messages[0]?.content.includes('Extract ONLY durable, long-term-worthy facts');
+    const compressing = payload.messages[0]?.content.includes('Compress the following conversation history');
+    if (flushing) {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: { message: 'flush unavailable' } }));
+      return;
+    }
+    if (compressing) compressions += 1;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({
+      choices: [{ message: { content: compressing ? 'Summary after failed flush' : 'Answer', tool_calls: [] } }],
+      usage: { prompt_tokens: compressing ? 10 : 71, completion_tokens: 1, total_tokens: compressing ? 11 : 72 },
+    }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    const context = new AgentContext(new MemoryStore(), new SkillLoader());
+    for (let index = 0; index < 15; index += 1) {
+      context.messages.push({ role: 'user', content: `user-${index}` });
+      context.messages.push({ role: 'assistant', content: `assistant-${index}` });
+    }
+    const config = { ...structuredClone(DEFAULT_CONFIG), baseUrl: `http://127.0.0.1:${address.port}`, contextWindow: 100 };
+    assert.equal(await runAgentTurn('latest', context, new ToolRegistry(), config), 'Answer');
+    assert.equal(compressions, 1);
+    assert.match(String(context.messages[0]?.content), /Summary after failed flush/);
+    assert.match(debug, /Memory flush skipped.*flush unavailable/);
+  } finally {
+    console.debug = originalDebug;
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(directory, { recursive: true, force: true });
