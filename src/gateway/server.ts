@@ -9,7 +9,7 @@ import { LoginLockStore, type LoginLock } from './login-locks.js';
 import { SessionStore, type SessionToolCall } from './sessions.js';
 import { openSse, sendSse } from './sse.js';
 import { getCurrentModel, resolveModels, setCurrentModel, type ModelListResult } from '../config/model.js';
-import { DEFAULT_CONFIG, expandHome, loadConfig, resolveContextWindow, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
+import { DEFAULT_CONFIG, expandHome, loadConfig, resolveContextWindow, resolveToolSettings, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
 import { hashPassword, isScryptPassword, verifyPassword } from '../config/password.js';
 import { getPaths } from '../util/paths.js';
 import { DEFAULT_DANGER_PATTERNS } from '../security/commands.js';
@@ -24,6 +24,9 @@ import { ToolRegistry, type ToolConfigSchema } from '../tools/registry.js';
 import type { Skill } from '../skills/loader.js';
 import { appendMessage as appendHistoryMessage, upsertSession as upsertHistorySession, type HistoryMessageInput, type HistorySessionMeta } from '../history/db.js';
 import { MemoryStore } from '../memory/store.js';
+import { CronJobStore, type CronJobInput } from '../cron/jobs.js';
+import { CronScheduler, jobNextRun } from '../cron/scheduler.js';
+import { BUILTIN_AGENTS, getAgentProfile } from '../agents/profiles.js';
 
 export interface GatewayHistoryIndex {
   upsertSession(meta: HistorySessionMeta): Promise<void>;
@@ -67,10 +70,12 @@ export interface GatewayServerOptions {
   mcpConfigPath?: string;
   /** Defaults to the real history index for the normal SessionStore; custom stores may inject their own index. */
   history?: GatewayHistoryIndex | false;
+  cronJobs?: CronJobStore;
+  cronScheduler?: CronScheduler;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '18';
+const STATIC_ASSET_VERSION = '19';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -401,7 +406,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const toolSnapshot = async () => {
     if (!toolRegistry) throw new HttpError(503, 'Tool registry is unavailable');
     const config = await configState.load();
-    toolRegistry.configure(config.tools);
+    toolRegistry.configure(resolveToolSettings(config));
     return { tools: toolRegistry.list({ includeDisabled: true }).map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -873,7 +878,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           },
         };
         await configState.save(config);
-        toolRegistry.configure(config.tools);
+        toolRegistry.configure(resolveToolSettings(config));
         json(response, 200, { ok: true, enabled: toolRegistry.isEnabled(name), config: toolRegistry.getConfig(name) });
         return;
       }
@@ -951,6 +956,51 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const listed = await modelState.resolveModels();
         json(response, 200, { models: listed.models, current: listed.current });
         return;
+      }
+      if (method === 'GET' && pathname === '/api/agents') {
+        json(response, 200, { agents: BUILTIN_AGENTS.map(({ id, mode }) => ({ id, mode })) }); return;
+      }
+      if (method === 'POST' && pathname === '/api/agent') {
+        const body = await readJson(request) as { sessionId?: unknown; agentId?: unknown };
+        if (typeof body.sessionId !== 'string' || typeof body.agentId !== 'string') throw new HttpError(400, 'sessionId and agentId are required');
+        getAgentProfile(body.agentId);
+        const session = await activeSessions.get(body.sessionId);
+        if (!session) throw new HttpError(404, 'Session not found');
+        session.agentId = body.agentId; session.updatedAt = new Date().toISOString(); await activeSessions.save(session);
+        json(response, 200, { ok: true, agentId: body.agentId }); return;
+      }
+      if (method === 'GET' && pathname === '/api/cron') {
+        if (!options.cronJobs || !options.cronScheduler) throw new HttpError(503, 'Cron scheduler is unavailable');
+        const jobs = await options.cronJobs.list();
+        json(response, 200, { jobs: jobs.map((job) => ({ ...job, nextRun: job.enabled ? jobNextRun(job)?.toISOString() : undefined, lastRuns: options.cronScheduler!.ledger.lastRuns(job.id) })) });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/cron') {
+        if (!options.cronJobs || !options.cronScheduler) throw new HttpError(503, 'Cron scheduler is unavailable');
+        const body = await readJson(request) as CronJobInput & { id?: unknown };
+        if (typeof body.name !== 'string' || !body.name.trim()) throw new HttpError(400, 'name is required');
+        const job = typeof body.id === 'string'
+          ? await options.cronJobs.update(body.id, body)
+          : await options.cronJobs.add(body);
+        if (!job) throw new HttpError(404, 'Cron job not found');
+        await options.cronScheduler.reload(); json(response, typeof body.id === 'string' ? 200 : 201, job); return;
+      }
+      if (method === 'DELETE' && pathname === '/api/cron') {
+        if (!options.cronJobs || !options.cronScheduler) throw new HttpError(503, 'Cron scheduler is unavailable');
+        const id = new URL(request.url ?? '/', 'http://localhost').searchParams.get('id');
+        if (!id) throw new HttpError(400, 'id is required');
+        if (!await options.cronJobs.remove(id)) throw new HttpError(404, 'Cron job not found');
+        await options.cronScheduler.reload(); json(response, 200, { ok: true }); return;
+      }
+      const cronRunRoute = pathname.match(/^\/api\/cron\/([^/]+)\/run$/);
+      if (method === 'POST' && cronRunRoute) {
+        if (!options.cronScheduler) throw new HttpError(503, 'Cron scheduler is unavailable');
+        json(response, 200, await options.cronScheduler.runNow(decodeURIComponent(cronRunRoute[1]))); return;
+      }
+      if (method === 'GET' && pathname === '/api/cron/runs') {
+        if (!options.cronScheduler) throw new HttpError(503, 'Cron scheduler is unavailable');
+        const url = new URL(request.url ?? '/', 'http://localhost');
+        json(response, 200, { runs: await options.cronScheduler.ledger.list(url.searchParams.get('jobId') ?? undefined, Number(url.searchParams.get('limit') ?? 100)) }); return;
       }
       if (method === 'GET' && pathname === '/api/model') {
         json(response, 200, { current: await modelState.getCurrentModel() });
@@ -1088,7 +1138,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             sendSse(response, 'confirm', request);
             return confirmations.wait(request);
           },
-        }, history, session.id, turnMemory);
+        }, history, session.id, turnMemory, session.agentId ?? 'build');
         const content = finalText ?? answer;
         if (finalText !== undefined || content || toolCalls.length || turnError) {
           const stopped = turnError?.message === 'Turn cancelled';

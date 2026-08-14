@@ -31,6 +31,7 @@ const elements = {
   modelMenu: $('#model-menu'),
   modelOptions: $('#model-options'),
   modelError: $('#model-error'),
+  agentSelector: $('#agent-selector'),
   chat: $('#chat-scroll'),
   messages: $('#messages'),
   welcome: $('#welcome'),
@@ -121,6 +122,7 @@ const elements = {
   memoryRebuild: $('#memory-rebuild'),
   memoryIndexStatus: $('#memory-index-status'),
   extendedMemoryList: $('#extended-memory-list'),
+  cronOpen: $('#cron-open'), cronModal: $('#cron-modal'), cronClose: $('#cron-close'), cronError: $('#cron-error'), cronList: $('#cron-list'), cronHistory: $('#cron-history'),
   workspaceInput: $('#workspace-input'),
   workspaceResolved: $('#workspace-resolved'),
   workspaceLabel: $('#workspace-label'),
@@ -171,6 +173,7 @@ const state = {
   loginRole: 'admin',
   models: [],
   currentModel: 'OpenAI compatible',
+  currentAgent: 'build',
   switchingModel: false,
   contextWindow: 256000,
   usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, contextWindow: 256000, model: '' },
@@ -389,9 +392,39 @@ async function openSettings() {
 }
 
 function closeResourcePanels(except) {
-  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal]) {
+  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal, elements.cronModal]) {
     if (modal !== except && modal.open) modal.close();
   }
+}
+
+function cronRunText(run) {
+  return `${run.status} · ${new Date(run.startedAt).toLocaleString()}${run.output ? ` · ${run.output.slice(0, 100)}` : ''}${run.error ? ` · ${run.error}` : ''}`;
+}
+
+async function loadCron() {
+  elements.cronError.textContent = '';
+  const [{ jobs }, { runs }] = await Promise.all([requestJson('/api/cron'), requestJson('/api/cron/runs?limit=50')]);
+  if (!jobs.length) renderResourceEmpty(elements.cronList, '暂无定时任务');
+  else {
+    elements.cronList.replaceChildren();
+    for (const job of jobs) {
+      const row = document.createElement('article'); row.className = 'cron-job';
+      const info = document.createElement('div'); info.innerHTML = `<strong>${escapeHtml(job.name)}</strong><small>${escapeHtml(job.kind)} · ${escapeHtml(job.at || job.schedule || '')}<br>下次：${job.nextRun ? new Date(job.nextRun).toLocaleString() : '—'}</small>`;
+      const actions = document.createElement('div'); actions.className = 'cron-actions';
+      const toggle = document.createElement('button'); toggle.className = 'small-button'; toggle.textContent = job.enabled ? '暂停' : '启用';
+      const run = document.createElement('button'); run.className = 'small-button'; run.textContent = '立即运行';
+      toggle.addEventListener('click', async () => { toggle.disabled = true; try { await requestJson('/api/cron', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...job, enabled: !job.enabled }) }); await loadCron(); } catch (error) { elements.cronError.textContent = error.message; toggle.disabled = false; } });
+      run.addEventListener('click', async () => { run.disabled = true; run.textContent = '运行中…'; try { await requestJson(`/api/cron/${encodeURIComponent(job.id)}/run`, { method: 'POST' }); await loadCron(); } catch (error) { elements.cronError.textContent = error.message; run.disabled = false; run.textContent = '立即运行'; } });
+      actions.append(toggle, run); row.append(info, actions); elements.cronList.append(row);
+    }
+  }
+  if (!runs.length) renderResourceEmpty(elements.cronHistory, '暂无运行记录');
+  else { elements.cronHistory.replaceChildren(...runs.map((run) => { const row = document.createElement('div'); row.className = `cron-run ${run.status}`; row.textContent = cronRunText(run); return row; })); }
+}
+
+async function openCron() {
+  closeResourcePanels(elements.cronModal); if (!elements.cronModal.open) elements.cronModal.showModal(); elements.body.classList.remove('sidebar-open');
+  try { await loadCron(); } catch (error) { elements.cronError.textContent = error.message; }
 }
 
 function formatBytes(bytes) {
@@ -1321,6 +1354,8 @@ async function loadSession(id) {
     const session = await requestJson(`/api/sessions/${encodeURIComponent(id)}`);
     if (version !== state.loadVersion) return;
     state.current = session;
+    state.currentAgent = session.agentId || 'build';
+    elements.agentSelector.value = state.currentAgent;
     state.attachments = [];
     renderAttachments();
     renderConversation(session);
@@ -1335,6 +1370,8 @@ async function createSession() {
   try {
     const session = await requestJson('/api/sessions', { method: 'POST' });
     state.current = session;
+    state.currentAgent = session.agentId || 'build';
+    elements.agentSelector.value = state.currentAgent;
     state.attachments = [];
     renderAttachments();
     await refreshSessions();
@@ -1528,6 +1565,18 @@ elements.composer.addEventListener('submit', (event) => {
   submit(message, files);
 });
 
+elements.agentSelector.addEventListener('change', async () => {
+  const previous = state.currentAgent;
+  state.currentAgent = elements.agentSelector.value;
+  if (!state.current) return;
+  elements.agentSelector.disabled = true;
+  try {
+    await requestJson('/api/agent', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: state.current.id, agentId: state.currentAgent }) });
+    state.current.agentId = state.currentAgent;
+  } catch (error) { state.currentAgent = previous; elements.agentSelector.value = previous; showToast(error.message); }
+  finally { elements.agentSelector.disabled = false; }
+});
+
 elements.attachmentButton.addEventListener('click', () => {
   if (!state.controller && state.attachments.length < 5) elements.fileInput.click();
 });
@@ -1569,7 +1618,9 @@ elements.toolsOpen.addEventListener('click', openTools);
 elements.toolsClose.addEventListener('click', () => elements.toolsModal.close());
 elements.memoryOpen.addEventListener('click', openMemory);
 elements.memoryClose.addEventListener('click', () => elements.memoryModal.close());
-for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal]) {
+elements.cronOpen.addEventListener('click', openCron);
+elements.cronClose.addEventListener('click', () => elements.cronModal.close());
+for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal, elements.cronModal]) {
   modal.addEventListener('click', (event) => { if (event.target === modal) modal.close(); });
 }
 elements.memoryContent.addEventListener('input', updateMemoryControls);

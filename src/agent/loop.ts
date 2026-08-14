@@ -7,6 +7,7 @@ import type { ToolRegistry } from '../tools/registry.js';
 import type { ConfirmationHandler } from '../security/commands.js';
 import type { HookRunner } from '../hooks/runner.js';
 import { MemoryStore } from '../memory/store.js';
+import type { AgentProfile } from '../agents/profiles.js';
 
 export interface RunTurnOptions {
   signal?: AbortSignal;
@@ -19,6 +20,8 @@ export interface RunTurnOptions {
   authorizeCommand?: (command: string, cwd: string, handler?: ConfirmationHandler, signal?: AbortSignal) => Promise<boolean>;
   hooks?: HookRunner;
   sessionId?: string;
+  agentProfile?: AgentProfile;
+  delegationDepth?: number;
 }
 
 export type AgentEvent =
@@ -135,10 +138,12 @@ export async function runAgentTurn(
   options: RunTurnOptions = {},
 ): Promise<string> {
   const conversation = options.retainConversation === false ? [] : context.messages;
+  if (options.agentProfile) context.profile = options.agentProfile;
   conversation.push({ role: 'user', content: prompt });
   let fullText = '';
   let compressionAttempted = false;
-  for (let turn = 0; turn < config.maxTurns; turn += 1) {
+  const maxTurns = options.agentProfile?.maxTurns ?? config.maxTurns;
+  for (let turn = 0; turn < maxTurns; turn += 1) {
     if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
     const model = options.getModel ? await options.getModel() : config.model;
     const systemPrompt = await context.systemPrompt(options.cwd, config.customPrompt);
@@ -151,7 +156,7 @@ export async function runAgentTurn(
     const result = await streamChat({
       baseUrl: config.baseUrl, apiKey: config.apiKey, model,
       messages: [{ role: 'system', content: beforeLLM?.extraContext ? `${systemPrompt}\n\n${beforeLLM.extraContext}` : systemPrompt }, ...conversation],
-      tools: registry.list().map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters })),
+      tools: registry.list({ profile: options.agentProfile }).map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters })),
       signal: options.signal, timeoutMs: config.requestTimeoutMs,
       onText: (text) => {
         fullText += text;
@@ -205,10 +210,12 @@ export async function runAgentTurn(
           : undefined,
         hooks: options.hooks,
         sessionId: options.sessionId,
+        agentProfile: options.agentProfile,
+        delegationDepth: options.delegationDepth ?? 0,
       });
       options.onEvent?.({ type: 'tool_result', name: call.function.name, result: output });
       conversation.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: output });
     }
   }
-  throw new Error(`Agent stopped after reaching the ${config.maxTurns}-turn safety limit`);
+  throw new Error(`Agent stopped after reaching the ${maxTurns}-turn safety limit`);
 }

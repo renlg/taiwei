@@ -120,7 +120,7 @@ Add password login to the web gateway (it currently binds 0.0.0.0 with no auth â
 
 ## Core Requirements
 
-1. **TypeScript, Node >= 20, ESM.** Prefer Node built-ins (node:fs, node:child_process, node:readline, node:http/https). Keep runtime dependencies minimal. Allowed deps: `@modelcontextprotocol/sdk` (MCP), `cron-parser` (cron expressions). Everything else should be zero-dep.
+1. **TypeScript, Node >= 20, ESM.** Prefer Node built-ins (node:fs, node:child_process, node:readline, node:http/https). Core runtime dependencies stay minimal. Allowed deps: `@modelcontextprotocol/sdk` (MCP), `cron-parser` (cron expressions), plus optional-heavy `playwright`, which must be loaded lazily so core startup never depends on a browser binary.
 
 2. **Agent loop** (`agent/loop.ts`): send conversation (system prompt + messages) to an OpenAI-compatible chat completions endpoint; if the response contains tool_calls, execute them through ToolRegistry, append results as `tool` role messages, and repeat until the model stops calling tools. Support streaming output for text. Cap max turns (e.g. 50). Handle provider errors gracefully (timeout, 429, 5xx).
 

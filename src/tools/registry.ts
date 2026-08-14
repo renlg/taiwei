@@ -2,6 +2,8 @@ import type { ToolDefinition } from '../llm/tools.js';
 import type { HookRunner } from '../hooks/runner.js';
 import type { ToolSettings } from '../config/config.js';
 import type { AgentContext } from '../agent/context.js';
+import type { AgentProfile } from '../agents/profiles.js';
+import { toolDenied } from '../agents/profiles.js';
 
 export interface ToolConfigField {
   type: 'number' | 'string';
@@ -25,6 +27,8 @@ export interface ToolContext {
   agentContext?: AgentContext;
   /** Runtime-only settings supplied by ToolRegistry; these are never exposed as LLM arguments. */
   toolConfig?: Readonly<Record<string, unknown>>;
+  agentProfile?: AgentProfile;
+  delegationDepth?: number;
 }
 
 export interface ToolSpec extends ToolDefinition {
@@ -74,15 +78,16 @@ export class ToolRegistry {
     ]));
   }
 
-  list(options: { includeDisabled?: boolean } = {}): ToolSpec[] {
+  list(options: { includeDisabled?: boolean; profile?: AgentProfile } = {}): ToolSpec[] {
     const tools = [...this.tools.values()];
-    return options.includeDisabled ? tools : tools.filter((tool) => this.isEnabled(tool.name));
+    return (options.includeDisabled ? tools : tools.filter((tool) => this.isEnabled(tool.name))).filter((tool) => !toolDenied(tool.name, options.profile));
   }
 
   async dispatch(name: string, args: Record<string, unknown>, context: ToolContext): Promise<string> {
     const tool = this.tools.get(name);
     if (!tool) return JSON.stringify({ error: `Unknown tool: ${name}` });
     if (!this.isEnabled(name)) return JSON.stringify({ error: `Tool "${name}" is disabled` });
+    if (toolDenied(name, context.agentProfile)) return JSON.stringify({ error: `Tool "${name}" is denied by agent profile "${context.agentProfile?.id}"` });
     const hook = await context.hooks?.run('beforeTool', { sessionId: context.sessionId, tool: name, args, cwd: context.cwd });
     if (hook?.block) {
       const output = JSON.stringify({ error: '用户拒绝了该命令的执行', blockedByHook: hook.reason });

@@ -34,6 +34,7 @@ export interface GatewaySession {
   updatedAt: string;
   messages: SessionMessage[];
   usage?: SessionUsage;
+  agentId?: string;
 }
 
 export interface SessionSummary {
@@ -50,9 +51,9 @@ export class SessionStore {
 
   async initialize(): Promise<void> { await mkdir(this.directory, { recursive: true }); }
 
-  async create(): Promise<GatewaySession> {
+  async create(agentId = 'build'): Promise<GatewaySession> {
     const now = new Date().toISOString();
-    const session: GatewaySession = { id: randomUUID(), title: '新会话', createdAt: now, updatedAt: now, messages: [] };
+    const session: GatewaySession = { id: randomUUID(), title: '新会话', createdAt: now, updatedAt: now, messages: [], agentId };
     await this.save(session);
     return session;
   }

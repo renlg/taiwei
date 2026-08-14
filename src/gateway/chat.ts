@@ -14,14 +14,14 @@ export interface ChatSink {
 }
 
 export interface ChatBridge {
-  run(message: string, sink: ChatSink, history?: ChatMessage[], sessionId?: string, memory?: MemoryStore): Promise<void>;
+  run(message: string, sink: ChatSink, history?: ChatMessage[], sessionId?: string, memory?: MemoryStore, agentId?: string): Promise<void>;
   stop(): boolean;
 }
 
 export class AgentChatBridge implements ChatBridge {
   constructor(private readonly app: TaiweiApp) {}
 
-  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], sessionId?: string, memory?: MemoryStore): Promise<void> {
+  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], sessionId?: string, memory?: MemoryStore, agentId = 'build'): Promise<void> {
     const context = new AgentContext(memory ?? this.app.memory, this.app.skills, !memory);
     context.setMessages(history);
     for (const skill of this.app.context.listActiveSkills()) context.activateSkill(skill);
@@ -39,6 +39,7 @@ export class AgentChatBridge implements ChatBridge {
         confirmDanger: sink.confirm,
         sessionId,
         skipBeforeMessageHook: true,
+        agentId,
       });
     } catch (error) {
       const reason = error instanceof Error ? error : new Error(String(error));

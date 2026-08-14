@@ -46,6 +46,7 @@
         <button class="sidebar-section-button" id="mcp-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⌘</span><span class="sidebar-label">MCP</span></button>
         <button class="sidebar-section-button" id="tools-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🔧</span><span class="sidebar-label">工具</span></button>
         <button class="sidebar-section-button" id="memory-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">📝</span><span class="sidebar-label">持久记忆</span></button>
+        <button class="sidebar-section-button" id="cron-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⏰</span><span class="sidebar-label">定时任务</span></button>
       </nav>
       <div class="history-heading"><span>历史会话</span><span id="session-count">0</span></div>
       <nav class="session-list" id="session-list" aria-label="历史会话"></nav>
@@ -134,6 +135,9 @@
           </div>
           <div class="composer-footer">
             <div class="composer-controls">
+              <label class="agent-switcher admin-only" title="选择当前会话的 Agent 模式">Agent
+                <select id="agent-selector" aria-label="选择 Agent"><option value="build">Build</option><option value="plan">Plan</option></select>
+              </label>
               <div class="model-switcher admin-only" id="model-switcher">
                 <button class="model-trigger" id="model-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
                   <span class="model-spark" aria-hidden="true">✦</span>
@@ -349,6 +353,13 @@
         <div class="index-status" id="memory-index-status">索引尚未加载</div>
         <div class="extended-memory-list" id="extended-memory-list"></div>
       </section>
+    </div>
+  </dialog>
+  <dialog class="modal management-modal" id="cron-modal">
+    <div class="modal-card management-card cron-card">
+      <header><div><h2>定时任务</h2><p>启停任务、立即运行并查看持久运行记录</p></div><button class="icon-button" id="cron-close" type="button" aria-label="关闭">×</button></header>
+      <div class="management-error" id="cron-error" role="alert"></div>
+      <div class="cron-layout"><div class="resource-list" id="cron-list"></div><div><h3>运行历史</h3><div class="resource-list" id="cron-history"></div></div></div>
     </div>
   </dialog>
   <div class="toast" id="toast" role="status"></div>

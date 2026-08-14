@@ -6,6 +6,7 @@ export interface TaiweiPaths {
   home: string;
   config: string;
   cron: string;
+  cronRuns: string;
   mcp: string;
   memory: string;
   memoryDir: string;
@@ -27,6 +28,7 @@ export function getPaths(): TaiweiPaths {
     home,
     config: join(home, 'config.json'),
     cron: join(home, 'cron.json'),
+    cronRuns: join(home, 'cron-runs.jsonl'),
     mcp: join(home, 'mcp.json'),
     memory: join(home, 'memory.md'),
     memoryDir: join(home, 'memory'),

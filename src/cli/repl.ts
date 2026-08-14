@@ -11,6 +11,7 @@ import { mkdir, stat } from 'node:fs/promises';
 import type { ConfirmationHandler } from '../security/commands.js';
 import { randomUUID } from 'node:crypto';
 import { appendMessage, getSession, listSessions, rebuildHistoryDb, searchMessages, upsertSession } from '../history/db.js';
+import { BUILTIN_AGENTS, getAgentProfile } from '../agents/profiles.js';
 
 const color = {
   cyan: (text: string) => `\x1b[36m${text}\x1b[0m`,
@@ -24,11 +25,13 @@ const HELP = `Commands:
   /stop                         Cancel the active turn
   /clear                        Clear conversation history
   /model [name]                 List models or change the current model
+  /agent list|use <id>|reset    Select Plan or Build agent
   /workspace <path>             Change the default tool working directory
   /skill list|load|unload ...   Manage active skills
   /cron list                    List scheduled jobs
   /cron add <name> <schedule> <prompt>
   /cron remove|pause|resume <id>
+  /cron run <id> | history [id]
   /mcp list|reload              Manage MCP connections
   /memory show|clear            Manage persistent memory
   /rag index|search <query>     Index or search local knowledge
@@ -83,6 +86,13 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
     case '/model': {
       output(await handleModelCommand(app, action)); break;
     }
+    case '/agent': {
+      if (!action || action === 'list') output(BUILTIN_AGENTS.map((profile) => `${profile.id === app.activeAgentId ? '*' : ' '} ${profile.id} (${profile.mode})`).join('\n'));
+      else if (action === 'use' && args[0]) { getAgentProfile(args[0]); app.activeAgentId = args[0]; app.context.clear(); output(`[taiwei] Agent set to ${args[0]}.`); }
+      else if (action === 'reset') { app.activeAgentId = 'build'; app.context.clear(); output('[taiwei] Agent reset to build.'); }
+      else throw new Error('Usage: /agent list | /agent use <plan|build> | /agent reset');
+      break;
+    }
     case '/workspace': {
       const path = [action, ...args].filter(Boolean).join(' ').trim();
       if (!path) throw new Error('Usage: /workspace <path>');
@@ -112,7 +122,7 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
     case '/cron': {
       if (action === 'list') {
         const jobs = await app.cronJobs.list();
-        output(jobs.length ? jobs.map((job) => `${job.id} ${job.enabled ? 'active' : 'paused'} ${job.name} [${job.schedule}] next=${job.enabled ? nextRun(job.schedule).toLocaleString() : '-'}`).join('\n') : 'No cron jobs.');
+        output(jobs.length ? jobs.map((job) => `${job.id} ${job.enabled ? 'active' : 'paused'} ${job.name} [${job.at ?? job.schedule}] next=${job.enabled ? app.scheduler.next(job)?.toLocaleString() ?? '-' : '-'}`).join('\n') : 'No cron jobs.');
       } else if (action === 'add' && args.length >= 3) {
         nextRun(args[1]);
         const job = await app.cronJobs.add(args[0], args[1], args.slice(2).join(' ')); await app.scheduler.reload();
@@ -120,7 +130,9 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
       } else if (['remove', 'pause', 'resume'].includes(action ?? '') && args[0]) {
         const ok = action === 'remove' ? await app.cronJobs.remove(args[0]) : await app.cronJobs.setEnabled(args[0], action === 'resume');
         if (ok) await app.scheduler.reload(); output(ok ? `[taiwei] Cron job ${action}d.` : '[taiwei] Cron job not found.');
-      } else throw new Error('Usage: /cron list | add <name> <schedule> <prompt> | remove|pause|resume <id>');
+      } else if (action === 'run' && args[0]) output(JSON.stringify(await app.scheduler.runNow(args[0]), null, 2));
+      else if (action === 'history') output(JSON.stringify(await app.scheduler.ledger.list(args[0]), null, 2));
+      else throw new Error('Usage: /cron list | add <name> <schedule> <prompt> | remove|pause|resume <id> | run <id> | history [id]');
       break;
     }
     case '/mcp': {

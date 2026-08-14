@@ -30,6 +30,8 @@ export interface TaiweiConfig {
   autoLoadSkills?: boolean;
   skillsDisabled?: string[];
   tools?: Record<string, ToolSettings>;
+  delegation: { maxConcurrent: number; maxDepth: number };
+  browser: { headless: boolean; userDataDir: string; idleMinutes: number };
   gateway: {
     host: string;
     port: number;
@@ -79,6 +81,8 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
     afterTool: [],
   },
   autoLoadSkills: true,
+  delegation: { maxConcurrent: 3, maxDepth: 2 },
+  browser: { headless: true, userDataDir: '', idleMinutes: 10 },
   gateway: {
     host: '127.0.0.1',
     port: 8688,
@@ -125,6 +129,14 @@ export function resolveContextWindow(config: TaiweiConfig, model = config.model)
     : DEFAULT_CONFIG.contextWindow ?? 256_000;
 }
 
+export function resolveToolSettings(config: TaiweiConfig): Record<string, ToolSettings> {
+  const settings = { ...(config.tools ?? {}) };
+  for (const name of ['browser_navigate', 'browser_click', 'browser_type', 'browser_extract', 'browser_screenshot']) {
+    settings[name] = { ...config.browser, ...settings[name] };
+  }
+  return settings;
+}
+
 export function resolveCompressThreshold(config: TaiweiConfig): number {
   const configured = config.compressThreshold;
   return typeof configured === 'number' && Number.isFinite(configured) && configured > 0 && configured <= 1
@@ -155,6 +167,8 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     autoLoadSkills: storedConfig.autoLoadSkills ?? DEFAULT_CONFIG.autoLoadSkills,
     skillsDisabled: normalizeStringList(storedConfig.skillsDisabled),
     tools: normalizeToolSettings(storedConfig.tools),
+    delegation: { ...DEFAULT_CONFIG.delegation, ...storedConfig.delegation },
+    browser: { ...DEFAULT_CONFIG.browser, ...storedConfig.browser },
     gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },
     auth: { ...DEFAULT_CONFIG.auth, ...storedConfig.auth },
     oauth: { ...DEFAULT_CONFIG.oauth, ...storedConfig.oauth },
@@ -211,6 +225,8 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       hooks: normalizeHooks(storedConfig.hooks),
       skillsDisabled: normalizeStringList(storedConfig.skillsDisabled),
       tools: normalizeToolSettings(storedConfig.tools),
+      delegation: { ...DEFAULT_CONFIG.delegation, ...storedConfig.delegation },
+      browser: { ...DEFAULT_CONFIG.browser, ...storedConfig.browser },
       gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },
       auth: { ...DEFAULT_CONFIG.auth, ...storedConfig.auth },
       oauth: { ...DEFAULT_CONFIG.oauth, ...storedConfig.oauth },
@@ -232,6 +248,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
     return {
       ...DEFAULT_CONFIG,
       hooks: normalizeHooks(),
+      delegation: { ...DEFAULT_CONFIG.delegation }, browser: { ...DEFAULT_CONFIG.browser },
       gateway: { ...DEFAULT_CONFIG.gateway },
       auth: { ...DEFAULT_CONFIG.auth },
       oauth: { ...DEFAULT_CONFIG.oauth },

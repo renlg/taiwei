@@ -38,6 +38,8 @@ Edit `~/.taiwei/config.json`, or set environment variables:
   },
   "autoLoadSkills": true,
   "skillsDisabled": [],
+  "delegation": { "maxConcurrent": 3, "maxDepth": 2 },
+  "browser": { "headless": true, "userDataDir": "", "idleMinutes": 10 },
   "tools": {
     "rag_search": { "enabled": true, "limit": 5 },
     "bash": { "enabled": true, "defaultCwd": "" },
@@ -94,6 +96,8 @@ The optional `models` array is the user-curated candidate list shown by the REPL
 ./bin/taiwei "summarize this repo"   # one-shot agent turn
 ./bin/taiwei serve                   # local web chat at http://127.0.0.1:8688
 ./bin/taiwei serve --port 9000       # override the configured port
+./bin/taiwei cron list               # inspect durable scheduled jobs
+./bin/taiwei cron run <id>           # run a job immediately
 ./bin/taiwei --help
 ./bin/taiwei --version
 ```
@@ -101,10 +105,10 @@ The optional `models` array is the user-curated candidate list shown by the REPL
 The REPL commands are:
 
 ```text
-/help  /exit  /stop  /clear  /model [name]
+/help  /exit  /stop  /clear  /model [name]  /agent list|use|reset
 /workspace <path>
 /skill list|load|unload ...
-/cron list|add|remove|pause|resume ...
+/cron list|add|remove|pause|resume|run|history ...
 /mcp list|reload
 /memory show|clear
 /rag index|search ...
@@ -117,7 +121,19 @@ Cron arguments that contain spaces should be quoted:
 /cron add status "every 1h" "Review this repository and summarize its status"
 ```
 
-Ctrl+C cancels an active LLM request or tool. Scheduled turns wait for an active interactive turn to finish, run in a fresh conversation, then print a notification banner in the REPL.
+Ctrl+C cancels an active LLM request or tool. Both the REPL and resident gateway start the scheduler. Agent jobs wait for an active interactive turn, while script jobs use no LLM tokens. Jobs support cron/interval schedules or a one-shot ISO `at`, timezones, timeout, retry/backoff, overlap and misfire policies, and console/webhook/no delivery. Every result survives restarts in `~/.taiwei/cron-runs.jsonl`; empty stdout with exit 0 is a silent watchdog success.
+
+Plan and Build are built-in session profiles. Plan hides and rejects shell/file-write tools; Build retains the normal tool set. `delegate_task` starts an isolated child conversation, returns only its final result, inherits the parent’s restrictions, propagates cancellation, and defaults to three concurrent children with depth two.
+
+### Browser tools
+
+Playwright is loaded only when a `browser_*` tool is first used. Install its Chromium binary after `npm install`:
+
+```bash
+npx playwright install chromium
+```
+
+The tools navigate, click, fill, extract text/links, and save workspace-local PNG screenshots. A shared browser closes after `browser.idleMinutes`; set `browser.userDataDir` to preserve cookies/login state. The shipped Chinese `playwright` skill documents the recommended workflow and common failures. If Chromium is absent, tools return the same install command as an actionable error while the rest of taiwei continues normally.
 
 ### Local RAG
 
@@ -238,6 +254,7 @@ All durable state lives in `~/.taiwei/`:
 ```text
 config.json       model and provider settings
 cron.json         scheduled jobs
+cron-runs.jsonl   append-only scheduled-run ledger
 mcp.json          MCP server definitions
 memory.md         durable agent memory
 memory/           extended Markdown memory indexed with the knowledge base

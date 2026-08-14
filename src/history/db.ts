@@ -19,6 +19,8 @@ export interface HistorySessionMeta {
   createdAt?: number | string | Date;
   updatedAt?: number | string | Date;
   messageCount?: number;
+  parentSessionId?: string;
+  agentId?: string;
 }
 
 export interface HistoryMessageInput {
@@ -107,6 +109,9 @@ async function openDatabase(path = getPaths().historyDb): Promise<HistoryDatabas
             session_id, timestamp, role, coalesce(content, ''), coalesce(tool_name, '')
           );
         `);
+      for (const statement of ['ALTER TABLE sessions ADD COLUMN parent_session_id TEXT', 'ALTER TABLE sessions ADD COLUMN agent_id TEXT']) {
+        try { db.exec(statement); } catch { /* already migrated */ }
+      }
       let fts5 = true;
       try {
         const hadFts = Boolean(db.prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'").get());
@@ -142,8 +147,8 @@ function upsertSessionIn(db: DatabaseSync, meta: HistorySessionMeta): void {
   const createdAt = timeValue(meta.createdAt, timeValue(meta.updatedAt, now));
   const updatedAt = timeValue(meta.updatedAt, createdAt);
   db.prepare(`
-    INSERT INTO sessions(id, title, source, model, created_at, updated_at, message_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions(id, title, source, model, created_at, updated_at, message_count, parent_session_id, agent_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title = CASE WHEN excluded.title <> '' THEN excluded.title ELSE sessions.title END,
       source = CASE WHEN excluded.source <> '' THEN excluded.source ELSE sessions.source END,
@@ -151,7 +156,7 @@ function upsertSessionIn(db: DatabaseSync, meta: HistorySessionMeta): void {
       created_at = min(sessions.created_at, excluded.created_at),
       updated_at = max(sessions.updated_at, excluded.updated_at),
       message_count = max(sessions.message_count, excluded.message_count)
-  `).run(meta.id, meta.title ?? '', meta.source ?? '', meta.model ?? null, createdAt, updatedAt, Math.max(0, meta.messageCount ?? 0));
+  `).run(meta.id, meta.title ?? '', meta.source ?? '', meta.model ?? null, createdAt, updatedAt, Math.max(0, meta.messageCount ?? 0), meta.parentSessionId ?? null, meta.agentId ?? null);
 }
 
 function appendMessageIn(db: DatabaseSync, message: HistoryMessageInput): boolean {

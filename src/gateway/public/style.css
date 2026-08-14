@@ -535,3 +535,12 @@ body.sidebar-collapsed .sidebar-footer { flex-direction: column; justify-content
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+.agent-switcher { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+.agent-switcher select { border:1px solid var(--border); border-radius:8px; padding:5px 8px; background:var(--panel); color:var(--text); }
+.cron-layout { display:grid; grid-template-columns:1fr 1fr; gap:18px; min-height:360px; }
+.cron-job { display:flex; justify-content:space-between; gap:12px; padding:12px; border-bottom:1px solid var(--border); }
+.cron-job small { display:block; margin-top:5px; color:var(--muted); line-height:1.5; }
+.cron-actions { display:flex; align-items:center; gap:6px; }
+.cron-run { padding:9px 4px; border-bottom:1px solid var(--border); font-size:12px; }
+.cron-run.error,.cron-run.timeout { color:var(--danger); }
+@media (max-width:680px) { .cron-layout { grid-template-columns:1fr; } }

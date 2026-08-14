@@ -17,6 +17,7 @@ Usage:
   taiwei                     Start the interactive REPL
   taiwei "prompt"            Run one agent turn
   taiwei serve [--port N]    Start the local web chat gateway
+  taiwei cron list|run|history|remove ...
   taiwei --init              Initialize ~/.taiwei
   taiwei --help              Show this help
   taiwei --version           Show the version`;
@@ -38,7 +39,8 @@ async function main(): Promise<void> {
   const app = new TaiweiApp();
   try {
     const serve = args[0] === 'serve';
-    await app.initialize({ scheduler: args.length === 0 });
+    const cronCommand = args[0] === 'cron';
+    await app.initialize({ scheduler: args.length === 0 || serve });
     if (serve) {
       validateGatewayAuth(app.config);
       let port = app.config.gateway.port;
@@ -60,6 +62,8 @@ async function main(): Promise<void> {
         skillLoader: app.skills,
         toolRegistry: app.registry,
         mcpBridge: app.mcp,
+        cronJobs: app.cronJobs,
+        cronScheduler: app.scheduler,
       });
       const boundPort = await listenGateway(server, app.config.gateway.host, port);
       console.log(`[taiwei] Gateway listening at http://${app.config.gateway.host}:${boundPort}`);
@@ -71,6 +75,13 @@ async function main(): Promise<void> {
       console.log('\n[taiwei] Shutting down gateway…');
       app.interrupt.cancel();
       await closeGateway(server);
+    } else if (cronCommand) {
+      const action = args[1] ?? 'list';
+      if (action === 'list') console.log(JSON.stringify(await app.cronJobs.list(), null, 2));
+      else if (action === 'run' && args[2]) console.log(JSON.stringify(await app.scheduler.runNow(args[2]), null, 2));
+      else if (action === 'history') console.log(JSON.stringify(await app.scheduler.ledger.list(args[2]), null, 2));
+      else if (action === 'remove' && args[2]) console.log((await app.cronJobs.remove(args[2])) ? 'removed' : 'not found');
+      else throw new Error('Usage: taiwei cron list | run <id> | history [id] | remove <id>');
     } else if (args.length) process.exitCode = await runOnce(app, args.join(' '));
     else await runRepl(app);
   } catch (error) {
