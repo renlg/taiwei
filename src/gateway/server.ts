@@ -31,6 +31,7 @@ import { BUILTIN_AGENTS, getAgentProfile } from '../agents/profiles.js';
 import { readAudit } from '../observability/audit.js';
 import type { PluginLoader } from '../plugins/loader.js';
 import type { ChatMessage } from '../llm/client.js';
+import { cleanupDeployment, DEPLOYMENT_NAME_PATTERN, DeploymentStore, OWNER_HASH_PATTERN, validateDeploymentInput, type DeploymentRepository } from './deployments.js';
 
 export interface GatewayHistoryIndex {
   upsertSession(meta: HistorySessionMeta): Promise<void>;
@@ -78,10 +79,11 @@ export interface GatewayServerOptions {
   cronScheduler?: CronScheduler;
   pluginLoader?: Pick<PluginLoader, 'list' | 'setEnabled'>;
   folderStoreFactory?: (identity: { role: 'admin' | 'guest'; guestId?: string; username?: string; config: TaiweiConfig }) => FolderStore;
+  deployments?: DeploymentRepository | false;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '27';
+const STATIC_ASSET_VERSION = '28';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -383,6 +385,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const memoryDirectory = resolve(options.memoryDirectory ?? taiweiPaths.memoryDir);
   const mcpConfigPath = resolve(options.mcpConfigPath ?? taiweiPaths.mcp);
   const memoryStore = options.memoryStore ?? new MemoryStore();
+  const deployments: DeploymentRepository | false = options.deployments ?? (options.sessions ? false : new DeploymentStore(taiweiPaths.historyDb));
   let mcpInitialized = false;
   const buildKnowledgeIndex = options.buildKnowledgeIndex ?? (async () => buildIndex(createEmbedder(await configState.load())));
   const searchKnowledge = options.searchKnowledge ?? (async (query: string, limit: number) => retrieve(query, limit, createEmbedder(await configState.load())));
@@ -391,6 +394,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
     throw new Error('Gateway auth is enabled but no password is set. Set auth.password in ~/.taiwei/config.json or TAIWEI_AUTH_PASSWORD.');
   }
   const log = options.log ?? console.log;
+  if (deployments) void deployments.initialize().catch((error) => log(`[taiwei] deployment database unavailable: ${error instanceof Error ? error.message : String(error)}`));
   const oauthStates = new Map<string, number>();
   const modelState: GatewayModelState = options.modelState ?? { getCurrentModel, resolveModels: resolveModelCatalog, setCurrentModel };
   const contextWindowFor = options.contextWindow ?? (async (model: string) => resolveContextWindow(await loadConfig(), model));
@@ -428,7 +432,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       config: toolRegistry.getConfig(tool.name),
     })) };
   };
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     const started = Date.now();
     const method = request.method ?? 'GET';
     const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
@@ -624,6 +628,37 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           workspace: resolveWorkspaceDir(config),
           ...(authenticatedUsername ? { username: authenticatedUsername } : {}),
         });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/deployments') {
+        if (!deployments) throw new HttpError(503, 'Deployment database is unavailable');
+        json(response, 200, { deployments: await deployments.listDeployments() });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/deployments') {
+        if (!deployments) throw new HttpError(503, 'Deployment database is unavailable');
+        let input;
+        try { input = validateDeploymentInput(await readJson(request), join(taiweiPaths.home, 'projects')); }
+        catch (error) { throw new HttpError(400, (error as Error).message); }
+        json(response, 201, { deployment: await deployments.upsertDeployment(input) });
+        return;
+      }
+      const deploymentRoute = pathname.match(/^\/api\/deployments\/([^/]+)$/);
+      if (method === 'DELETE' && deploymentRoute) {
+        if (!deployments) throw new HttpError(503, 'Deployment database is unavailable');
+        let name: string;
+        try { name = decodeURIComponent(deploymentRoute[1]); }
+        catch { throw new HttpError(400, 'Invalid deployment name encoding'); }
+        if (!DEPLOYMENT_NAME_PATTERN.test(name)) throw new HttpError(400, 'name must match ^[a-z0-9-]+$');
+        const ownerHash = new URL(request.url ?? '/', 'http://localhost').searchParams.get('ownerHash')?.trim();
+        if (ownerHash && !OWNER_HASH_PATTERN.test(ownerHash)) throw new HttpError(400, 'ownerHash must contain 8-64 lowercase hexadecimal characters');
+        let deployment;
+        try { deployment = await deployments.getDeployment(name, ownerHash); }
+        catch (error) { throw new HttpError(409, (error as Error).message); }
+        if (!deployment) throw new HttpError(404, `Deployment not found: ${name}`);
+        const steps = await cleanupDeployment(deployment, { projectsRoot: join(taiweiPaths.home, 'projects'), skillsRoot: taiweiPaths.skills });
+        await deployments.markCleaned(deployment.id);
+        json(response, 200, { ok: steps.every((step) => step.status !== 'failed'), steps });
         return;
       }
       if (method === 'GET' && pathname === '/api/settings') {
@@ -1325,6 +1360,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       else { sendSse(response, 'error', { message: (error as Error).message }); response.end(); }
     }
   });
+  server.once('close', () => { if (deployments) deployments.close?.(); });
+  return server;
 }
 
 function validateHooks(value: unknown): HookCommands {

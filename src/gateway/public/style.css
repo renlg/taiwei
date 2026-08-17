@@ -570,6 +570,27 @@ body.sidebar-collapsed .sidebar-footer { flex-direction: column; justify-content
 .cron-job { display:flex; justify-content:space-between; gap:12px; padding:12px; border-bottom:1px solid var(--border); }
 .cron-job small { display:block; margin-top:5px; color:var(--muted); line-height:1.5; }
 .cron-actions { display:flex; align-items:center; gap:6px; }
+.deployments-card { min-height: min(560px, calc(100dvh - 32px)); }
+.deployment-list { display: grid; align-content: start; gap: 9px; }
+.deployment-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-soft); }
+.deployment-main { min-width: 0; display: grid; gap: 6px; }
+.deployment-heading { display: flex; align-items: center; gap: 8px; }
+.deployment-heading strong { font-size: 13px; }
+.deployment-status { padding: 2px 7px; border-radius: 999px; color: var(--muted); background: var(--surface-hover); font-size: 9.5px; font-weight: 700; }
+.deployment-status.running { color: var(--success); background: color-mix(in srgb, var(--success) 11%, transparent); }
+.deployment-status.failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.deployment-status.cleaned { color: var(--faint); }
+.deployment-main a { overflow: hidden; color: var(--accent); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.deployment-meta { color: var(--faint); font-size: 10px; line-height: 1.5; }
+.deployment-cleanup { flex: none; color: var(--danger); }
+.deployment-result { min-height: 0; margin: 0 0 9px; color: var(--success); font: 10.5px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
+.deployment-result:empty { display: none; }
+.deployment-result.failed { color: var(--danger); }
+
+@media (max-width: 680px) {
+  .deployment-item { align-items: stretch; flex-direction: column; }
+  .deployment-cleanup { align-self: flex-end; }
+}
 .cron-run { padding:9px 4px; border-bottom:1px solid var(--border); font-size:12px; }
 .cron-run.error,.cron-run.timeout { color:var(--danger); }
 @media (max-width:680px) { .cron-layout { grid-template-columns:1fr; } }

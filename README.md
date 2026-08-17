@@ -180,6 +180,28 @@ The subtle sidebar label shows the resolved workspace. The gear button opens set
 
 The sidebar panels manage installed skills, knowledge files, MCP servers, tools, and layered memory. Core memory remains `~/.taiwei/memory.md`; every turn receives only its newest 2,000 characters. Larger extended notes live as `~/.taiwei/memory/<name>.md`, are not injected automatically, and become searchable on demand after rebuilding the shared RAG index. `memory_read` and `memory_append` operate on small core facts; `memory_extend` writes a named extended note and `memory_list` reports both tiers. Historical conversation search remains backed by `history.db` and `session_search`.
 
+### Deployment management
+
+The admin-only **部署管理** sidebar panel reads deployment records from the `deployments` table in the existing `~/.taiwei/history.db`. A deployer records a successful deployment with an authenticated `POST /api/deployments` request:
+
+```json
+{
+  "name": "myapp",
+  "ownerHash": "8c6976e5",
+  "path": "/taiwei/8c6976e5/myapp/",
+  "port": 8801,
+  "dir": "/root/.taiwei/projects/8c6976e5/myapp",
+  "url": "https://example.com/taiwei/8c6976e5/myapp/",
+  "status": "running"
+}
+```
+
+The panel's **清理** action stops the process listening on the recorded port, recursively deletes the recorded project directory after verifying that it is inside `~/.taiwei/projects/`, and invokes `~/.taiwei/skills/taiwei-编程部署/scripts/nginx_deploy.py <ownerHash> <name> --remove`. Each step reports its own result and the deployment row is retained with status `cleaned` for audit history. The same operation can be run directly with [`scripts/cleanup_deployment.sh`](scripts/cleanup_deployment.sh):
+
+```bash
+bash scripts/cleanup_deployment.sh 8c6976e5 myapp 8801 /root/.taiwei/projects/8c6976e5/myapp
+```
+
 Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so history and agent context survive browser refreshes and gateway restarts. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
 
 The composer includes a circular context-usage ring. taiwei requests OpenAI-compatible streaming usage (`stream_options.include_usage`), normalizes `prompt_tokens`, `completion_tokens`, and `total_tokens`, and emits an SSE `usage` event after each provider call. The gateway accumulates those provider-reported values in the current session file, and the browser updates the ring as usage arrives (with a small interim completion estimate while text is streaming). Hover or focus the ring to inspect the totals, window size, and percentage.
