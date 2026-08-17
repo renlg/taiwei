@@ -23,6 +23,7 @@ const elements = {
   usernameLabels: document.querySelectorAll('[data-username]'),
   sessionList: $('#session-list'),
   sessionCount: $('#session-count'),
+  folderAdd: $('#folder-add'),
   title: $('#session-title'),
   status: $('#status-pill'),
   model: $('#model-name'),
@@ -163,6 +164,8 @@ const elements = {
 
 const state = {
   sessions: [],
+  folders: [],
+  expandedFolders: new Set(),
   current: null,
   controller: null,
   followOutput: true,
@@ -1028,7 +1031,7 @@ function setStreaming(streaming) {
   elements.attachmentButton.disabled = streaming || state.attachments.length >= 5;
   elements.send.disabled = streaming || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
   elements.attachmentList.querySelectorAll('button').forEach((button) => { button.disabled = streaming; });
-  document.querySelectorAll('.new-chat').forEach((button) => { button.disabled = streaming; });
+  document.querySelectorAll('.folder-action, .folder-toggle, .folder-name').forEach((button) => { button.disabled = streaming; });
   document.querySelectorAll('.session-item').forEach((item) => item.setAttribute('aria-disabled', String(streaming)));
   if (streaming) setStatus('streaming', '思考中');
 }
@@ -1198,14 +1201,29 @@ function finalizeAssistant(view, content) {
 function renderSessionList() {
   elements.sessionList.replaceChildren();
   elements.sessionCount.textContent = String(state.sessions.length);
-  if (!state.sessions.length) {
+  if (!state.folders.length) {
     const empty = document.createElement('div');
     empty.className = 'session-empty';
-    empty.textContent = '暂无历史会话';
+    empty.textContent = '暂无工作文件夹';
     elements.sessionList.append(empty);
     return;
   }
+  const defaultFolder = state.folders.find((folder) => folder.default) || state.folders[0];
+  const knownIds = new Set(state.folders.map((folder) => folder.id));
+  const sessionsByFolder = new Map(state.folders.map((folder) => [folder.id, []]));
   for (const session of state.sessions) {
+    const folderId = knownIds.has(session.folderId) ? session.folderId : defaultFolder.id;
+    sessionsByFolder.get(folderId).push(session);
+  }
+  const childrenByParent = new Map();
+  for (const folder of state.folders) {
+    const key = folder.parentId || '';
+    if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+    childrenByParent.get(key).push(folder);
+  }
+  for (const folders of childrenByParent.values()) folders.sort((left, right) => Number(right.system) - Number(left.system) || left.name.localeCompare(right.name));
+
+  const makeSessionItem = (session) => {
     const item = document.createElement('div');
     item.tabIndex = 0;
     item.setAttribute('role', 'button');
@@ -1236,8 +1254,75 @@ function renderSessionList() {
     item.addEventListener('keydown', (event) => {
       if ((event.key === 'Enter' || event.key === ' ') && !state.controller) { event.preventDefault(); loadSession(session.id); }
     });
-    elements.sessionList.append(item);
-  }
+    return item;
+  };
+
+  const appendFolder = (folder, parent, depth = 0) => {
+    const group = document.createElement('section');
+    group.className = 'folder-group';
+    group.style.setProperty('--folder-depth', String(depth));
+    const row = document.createElement('div');
+    row.className = 'folder-row';
+    const expanded = state.expandedFolders.has(folder.id);
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'folder-toggle';
+    toggle.textContent = '›';
+    toggle.title = expanded ? '收起' : '展开';
+    toggle.setAttribute('aria-expanded', String(expanded));
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon';
+    icon.textContent = '📁';
+    const name = document.createElement('button');
+    name.type = 'button';
+    name.className = 'folder-name';
+    name.textContent = folder.name;
+    name.title = folder.path;
+    const actions = document.createElement('span');
+    actions.className = 'folder-actions';
+    const addSession = document.createElement('button');
+    addSession.type = 'button';
+    addSession.className = 'folder-action folder-session-add';
+    addSession.textContent = '+';
+    addSession.title = '在此文件夹中新建会话';
+    addSession.addEventListener('click', (event) => { event.stopPropagation(); createSession(folder.id); });
+    actions.append(addSession);
+    if (!folder.system) {
+      const rename = document.createElement('button');
+      rename.type = 'button'; rename.className = 'folder-action'; rename.textContent = '✎'; rename.title = '重命名文件夹';
+      rename.addEventListener('click', (event) => { event.stopPropagation(); renameFolder(folder); });
+      const remove = document.createElement('button');
+      remove.type = 'button'; remove.className = 'folder-action folder-delete'; remove.textContent = '×'; remove.title = '删除文件夹';
+      remove.addEventListener('click', (event) => { event.stopPropagation(); deleteFolder(folder); });
+      actions.append(rename, remove);
+    }
+    const toggleFolder = () => {
+      if (expanded) state.expandedFolders.delete(folder.id);
+      else state.expandedFolders.add(folder.id);
+      renderSessionList();
+    };
+    toggle.addEventListener('click', toggleFolder);
+    name.addEventListener('click', toggleFolder);
+    row.append(toggle, icon, name, actions);
+    group.append(row);
+    if (expanded) {
+      const contents = document.createElement('div');
+      contents.className = 'folder-contents';
+      const folderSessions = sessionsByFolder.get(folder.id) || [];
+      for (const session of folderSessions) contents.append(makeSessionItem(session));
+      const children = childrenByParent.get(folder.id) || [];
+      for (const child of children) appendFolder(child, contents, depth + 1);
+      if (!folderSessions.length && !children.length) {
+        const empty = document.createElement('div');
+        empty.className = 'folder-empty';
+        empty.textContent = '暂无会话';
+        contents.append(empty);
+      }
+      group.append(contents);
+    }
+    parent.append(group);
+  };
+  for (const folder of childrenByParent.get('') || []) appendFolder(folder, elements.sessionList);
   setStreaming(Boolean(state.controller));
 }
 
@@ -1414,6 +1499,50 @@ async function refreshSessions() {
   renderSessionList();
 }
 
+async function refreshFolders() {
+  state.folders = await requestJson('/api/folders');
+  for (const folder of state.folders) if (folder.default) state.expandedFolders.add(folder.id);
+  renderSessionList();
+}
+
+async function createFolder() {
+  if (state.controller) return;
+  const name = window.prompt('新文件夹名称');
+  if (name === null || !name.trim()) return;
+  try {
+    const folder = await requestJson('/api/folders', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }),
+    });
+    state.expandedFolders.add(folder.id);
+    await refreshFolders();
+    showToast('文件夹已创建');
+  } catch (error) { showToast(error.message); }
+}
+
+async function renameFolder(folder) {
+  if (state.controller || folder.system) return;
+  const name = window.prompt('重命名文件夹', folder.name);
+  if (name === null || !name.trim() || name.trim() === folder.name) return;
+  try {
+    await requestJson(`/api/folders/${encodeURIComponent(folder.id)}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }),
+    });
+    await refreshFolders();
+    showToast('文件夹已重命名');
+  } catch (error) { showToast(error.message); }
+}
+
+async function deleteFolder(folder) {
+  if (state.controller || folder.system || !confirm(`删除文件夹“${folder.name}”？其中的会话会移到默认文件夹，工作目录中的文件会保留。`)) return;
+  try {
+    await requestJson(`/api/folders/${encodeURIComponent(folder.id)}`, { method: 'DELETE' });
+    state.expandedFolders.delete(folder.id);
+    await Promise.all([refreshFolders(), refreshSessions()]);
+    if (state.current) await loadSession(state.current.id);
+    showToast('文件夹已删除，会话已移到默认文件夹');
+  } catch (error) { showToast(error.message); }
+}
+
 async function loadSession(id) {
   const version = ++state.loadVersion;
   try {
@@ -1434,10 +1563,13 @@ async function loadSession(id) {
   } catch (error) { showToast(error.message); }
 }
 
-async function createSession() {
+async function createSession(folderId) {
   if (state.controller) return null;
   try {
-    const session = await requestJson('/api/sessions', { method: 'POST' });
+    const session = await requestJson('/api/sessions', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ folderId }),
+    });
+    state.expandedFolders.add(session.folderId);
     state.current = session;
     state.currentModel = session.currentModel || state.currentModel;
     state.currentProvider = session.providerId || state.currentProvider;
@@ -1988,7 +2120,7 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
-document.querySelectorAll('.new-chat').forEach((button) => button.addEventListener('click', createSession));
+elements.folderAdd.addEventListener('click', createFolder);
 elements.loginTabs.forEach((tab) => tab.addEventListener('click', () => {
   state.loginRole = tab.dataset.loginRole;
   elements.loginTabs.forEach((item) => item.classList.toggle('active', item === tab));
@@ -2094,9 +2226,11 @@ async function loadChat() {
   try {
     if (state.role === 'guest' || state.shareToken) {
       applyRole('guest', state.username);
-      const sessions = await requestJson('/api/sessions');
+      const [sessions, folders] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/folders')]);
       showChat();
       state.sessions = sessions;
+      state.folders = folders;
+      for (const folder of folders) if (folder.default) state.expandedFolders.add(folder.id);
       renderSessionList();
       if (sessions.length) await loadSession(sessions[0].id);
       else renderConversation(null);
@@ -2104,9 +2238,11 @@ async function loadChat() {
       return;
     }
     const modelsRequest = requestJson('/api/models').catch(() => null);
-    const [sessions, info, models] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/info'), modelsRequest]);
+    const [sessions, folders, info, models] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/folders'), requestJson('/api/info'), modelsRequest]);
     showChat();
     state.sessions = sessions;
+    state.folders = folders;
+    for (const folder of folders) if (folder.default) state.expandedFolders.add(folder.id);
     state.currentModel = models?.current || info.model || state.currentModel;
     state.currentProvider = models?.currentProvider || state.currentProvider;
     state.providers = models?.providers || [];

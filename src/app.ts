@@ -2,6 +2,7 @@ import { AgentContext } from './agent/context.js';
 import { InterruptManager, TurnQueue } from './agent/interrupt.js';
 import { runAgentTurn, type AgentEvent } from './agent/loop.js';
 import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { loadConfig, resolveToolSettings, resolveWorkspaceDir, type TaiweiConfig } from './config/config.js';
 import { getCurrentModel } from './config/model.js';
 import { CronJobStore, type CronJob } from './cron/jobs.js';
@@ -71,7 +72,7 @@ export class TaiweiApp {
     if (options.scheduler !== false) { await this.scheduler.start(); console.log(`[taiwei] Scheduler started (${(await this.cronJobs.list()).filter((job) => job.enabled).length} enabled jobs)`); }
   }
 
-  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string; providerId?: string; model?: string } = {}): Promise<string> {
+  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string; providerId?: string; model?: string; workspaceRoot?: string } = {}): Promise<string> {
     const runtimeSessionId = options.runtimeSessionId ?? options.sessionId ?? 'local';
     return this.runtime.run(runtimeSessionId, async (runtimeSignal) => {
       const localSignal = options.sessionId ? undefined : this.interrupt.beginTurn();
@@ -80,7 +81,7 @@ export class TaiweiApp {
         this.config = await loadConfig();
         this.skills.setDisabled(this.config.skillsDisabled);
         this.registry.configure(resolveToolSettings(this.config));
-        const cwd = resolveWorkspaceDir(this.config);
+        const cwd = options.workspaceRoot ? resolve(options.workspaceRoot) : resolveWorkspaceDir(this.config);
         await mkdir(cwd, { recursive: true });
         this.hooks.configure(this.config.hooks, this.config.hookTimeoutSeconds, cwd);
         if (!options.skipBeforeMessageHook) {

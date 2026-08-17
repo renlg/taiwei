@@ -37,6 +37,7 @@ export interface GatewaySession {
   agentId?: string;
   providerId?: string;
   currentModel?: string;
+  folderId?: string;
 }
 
 export interface SessionSummary {
@@ -44,6 +45,7 @@ export interface SessionSummary {
   title: string;
   updatedAt: string;
   messageCount: number;
+  folderId?: string;
 }
 
 const VALID_ID = /^[a-f0-9-]{36}$/i;
@@ -53,9 +55,9 @@ export class SessionStore {
 
   async initialize(): Promise<void> { await mkdir(this.directory, { recursive: true }); }
 
-  async create(agentId = 'build'): Promise<GatewaySession> {
+  async create(agentId = 'build', folderId?: string): Promise<GatewaySession> {
     const now = new Date().toISOString();
-    const session: GatewaySession = { id: randomUUID(), title: '新会话', createdAt: now, updatedAt: now, messages: [], agentId };
+    const session: GatewaySession = { id: randomUUID(), title: '新会话', createdAt: now, updatedAt: now, messages: [], agentId, ...(folderId ? { folderId } : {}) };
     await this.save(session);
     return session;
   }
@@ -71,7 +73,7 @@ export class SessionStore {
       }));
     return sessions
       .filter((session): session is GatewaySession => Boolean(session))
-      .map(({ id, title, updatedAt, messages }) => ({ id, title, updatedAt, messageCount: messages.length }))
+      .map(({ id, title, updatedAt, messages, folderId }) => ({ id, title, updatedAt, messageCount: messages.length, ...(folderId ? { folderId } : {}) }))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
@@ -100,6 +102,21 @@ export class SessionStore {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
       throw error;
     }
+  }
+
+  async moveFolderSessions(folderId: string, destinationFolderId: string): Promise<number> {
+    const summaries = await this.list();
+    let moved = 0;
+    for (const summary of summaries) {
+      if (summary.folderId !== folderId) continue;
+      const session = await this.get(summary.id);
+      if (!session) continue;
+      session.folderId = destinationFolderId;
+      session.updatedAt = new Date().toISOString();
+      await this.save(session);
+      moved += 1;
+    }
+    return moved;
   }
 
   toChatHistory(session: GatewaySession): ChatMessage[] {

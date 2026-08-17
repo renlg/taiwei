@@ -7,6 +7,7 @@ import type { ChatBridge } from './chat.js';
 import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
 import { LoginLockStore, type LoginLock } from './login-locks.js';
 import { SessionStore, type SessionToolCall } from './sessions.js';
+import { FolderStore, guestFolderName, workspaceFolderMetadata } from './folders.js';
 import { openSse, sendSse } from './sse.js';
 import { getCurrentModel, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
 import { DEFAULT_CONFIG, expandHome, loadConfig, resolveContextWindow, resolveToolSettings, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
@@ -75,10 +76,11 @@ export interface GatewayServerOptions {
   cronJobs?: CronJobStore;
   cronScheduler?: CronScheduler;
   pluginLoader?: Pick<PluginLoader, 'list' | 'setEnabled'>;
+  folderStoreFactory?: (identity: { role: 'admin' | 'guest'; guestId?: string; username?: string; config: TaiweiConfig }) => FolderStore;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '22';
+const STATIC_ASSET_VERSION = '23';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -172,6 +174,8 @@ function guestRouteAllowed(method: string, pathname: string): boolean {
   if (method === 'POST' && pathname === '/api/chat') return true;
   if (method === 'POST' && pathname === '/api/stop') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/sessions') return true;
+  if ((method === 'GET' || method === 'POST') && pathname === '/api/folders') return true;
+  if ((method === 'PATCH' || method === 'DELETE') && /^\/api\/folders\/[^/]+$/.test(pathname)) return true;
   return (method === 'GET' || method === 'DELETE') && /^\/api\/sessions\/[^/]+$/.test(pathname);
 }
 
@@ -580,6 +584,28 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       const activeSessions = guestId
         ? new SessionStore(join(taiweiPaths.guests, guestId, 'sessions'))
         : sessions;
+      const folderIdentity = { role: authenticatedRole, ...(guestId ? { guestId } : {}), ...(authenticatedUsername ? { username: authenticatedUsername } : {}), config: accessConfig };
+      const adminWorkspace = resolveWorkspaceDir(accessConfig);
+      const adminDefault = workspaceFolderMetadata(adminWorkspace);
+      const activeFolders = options.folderStoreFactory?.(folderIdentity) ?? (guestId
+        ? new FolderStore({
+            file: join(taiweiPaths.guests, guestId, 'folders.json'),
+            owner: 'guest',
+            rootPath: join(taiweiPaths.guests, guestId, 'workspace'),
+            defaultId: 'guest-default',
+            defaultName: guestFolderName(authenticatedUsername ?? '访客'),
+            defaultDirName: guestFolderName(authenticatedUsername ?? '访客'),
+            defaultPath: () => join(taiweiPaths.guests, guestId, 'workspace'),
+          })
+        : new FolderStore({
+            file: taiweiPaths.folders,
+            owner: 'admin',
+            rootPath: join(taiweiPaths.workspaces, 'admin'),
+            defaultId: 'admin-default',
+            defaultName: adminDefault.name,
+            defaultDirName: adminDefault.dirName,
+            defaultPath: async () => resolveWorkspaceDir(await configState.load()),
+          }));
       const turnMemory = guestId ? MemoryStore.forGuest(guestId) : undefined;
       if (method === 'POST' && pathname === '/api/logout') {
         if (authenticatedToken) await authSessions.delete(authenticatedToken);
@@ -1053,11 +1079,49 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'GET' && pathname === '/api/sessions') {
-        json(response, 200, await activeSessions.list());
+        const defaultFolder = await activeFolders.defaultFolder();
+        json(response, 200, (await activeSessions.list()).map((session) => ({ ...session, folderId: session.folderId ?? defaultFolder.id })));
         return;
       }
       if (method === 'POST' && pathname === '/api/sessions') {
-        json(response, 201, await activeSessions.create());
+        const body = await readJson(request).catch(() => ({})) as { folderId?: unknown };
+        if (body.folderId !== undefined && typeof body.folderId !== 'string') throw new HttpError(400, 'folderId must be a string');
+        const folder = typeof body.folderId === 'string' ? await activeFolders.get(body.folderId) : await activeFolders.defaultFolder();
+        if (!folder) throw new HttpError(404, 'Folder not found');
+        json(response, 201, await activeSessions.create('build', folder.id));
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/folders') {
+        json(response, 200, await activeFolders.list());
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/folders') {
+        const body = await readJson(request) as { name?: unknown; parentId?: unknown };
+        if (body.parentId !== undefined && typeof body.parentId !== 'string') throw new HttpError(400, 'parentId must be a string');
+        json(response, 201, await activeFolders.create(body.name, body.parentId));
+        return;
+      }
+      const folderRoute = pathname.match(/^\/api\/folders\/([^/]+)$/);
+      if (folderRoute && method === 'PATCH') {
+        const id = decodeURIComponent(folderRoute[1]);
+        const existing = await activeFolders.get(id);
+        if (!existing) throw new HttpError(404, 'Folder not found');
+        if (existing.system) throw new HttpError(403, 'System folders cannot be renamed');
+        const body = await readJson(request) as { name?: unknown };
+        json(response, 200, await activeFolders.rename(id, body.name));
+        return;
+      }
+      if (folderRoute && method === 'DELETE') {
+        const id = decodeURIComponent(folderRoute[1]);
+        const folders = await activeFolders.list();
+        const folder = folders.find((item) => item.id === id);
+        if (!folder) throw new HttpError(404, 'Folder not found');
+        if (folder.system) throw new HttpError(403, 'System folders cannot be deleted');
+        if (folders.some((item) => item.parentId === id)) throw new HttpError(409, 'Folder contains sub-folders');
+        const destination = folders.find((item) => item.default)!;
+        const movedSessions = await activeSessions.moveFolderSessions(id, destination.id);
+        await activeFolders.delete(id);
+        json(response, 200, { ok: true, movedSessions, destinationFolderId: destination.id });
         return;
       }
       const sessionRoute = pathname.match(/^\/api\/sessions\/([^/]+)$/);
@@ -1113,14 +1177,18 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           json(response, 400, { error: 'sessionId must be a string' });
           return;
         }
-        const session = typeof body.sessionId === 'string' ? await activeSessions.get(body.sessionId) : await activeSessions.create();
+        const session = typeof body.sessionId === 'string'
+          ? await activeSessions.get(body.sessionId)
+          : await activeSessions.create('build', (await activeFolders.defaultFolder()).id);
         if (!session) {
           json(response, 404, { error: 'Session not found' });
           return;
         }
         const message = body.message.trim();
         const config = await configState.load();
-        const workspace = resolveWorkspaceDir(config);
+        const sessionFolder = session.folderId ? await activeFolders.get(session.folderId) : undefined;
+        if (session.folderId && !sessionFolder) throw new HttpError(404, 'Session folder not found');
+        const workspace = sessionFolder?.path ?? resolveWorkspaceDir(config);
         await mkdir(workspace, { recursive: true });
         if (options.hooks) {
           options.hooks.configure(config.hooks, config.hookTimeoutSeconds, workspace);
@@ -1176,7 +1244,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             sendSse(response, 'confirm', request);
             return confirmations.wait(request);
           },
-        }, history, session.id, turnMemory, session.agentId ?? 'build', authenticatedRole, authenticatedUsername ?? authenticatedRole, runtimeSessionId, session.providerId, session.currentModel);
+        }, history, session.id, turnMemory, session.agentId ?? 'build', authenticatedRole, authenticatedUsername ?? authenticatedRole, runtimeSessionId, session.providerId, session.currentModel, workspace);
         const content = finalText ?? answer;
         if (finalText !== undefined || content || toolCalls.length || turnError) {
           const stopped = turnError?.message === 'Turn cancelled';

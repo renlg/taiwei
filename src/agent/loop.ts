@@ -170,7 +170,7 @@ export async function runAgentTurn(
       id: 'default', name: 'Default', type: 'openai-compatible', baseUrl: config.baseUrl, apiKey: config.apiKey, defaultModel: config.model,
       models: [{ id: model, provider: 'default', displayName: model, capabilities: { tools: true, vision: false, reasoning: false, streaming: true, contextWindow: resolveContextWindow(config, model) } }],
     }], selection);
-    let systemPrompt = limitTextTokens(await context.systemPrompt(options.cwd, config.customPrompt), config.budget.systemMax, config.tokenEstimateCharsPerToken);
+    let systemPrompt = limitTextTokens(await context.systemPrompt(options.workspaceRoot ?? options.cwd, config.customPrompt), config.budget.systemMax, config.tokenEstimateCharsPerToken);
     const availableTools = registry.list({ profile: options.agentProfile }).map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters }));
     const tools = limitToolsTokens(filterToolsForModel(availableTools, resolved.model), config.budget.toolsMax, config.tokenEstimateCharsPerToken);
     const contextWindow = resolved.model.capabilities.contextWindow || resolveContextWindow(config, model);

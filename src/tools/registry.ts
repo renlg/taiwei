@@ -112,6 +112,14 @@ export class ToolRegistry {
     if (toolDenied(name, context.agentProfile)) return JSON.stringify({ error: `Tool "${name}" is denied by agent profile "${context.agentProfile?.id}"` });
     const candidatePath = toolPath(args, context.cwd);
     const workspaceOnly = (role === 'guest' || agentMode === 'plan') && !decision.allowExternalPath;
+    if (role === 'guest' && name === 'bash') {
+      try { await resolveInWorkspace(context.cwd, workspaceRoot); }
+      catch {
+        const output = JSON.stringify({ error: 'guest 只能操作自己的工作目录', command: args.command, cwd: context.cwd, policy: 'workspace-boundary' });
+        await appendAudit({ type: 'policy.decision', runId, sessionId, tool: name, outcome: 'deny', role, agentMode, rule: 'workspace-boundary', args }).catch(() => {});
+        return output;
+      }
+    }
     if (candidatePath && workspaceOnly) {
       try { await resolveInWorkspace(candidatePath, workspaceRoot); }
       catch (error) {

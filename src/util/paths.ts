@@ -21,6 +21,8 @@ export interface TaiweiPaths {
   uploads: string;
   guests: string;
   audit: string;
+  folders: string;
+  workspaces: string;
 }
 
 export function getPaths(): TaiweiPaths {
@@ -44,6 +46,8 @@ export function getPaths(): TaiweiPaths {
     uploads: join(home, 'uploads'),
     guests: join(home, 'guests'),
     audit: join(home, 'audit.jsonl'),
+    folders: join(home, 'folders.json'),
+    workspaces: join(home, 'workspaces'),
   };
 }
 
@@ -95,6 +99,7 @@ export async function ensureTaiweiHome(): Promise<TaiweiPaths> {
     mkdir(paths.sessions, { recursive: true }),
     mkdir(paths.uploads, { recursive: true }),
     mkdir(paths.guests, { recursive: true }),
+    mkdir(paths.workspaces, { recursive: true }),
   ]);
   await Promise.all([
     writeIfMissing(paths.cron, '[]\n'),
