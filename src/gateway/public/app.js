@@ -233,16 +233,31 @@ function escapeHtml(value) {
 
 function inlineMarkdown(value) {
   const code = [];
+  const media = [];
+  const keepMedia = (html) => {
+    media.push(html);
+    return `\u0000MEDIA${media.length - 1}\u0000`;
+  };
+  const isVideoUrl = (url) => /\.(?:mp4|webm|mov)(?:\?[^\s<]*)?$/i.test(url)
+    || /\/video\//i.test(url)
+    || /^https?:\/\/(?:video[.-]|[^/]*[.-]video[.-])/i.test(url);
   let output = value.replace(/`([^`\n]+)`/g, (_, content) => {
     code.push(`<code>${content}</code>`);
     return `\u0000INLINE${code.length - 1}\u0000`;
   });
   output = output
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-    .replace(/(^|[^\w])(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>')
+    .replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, (_, alt, url) => keepMedia(`<img src="${url}" alt="${alt}" loading="lazy" style="max-width:100%;border-radius:8px;">`))
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, (_, label, url) => isVideoUrl(url)
+      ? keepMedia(`<video src="${url}" controls style="max-width:100%;border-radius:8px;" aria-label="${label}"></video>`)
+      : keepMedia(`<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`))
+    .replace(/(^|[^\w"'>])(https?:\/\/[^\s<]+)/g, (_, prefix, url) => prefix + (isVideoUrl(url)
+      ? keepMedia(`<video src="${url}" controls style="max-width:100%;border-radius:8px;"></video>`)
+      : keepMedia(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`)))
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-  return output.replace(/\u0000INLINE(\d+)\u0000/g, (_, index) => code[Number(index)]);
+  return output
+    .replace(/\u0000INLINE(\d+)\u0000/g, (_, index) => code[Number(index)])
+    .replace(/\u0000MEDIA(\d+)\u0000/g, (_, index) => media[Number(index)]);
 }
 
 function renderMarkdown(source) {
