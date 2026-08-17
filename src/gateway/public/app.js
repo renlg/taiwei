@@ -456,12 +456,19 @@ function renderResourceEmpty(container, message) {
   container.replaceChildren(empty);
 }
 
+let skillDetailRequest = 0;
+let skillDetailController = null;
+
 async function showSkillDetail(name, button) {
+  const request = ++skillDetailRequest;
+  skillDetailController?.abort();
+  skillDetailController = new AbortController();
   elements.skillsError.textContent = '';
   elements.skillList.querySelectorAll('.skill-item').forEach((item) => item.classList.toggle('active', item === button));
   renderResourceEmpty(elements.skillDetail, '加载中…');
   try {
-    const skill = await requestJson(`/api/skills/${encodeURIComponent(name)}`);
+    const skill = await requestJson(`/api/skills/${encodeURIComponent(name)}`, { signal: skillDetailController.signal });
+    if (request !== skillDetailRequest) return;
     const header = document.createElement('header');
     const title = document.createElement('h3'); title.textContent = skill.name;
     const description = document.createElement('p'); description.textContent = skill.description;
@@ -470,12 +477,18 @@ async function showSkillDetail(name, button) {
     content.innerHTML = renderMarkdown(skill.content);
     elements.skillDetail.replaceChildren(header, content);
   } catch (error) {
+    if (request !== skillDetailRequest || error.name === 'AbortError') return;
     elements.skillsError.textContent = error.message;
-    renderResourceEmpty(elements.skillDetail, '无法加载技能详情');
+    renderResourceEmpty(elements.skillDetail, `无法加载技能详情：${error.message}`);
+  } finally {
+    if (request === skillDetailRequest) skillDetailController = null;
   }
 }
 
 async function loadSkills() {
+  skillDetailRequest += 1;
+  skillDetailController?.abort();
+  skillDetailController = null;
   elements.skillsError.textContent = '';
   renderResourceEmpty(elements.skillList, '加载中…');
   renderResourceEmpty(elements.skillDetail, '选择一个技能查看详情');
@@ -500,7 +513,10 @@ async function loadSkills() {
       const track = document.createElement('span'); toggleLabel.append(toggle, track); top.append(select, toggleLabel);
       const description = document.createElement('p'); description.className = 'skill-description'; description.textContent = skill.description;
       item.append(top, description);
-      select.addEventListener('click', () => showSkillDetail(skill.name, item));
+      item.addEventListener('click', (event) => {
+        if (event.target.closest('.mcp-switch')) return;
+        void showSkillDetail(skill.name, item);
+      });
       toggle.addEventListener('change', async () => {
         toggle.disabled = true; elements.skillsError.textContent = '';
         try {
