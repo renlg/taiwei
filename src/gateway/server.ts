@@ -638,7 +638,10 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       if (method === 'POST' && pathname === '/api/deployments') {
         if (!deployments) throw new HttpError(503, 'Deployment database is unavailable');
         let input;
-        try { input = validateDeploymentInput(await readJson(request), join(taiweiPaths.home, 'projects')); }
+        try {
+          const workspaceDirectories = (await activeFolders.list()).map((folder) => folder.path);
+          input = validateDeploymentInput(await readJson(request), join(taiweiPaths.home, 'projects'), workspaceDirectories);
+        }
         catch (error) { throw new HttpError(400, (error as Error).message); }
         json(response, 201, { deployment: await deployments.upsertDeployment(input) });
         return;
@@ -656,7 +659,11 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         try { deployment = await deployments.getDeployment(name, ownerHash); }
         catch (error) { throw new HttpError(409, (error as Error).message); }
         if (!deployment) throw new HttpError(404, `Deployment not found: ${name}`);
-        const steps = await cleanupDeployment(deployment, { projectsRoot: join(taiweiPaths.home, 'projects'), skillsRoot: taiweiPaths.skills });
+        const steps = await cleanupDeployment(deployment, {
+          projectsRoot: join(taiweiPaths.home, 'projects'),
+          skillsRoot: taiweiPaths.skills,
+          workspaceDirectories: (await activeFolders.list()).map((folder) => folder.path),
+        });
         await deployments.markCleaned(deployment.id);
         json(response, 200, { ok: steps.every((step) => step.status !== 'failed'), steps });
         return;

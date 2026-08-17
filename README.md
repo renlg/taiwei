@@ -190,17 +190,21 @@ The admin-only **部署管理** sidebar panel reads deployment records from the 
   "ownerHash": "8c6976e5",
   "path": "/taiwei/8c6976e5/myapp/",
   "port": 8801,
-  "dir": "/root/.taiwei/projects/8c6976e5/myapp",
+  "dir": "/root/workspace/current-session-project",
   "url": "https://example.com/taiwei/8c6976e5/myapp/",
   "status": "running"
 }
 ```
 
-The panel's **清理** action stops the process listening on the recorded port, recursively deletes the recorded project directory after verifying that it is inside `~/.taiwei/projects/`, and invokes `~/.taiwei/skills/taiwei-编程部署/scripts/nginx_deploy.py <ownerHash> <name> --remove`. Each step reports its own result and the deployment row is retained with status `cleaned` for audit history. The same operation can be run directly with [`scripts/cleanup_deployment.sh`](scripts/cleanup_deployment.sh):
+`dir` should be the current gateway session's workspace directory—the same directory where the agent writes the project. The API accepts an exact registered workspace folder; older deployers may continue using `~/.taiwei/projects/<ownerHash>/<name>` as a fallback.
+
+The panel's **清理** action stops the process listening on the recorded port, recursively deletes the recorded project directory after verifying that it is either an exact registered workspace or inside the legacy `~/.taiwei/projects/` root, and invokes `~/.taiwei/skills/taiwei-编程部署/scripts/nginx_deploy.py <ownerHash> <name> --remove`. Each step reports its own result and the deployment row is retained with status `cleaned` for audit history. The same operation can be run directly with [`scripts/cleanup_deployment.sh`](scripts/cleanup_deployment.sh):
 
 ```bash
-bash scripts/cleanup_deployment.sh 8c6976e5 myapp 8801 /root/.taiwei/projects/8c6976e5/myapp
+bash scripts/cleanup_deployment.sh 8c6976e5 myapp 8801 /root/workspace/current-session-project
 ```
+
+For a session-workspace deployment, run that command from the project directory or set `TAIWEI_SESSION_WORKSPACE` to its absolute path. Legacy project-root deployments continue to work without that variable.
 
 Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so history and agent context survive browser refreshes and gateway restarts. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
 
@@ -298,7 +302,7 @@ Each OAuth user stores core memory under a sanitized `~/.taiwei/guests/guest-<ai
 
 ## Policy, recovery, and audit
 
-Execution policy, concurrency, context budgeting, retries, and auditing are configured in `~/.taiwei/config.json`. Gateway guests use a default-deny tool policy: only the built-in workspace/read-only tools are allowed by default, while delegation, shell, file-write, memory-management, MCP, plugin, and unrecognized tools are denied. Plan mode is read-only. Custom `policy.rules` are first-match and can explicitly allow or deny narrower role/tool/path combinations. Guest history-tool queries are scoped to the caller identity, and Guest/Plan file access is confined to `workspace.dir` with realpath/symlink checks.
+Execution policy, concurrency, context budgeting, retries, and auditing are configured in `~/.taiwei/config.json`. Gateway guests use a default-deny tool policy: built-in reads and file writes are allowed only inside their own workspace, while delegation, shell, memory-management, MCP, plugin, and unrecognized tools are denied. Plan mode is read-only. Custom `policy.rules` are first-match and can explicitly allow or deny narrower role/tool/path combinations. Guest history-tool queries are scoped to the caller identity, and Guest/Plan file access is confined to the active workspace with realpath/symlink checks.
 
 Provider recovery defaults to three attempts for 429/5xx/network failures and honors `Retry-After`; set `fallbackModel` for one final model fallback. Audit events append to `~/.taiwei/audit.jsonl` with secret-shaped argument keys redacted. Administrators can inspect recent entries in Settings or through `GET /api/audit`.
 

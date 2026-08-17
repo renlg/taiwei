@@ -167,7 +167,11 @@ export class DeploymentStore implements DeploymentRepository {
   }
 }
 
-export function validateDeploymentInput(value: unknown, projectsRoot = join(getPaths().home, 'projects')): DeploymentInput {
+export function validateDeploymentInput(
+  value: unknown,
+  projectsRoot = join(getPaths().home, 'projects'),
+  workspaceDirectories: readonly string[] = [],
+): DeploymentInput {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Request body must be an object');
   const body = value as Record<string, unknown>;
   const name = typeof body.name === 'string' ? body.name.trim() : '';
@@ -178,8 +182,11 @@ export function validateDeploymentInput(value: unknown, projectsRoot = join(getP
   const expectedPath = `/taiwei/${ownerHash}/${name}/`;
   if (body.path !== expectedPath) throw new Error(`path must be ${expectedPath}`);
   if (typeof body.dir !== 'string' || !isAbsolute(body.dir)) throw new Error('dir must be an absolute path');
-  const expectedDir = resolve(projectsRoot, ownerHash, name);
-  if (resolve(body.dir) !== expectedDir) throw new Error(`dir must be ${expectedDir}`);
+  const legacyDir = resolve(projectsRoot, ownerHash, name);
+  const submittedDir = resolve(body.dir);
+  const sessionDir = workspaceDirectories.map((directory) => resolve(directory)).find((directory) => directory === submittedDir);
+  if (!sessionDir && submittedDir !== legacyDir) throw new Error(`dir must be a current session workspace or ${legacyDir}`);
+  const deploymentDir = sessionDir ?? legacyDir;
   if (typeof body.url !== 'string' || !body.url.trim()) throw new Error('url is required');
   const url = body.url.trim();
   if (url !== expectedPath) {
@@ -188,7 +195,7 @@ export function validateDeploymentInput(value: unknown, projectsRoot = join(getP
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('url must use http or https');
   }
   if (!DEPLOYMENT_STATUSES.includes(body.status as DeploymentStatus)) throw new Error(`status must be one of: ${DEPLOYMENT_STATUSES.join(', ')}`);
-  return { name, ownerHash, path: expectedPath, port: Number(body.port), dir: expectedDir, url, status: body.status as DeploymentStatus };
+  return { name, ownerHash, path: expectedPath, port: Number(body.port), dir: deploymentDir, url, status: body.status as DeploymentStatus };
 }
 
 async function executableResult(command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
@@ -243,28 +250,34 @@ async function stopPort(port: number): Promise<CleanupStep> {
   }
 }
 
-async function safeProjectDirectory(directory: string, projectsRoot: string): Promise<string> {
+async function safeProjectDirectory(directory: string, projectsRoot: string, workspaceDirectories: readonly string[]): Promise<string> {
   const root = resolve(projectsRoot);
   const target = resolve(directory);
   const child = relative(root, target);
-  if (!child || child.startsWith('..') || isAbsolute(child)) throw new Error(`Refusing to delete path outside ${root}`);
+  const workspace = workspaceDirectories.map((directory) => resolve(directory)).find((directory) => directory === target);
+  const legacyProject = Boolean(child) && !child.startsWith('..') && !isAbsolute(child);
+  if (!legacyProject && !workspace) throw new Error(`Refusing to delete path outside the projects root or registered workspaces`);
   try {
-    const realRoot = await realpath(root);
     const realTarget = await realpath(target);
-    const realChild = relative(realRoot, realTarget);
-    if (!realChild || realChild.startsWith('..') || isAbsolute(realChild)) throw new Error(`Refusing to delete symlink target outside ${root}`);
+    if (workspace) {
+      if (realTarget !== await realpath(workspace)) throw new Error('Refusing to delete a workspace symlink target');
+    } else {
+      const realRoot = await realpath(root);
+      const realChild = relative(realRoot, realTarget);
+      if (!realChild || realChild.startsWith('..') || isAbsolute(realChild)) throw new Error(`Refusing to delete symlink target outside ${root}`);
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   return target;
 }
 
-export async function cleanupDeployment(record: DeploymentRecord, options: { projectsRoot?: string; skillsRoot?: string } = {}): Promise<CleanupStep[]> {
+export async function cleanupDeployment(record: DeploymentRecord, options: { projectsRoot?: string; skillsRoot?: string; workspaceDirectories?: readonly string[] } = {}): Promise<CleanupStep[]> {
   const projectsRoot = options.projectsRoot ?? join(getPaths().home, 'projects');
   const skillsRoot = options.skillsRoot ?? getPaths().skills;
   const steps: CleanupStep[] = [await stopPort(record.port)];
   try {
-    const target = await safeProjectDirectory(record.dir, projectsRoot);
+    const target = await safeProjectDirectory(record.dir, projectsRoot, options.workspaceDirectories ?? []);
     await rm(target, { recursive: true, force: true });
     steps.push({ step: 'delete_files', status: 'ok', message: `Deleted ${target}` });
   } catch (error) {

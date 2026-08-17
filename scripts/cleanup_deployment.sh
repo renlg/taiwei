@@ -14,6 +14,7 @@ PORT=$3
 PROJECT_DIR=$4
 TAIWEI_ROOT=${TAIWEI_HOME:-"$HOME/.taiwei"}
 PROJECTS_ROOT="$TAIWEI_ROOT/projects"
+SESSION_WORKSPACE=${TAIWEI_SESSION_WORKSPACE:-"$PWD"}
 NGINX_HELPER="$TAIWEI_ROOT/skills/taiwei-编程部署/scripts/nginx_deploy.py"
 
 [[ $OWNER_HASH =~ ^[a-f0-9]{8,64}$ ]] || { echo "[fail] invalid ownerHash" >&2; exit 2; }
@@ -27,10 +28,12 @@ esac
 if command -v realpath >/dev/null 2>&1; then
   PROJECTS_ROOT=$(realpath -m -- "$PROJECTS_ROOT")
   PROJECT_DIR=$(realpath -m -- "$PROJECT_DIR")
+  SESSION_WORKSPACE=$(realpath -m -- "$SESSION_WORKSPACE")
 fi
 case "$PROJECT_DIR" in
   "$PROJECTS_ROOT"/*) ;;
-  *) echo "[fail] refusing to delete outside $PROJECTS_ROOT: $PROJECT_DIR" >&2; exit 2 ;;
+  "$SESSION_WORKSPACE") ;;
+  *) echo "[fail] refusing to delete outside $PROJECTS_ROOT or current session workspace $SESSION_WORKSPACE: $PROJECT_DIR" >&2; exit 2 ;;
 esac
 
 stop_port() {
