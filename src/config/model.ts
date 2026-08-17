@@ -39,6 +39,7 @@ export async function resolveModels(): Promise<ModelListResult> {
 export async function resolveModelCatalog(): Promise<ModelListResult> {
   const config = await loadConfig(); const legacy = await resolveModels();
   return { ...legacy, source: config.providers.length ? 'config' : legacy.source, currentProvider: config.defaultProvider,
+    models: config.providers.length ? [] : legacy.models,
     providers: config.providers.map((provider) => ({ id: provider.id, name: provider.name, models: providerModels(provider) })) };
 }
 
