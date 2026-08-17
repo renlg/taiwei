@@ -9,7 +9,7 @@ import type { HookRunner } from '../hooks/runner.js';
 import { MemoryStore } from '../memory/store.js';
 import type { AgentProfile } from '../agents/profiles.js';
 import { randomUUID } from 'node:crypto';
-import { applyContextBudget, limitTextTokens, limitToolsTokens } from './budget.js';
+import { applyContextBudget, estimateTokens, limitTextTokens, limitToolsTokens } from './budget.js';
 import { PolicyEngine } from '../security/policy.js';
 import { appendAudit } from '../observability/audit.js';
 import { emitEvent } from '../observability/events.js';
@@ -42,7 +42,7 @@ export type AgentEvent =
   | { type: 'token'; text: string }
   | { type: 'tool'; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; name: string; result: string }
-  | { type: 'usage'; usage: TokenUsage & { contextWindow: number }; model: string }
+  | { type: 'usage'; usage: TokenUsage & { contextWindow: number }; model: string; compressed?: boolean }
   | { type: 'done'; text: string };
 
 const COMPRESSION_PROMPT = 'Compress the following conversation history into a concise factual summary preserving key facts, decisions, user preferences, file paths, and unresolved tasks. Output only the summary.';
@@ -175,14 +175,16 @@ export async function runAgentTurn(
     const tools = limitToolsTokens(filterToolsForModel(availableTools, resolved.model), config.budget.toolsMax, config.tokenEstimateCharsPerToken);
     const contextWindow = resolved.model.capabilities.contextWindow || resolveContextWindow(config, model);
     let budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
-    if (budgetResult.needsCompression && !compressionAttempted) {
-      compressionAttempted = true;
+    const compressionThreshold = contextWindow * resolveCompressThreshold(config);
+    let compressedThisRequest = false;
+    if (!compressionAttempted && (budgetResult.needsCompression || budgetResult.estimatedTokens > compressionThreshold)) {
       const boundary = compressionBoundary(conversation);
+      if (boundary) compressionAttempted = true;
       if (config.memoryFlush) {
         try { await flushMemory(conversation, boundary, config, model, options.signal, context.memory); }
         catch (error) { if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError'); console.debug(`[taiwei] Memory flush skipped: ${error instanceof Error ? error.message : String(error)}`); }
       }
-      try { await compressConversation(conversation, boundary, config, model, options.signal); }
+      try { compressedThisRequest = await compressConversation(conversation, boundary, config, model, options.signal); }
       catch (error) { if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError'); console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`); }
       budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
     }
@@ -215,13 +217,12 @@ export async function runAgentTurn(
       sessionId: options.sessionId, model, contentPreview: result.content.slice(0, 500),
       ...(result.usage ? { usage: { promptTokens: result.usage.promptTokens, completionTokens: result.usage.completionTokens } } : {}),
     });
-    if (result.usage) {
-      options.onEvent?.({ type: 'usage', usage: { ...result.usage, contextWindow }, model });
-    }
-    const promptTokens = result.usage?.promptTokens ?? budgetResult.estimatedTokens;
-    if (!compressionAttempted && promptTokens > contextWindow * resolveCompressThreshold(config)) {
-        compressionAttempted = true;
+    const promptTokens = result.usage?.promptTokens && result.usage.promptTokens > 0
+      ? result.usage.promptTokens
+      : budgetResult.estimatedTokens;
+    if (!compressionAttempted && promptTokens > compressionThreshold) {
         const boundary = compressionBoundary(conversation);
+        if (boundary) compressionAttempted = true;
         if (config.memoryFlush) {
           try { await flushMemory(conversation, boundary, config, model, options.signal, context.memory); }
           catch (error) {
@@ -229,12 +230,21 @@ export async function runAgentTurn(
             console.debug(`[taiwei] Memory flush skipped: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
-        try { await compressConversation(conversation, boundary, config, model, options.signal); }
+        try { compressedThisRequest = await compressConversation(conversation, boundary, config, model, options.signal); }
         catch (error) {
           if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
           console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`);
         }
+        if (compressedThisRequest) budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
     }
+    const reportedPromptTokens = compressedThisRequest ? budgetResult.estimatedTokens : promptTokens;
+    const completionTokens = result.usage?.completionTokens ?? estimateTokens(result.content, config.tokenEstimateCharsPerToken);
+    options.onEvent?.({
+      type: 'usage',
+      usage: { promptTokens: reportedPromptTokens, completionTokens, totalTokens: reportedPromptTokens + completionTokens, contextWindow },
+      model,
+      ...(compressedThisRequest ? { compressed: true } : {}),
+    });
     conversation.push({ role: 'assistant', content: result.content || null, ...(result.toolCalls.length ? { tool_calls: result.toolCalls } : {}) });
     if (!result.toolCalls.length) {
       const text = fullText || result.content;

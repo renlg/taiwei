@@ -30,6 +30,7 @@ import { CronScheduler, jobNextRun } from '../cron/scheduler.js';
 import { BUILTIN_AGENTS, getAgentProfile } from '../agents/profiles.js';
 import { readAudit } from '../observability/audit.js';
 import type { PluginLoader } from '../plugins/loader.js';
+import type { ChatMessage } from '../llm/client.js';
 
 export interface GatewayHistoryIndex {
   upsertSession(meta: HistorySessionMeta): Promise<void>;
@@ -80,7 +81,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '23';
+const STATIC_ASSET_VERSION = '24';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -1084,11 +1085,23 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'POST' && pathname === '/api/sessions') {
-        const body = await readJson(request).catch(() => ({})) as { folderId?: unknown };
+        const body = await readJson(request).catch(() => ({})) as { folderId?: unknown; model?: unknown; provider?: unknown };
         if (body.folderId !== undefined && typeof body.folderId !== 'string') throw new HttpError(400, 'folderId must be a string');
         const folder = typeof body.folderId === 'string' ? await activeFolders.get(body.folderId) : await activeFolders.defaultFolder();
         if (!folder) throw new HttpError(404, 'Folder not found');
-        json(response, 201, await activeSessions.create('build', folder.id));
+        let model: string | undefined;
+        let provider: string | undefined;
+        if (body.model !== undefined) {
+          if (authenticatedRole !== 'admin') throw new HttpError(403, 'Guests cannot select models');
+          if (typeof body.model !== 'string' || !body.model.trim()) throw new HttpError(400, 'model must be a non-empty string');
+          model = body.model.trim();
+          const listed = await modelState.resolveModels();
+          provider = typeof body.provider === 'string' ? body.provider.trim() : listed.currentProvider;
+          const selectedProvider = listed.providers?.find((item) => item.id === provider);
+          const known = selectedProvider ? selectedProvider.models.some((item) => item.id === model) : listed.models.includes(model);
+          if (!known && listed.source !== 'fallback') throw new HttpError(400, `Unknown model: ${model}`);
+        } else if (body.provider !== undefined) throw new HttpError(400, 'provider requires model');
+        json(response, 201, await activeSessions.create('build', folder.id, model, provider));
         return;
       }
       if (method === 'GET' && pathname === '/api/folders') {
@@ -1209,6 +1222,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         let answer = '';
         let finalText: string | undefined;
         let turnError: Error | undefined;
+        let contextMessages: ChatMessage[] | undefined;
         const toolCalls: SessionToolCall[] = [];
         const runtimeSessionId = `${guestId ?? authenticatedUsername ?? authenticatedRole}:${session.id}`;
         response.once('close', () => { if (!completed) options.chat.stop(runtimeSessionId); });
@@ -1225,11 +1239,10 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
               if (call) call.result = event.result;
               sendSse(response, 'tool_result', { name: event.name, result: event.result });
             } else if (event.type === 'usage') {
-              const previous = session.usage;
               session.usage = {
-                promptTokens: (previous?.promptTokens ?? 0) + event.usage.promptTokens,
-                completionTokens: (previous?.completionTokens ?? 0) + event.usage.completionTokens,
-                totalTokens: (previous?.totalTokens ?? 0) + event.usage.totalTokens,
+                promptTokens: event.usage.promptTokens,
+                completionTokens: event.usage.completionTokens,
+                totalTokens: event.usage.totalTokens,
                 contextWindow: event.usage.contextWindow ?? activeContextWindow,
                 model: event.model || activeModel,
               };
@@ -1240,11 +1253,13 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             }
           },
           error: (error) => { turnError = error; sendSse(response, 'error', { message: error.message }); },
+          context: (messages) => { contextMessages = messages; },
           confirm: (request) => {
             sendSse(response, 'confirm', request);
             return confirmations.wait(request);
           },
         }, history, session.id, turnMemory, session.agentId ?? 'build', authenticatedRole, authenticatedUsername ?? authenticatedRole, runtimeSessionId, session.providerId, session.currentModel, workspace);
+        if (contextMessages) session.contextMessages = contextMessages;
         const content = finalText ?? answer;
         if (finalText !== undefined || content || toolCalls.length || turnError) {
           const stopped = turnError?.message === 'Turn cancelled';

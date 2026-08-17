@@ -10,6 +10,7 @@ import { MemoryStore } from '../memory/store.js';
 export interface ChatSink {
   event(event: AgentEvent): void;
   error(error: Error): void;
+  context?(messages: ChatMessage[]): void;
   confirm?(request: ConfirmationRequest): Promise<ConfirmationDecision>;
 }
 
@@ -45,6 +46,8 @@ export class AgentChatBridge implements ChatBridge {
     } catch (error) {
       const reason = error instanceof Error ? error : new Error(String(error));
       sink.error(reason.name === 'AbortError' ? new Error('Turn cancelled') : reason);
+    } finally {
+      sink.context?.(structuredClone(context.messages));
     }
   }
 

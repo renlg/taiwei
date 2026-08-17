@@ -203,6 +203,24 @@ const HOOKS_OPEN_STORAGE_KEY = 'taiwei-settings-hooks-open';
 const CUSTOM_PROMPT_OPEN_STORAGE_KEY = 'taiwei-settings-customprompt-open';
 const SHARE_OPEN_STORAGE_KEY = 'taiwei-settings-share-open';
 const AUDIT_OPEN_STORAGE_KEY = 'taiwei-settings-audit-open';
+const LAST_MODEL_STORAGE_PREFIX = 'taiwei-last-model:';
+
+function lastModelStorageKey() {
+  return `${LAST_MODEL_STORAGE_PREFIX}${state.role}:${state.username || 'local'}`;
+}
+
+function loadLastModel() {
+  try {
+    const value = JSON.parse(localStorage.getItem(lastModelStorageKey()) || 'null');
+    return value && typeof value.model === 'string'
+      ? { model: value.model, provider: typeof value.provider === 'string' ? value.provider : undefined }
+      : null;
+  } catch { return null; }
+}
+
+function saveLastModel(model, provider) {
+  localStorage.setItem(lastModelStorageKey(), JSON.stringify({ model, provider }));
+}
 const MAX_CUSTOM_PROMPT_LENGTH = 20000;
 
 function escapeHtml(value) {
@@ -1454,6 +1472,7 @@ async function selectModel(name, provider = state.currentProvider) {
     });
     state.currentModel = result.current;
     state.currentProvider = result.provider || provider;
+    saveLastModel(state.currentModel, state.currentProvider);
     if (state.current) { state.current.currentModel = result.current; state.current.providerId = state.currentProvider; }
     state.contextWindow = result.contextWindow || state.contextWindow;
     state.usage = { ...state.usage, contextWindow: state.contextWindow, model: state.currentModel };
@@ -1567,7 +1586,10 @@ async function createSession(folderId) {
   if (state.controller) return null;
   try {
     const session = await requestJson('/api/sessions', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ folderId }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        folderId,
+        ...(state.role === 'admin' ? { model: state.currentModel, provider: state.currentProvider } : {}),
+      }),
     });
     state.expandedFolders.add(session.folderId);
     state.current = session;
@@ -2243,8 +2265,15 @@ async function loadChat() {
     state.sessions = sessions;
     state.folders = folders;
     for (const folder of folders) if (folder.default) state.expandedFolders.add(folder.id);
-    state.currentModel = models?.current || info.model || state.currentModel;
-    state.currentProvider = models?.currentProvider || state.currentProvider;
+    const username = info.username || '';
+    applyRole(info.role || 'admin', username);
+    const lastModel = loadLastModel();
+    const savedProvider = models?.providers?.find((provider) => provider.id === lastModel?.provider);
+    const savedModelIsKnown = savedProvider
+      ? savedProvider.models.some((model) => model.id === lastModel?.model)
+      : Boolean(lastModel && models?.models?.includes(lastModel.model));
+    state.currentModel = savedModelIsKnown ? lastModel.model : models?.current || info.model || state.currentModel;
+    state.currentProvider = savedModelIsKnown ? lastModel.provider || models?.currentProvider || state.currentProvider : models?.currentProvider || state.currentProvider;
     state.providers = models?.providers || [];
     state.contextWindow = info.contextWindow || state.contextWindow;
     state.workspace = info.workspace || '';
@@ -2253,8 +2282,6 @@ async function loadChat() {
     state.models = models?.models?.length ? models.models : [state.currentModel];
     if (!state.models.includes(state.currentModel)) state.models.unshift(state.currentModel);
     renderModels();
-    const username = info.username || '';
-    applyRole(info.role || 'admin', username);
     elements.usernameLabels.forEach((element) => { element.textContent = username; });
     elements.userAvatar.textContent = Array.from(username)[0]?.toUpperCase() || 'U';
     elements.userTrigger.hidden = !info.authEnabled;

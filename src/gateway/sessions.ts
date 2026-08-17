@@ -33,6 +33,8 @@ export interface GatewaySession {
   createdAt: string;
   updatedAt: string;
   messages: SessionMessage[];
+  /** Agent-ready history, including compressed summaries and tool-call messages. */
+  contextMessages?: ChatMessage[];
   usage?: SessionUsage;
   agentId?: string;
   providerId?: string;
@@ -55,9 +57,12 @@ export class SessionStore {
 
   async initialize(): Promise<void> { await mkdir(this.directory, { recursive: true }); }
 
-  async create(agentId = 'build', folderId?: string): Promise<GatewaySession> {
+  async create(agentId = 'build', folderId?: string, currentModel?: string, providerId?: string): Promise<GatewaySession> {
     const now = new Date().toISOString();
-    const session: GatewaySession = { id: randomUUID(), title: '新会话', createdAt: now, updatedAt: now, messages: [], agentId, ...(folderId ? { folderId } : {}) };
+    const session: GatewaySession = {
+      id: randomUUID(), title: '新会话', createdAt: now, updatedAt: now, messages: [], agentId,
+      ...(folderId ? { folderId } : {}), ...(currentModel ? { currentModel } : {}), ...(providerId ? { providerId } : {}),
+    };
     await this.save(session);
     return session;
   }
@@ -120,7 +125,9 @@ export class SessionStore {
   }
 
   toChatHistory(session: GatewaySession): ChatMessage[] {
-    return session.messages.map((message) => ({ role: message.role, content: message.agentContent ?? message.content }));
+    return session.contextMessages
+      ? structuredClone(session.contextMessages)
+      : session.messages.map((message) => ({ role: message.role, content: message.agentContent ?? message.content }));
   }
 
   titleFrom(message: string): string {
