@@ -1,7 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentProfile } from '../agents/profiles.js';
+import type { MemoryStore } from '../memory/store.js';
 
-export interface DelegateRequest { task: string; profile: AgentProfile; parentProfile: AgentProfile; parentSessionId?: string; depth: number; signal?: AbortSignal }
+export interface DelegateRequest {
+  task: string;
+  profile: AgentProfile;
+  parentProfile: AgentProfile;
+  parentSessionId?: string;
+  depth: number;
+  signal?: AbortSignal;
+  role: 'admin' | 'guest';
+  identity: string;
+  workspaceRoot: string;
+  memory: MemoryStore;
+  extendedMemory: boolean;
+}
 export type DelegateRunner = (request: DelegateRequest & { childSessionId: string; signal: AbortSignal }) => Promise<string>;
 
 export class DelegationManager {

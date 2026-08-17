@@ -16,8 +16,9 @@ export function createHistoryTools(access: HistoryToolAccess = { searchMessages,
       properties: { query: { type: 'string', description: '要在历史消息中搜索的文字' }, limit: { type: 'number', description: '最多返回多少条结果，默认 5' } },
       required: ['query'], additionalProperties: false,
     },
-    async execute(args) {
-      const results = await access.searchMessages(String(args.query ?? ''), Number(args.limit ?? 5));
+    async execute(args, context) {
+      const scope = context.role === 'guest' ? { ownerIdentity: context.identity ?? 'guest' } : undefined;
+      const results = await access.searchMessages(String(args.query ?? ''), Number(args.limit ?? 5), scope);
       return results.length ? results : { results: [], message: 'No matching historical messages.' };
     },
   },
@@ -27,7 +28,7 @@ export function createHistoryTools(access: HistoryToolAccess = { searchMessages,
     parameters: {
       type: 'object', properties: { limit: { type: 'number', description: '最多返回多少个会话，默认 10' } }, additionalProperties: false,
     },
-    execute: (args) => access.listSessions(Number(args.limit ?? 10)),
+    execute: (args, context) => access.listSessions(Number(args.limit ?? 10), context.role === 'guest' ? { ownerIdentity: context.identity ?? 'guest' } : undefined),
   },
   {
     name: 'session_get',
@@ -37,9 +38,10 @@ export function createHistoryTools(access: HistoryToolAccess = { searchMessages,
       properties: { sessionId: { type: 'string', description: '历史会话 ID' }, maxMessages: { type: 'number', description: '最多读取最近多少条消息，默认 50' } },
       required: ['sessionId'], additionalProperties: false,
     },
-    async execute(args) {
+    async execute(args, context) {
       const sessionId = String(args.sessionId ?? '').trim();
-      const session = await access.getSession(sessionId, Number(args.maxMessages ?? 50));
+      const scope = context.role === 'guest' ? { ownerIdentity: context.identity ?? 'guest' } : undefined;
+      const session = await access.getSession(sessionId, Number(args.maxMessages ?? 50), scope);
       return session ?? { error: `History session not found: ${sessionId}` };
     },
   },

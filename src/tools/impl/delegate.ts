@@ -13,9 +13,18 @@ export function createDelegateTool(manager: DelegationManager): ToolSpec {
     async execute(args, context) {
       const task = typeof args.task === 'string' ? args.task.trim() : '';
       if (!task) throw new Error('task must be a non-empty string');
+      if (!context.agentContext) throw new Error('delegate_task requires the caller agent context');
       const parentProfile = context.agentProfile ?? getAgentProfile('build');
       const profile = narrowProfile(parentProfile, getAgentProfile(typeof args.agent === 'string' ? args.agent : parentProfile.id));
-      return manager.delegate({ task, profile, parentProfile, parentSessionId: context.sessionId, depth: context.delegationDepth ?? 0, signal: context.signal });
+      const role = context.role ?? 'admin';
+      return manager.delegate({
+        task, profile, parentProfile, parentSessionId: context.sessionId,
+        depth: context.delegationDepth ?? 0, signal: context.signal,
+        role, identity: context.identity ?? role,
+        workspaceRoot: context.workspaceRoot ?? context.cwd,
+        memory: context.agentContext.memory,
+        extendedMemory: context.agentContext.extendedMemory,
+      });
     },
   };
 }

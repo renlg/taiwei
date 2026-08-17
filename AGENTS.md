@@ -120,7 +120,7 @@ Add password login to the web gateway (it currently binds 0.0.0.0 with no auth â
 
 ## Unified Policy and Session Runtime (implemented)
 
-- Every tool dispatch is evaluated by `src/security/policy.ts` as `allow`, `ask`, or `deny`. Config rules in `policy.rules` are evaluated first, then role/mode defaults. Guests cannot use shell, file writes, memory management, MCP, or plugin tools unless an explicit rule allows the call; Plan mode is read-only.
+- Every tool dispatch is evaluated by `src/security/policy.ts` as `allow`, `ask`, or `deny`. Config rules in `policy.rules` are evaluated first, then role/mode defaults. Guests use a default-deny whitelist: workspace/read-only tools are allowed, while delegation, shell, file writes, memory management, MCP, plugins, and unknown tools are denied unless an explicit rule allows the call. Guest history-tool queries are identity-scoped; Plan mode is read-only.
 - Guest and Plan file operations use a realpath-aware workspace boundary check that rejects `..` and symlink escapes, including nonexistent write targets. Bash warns when `defaultCwd` is external, but its cwd is not a jail.
 - Gateway turns have per-session controllers. Stop/disconnect targets the authenticated identity plus browser session; sessions serialize their own turns while `runtime.maxConcurrentTurns` limits total active turns (default 4).
 

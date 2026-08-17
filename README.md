@@ -261,7 +261,7 @@ Each OAuth user stores core memory under a sanitized `~/.taiwei/guests/guest-<ai
 
 ## Policy, recovery, and audit
 
-Execution policy, concurrency, context budgeting, retries, and auditing are configured in `~/.taiwei/config.json`. Gateway guests are denied shell, file-write, memory-management, MCP, and plugin tools by default; Plan mode is read-only. Custom `policy.rules` are first-match and can explicitly allow or deny narrower role/tool/path combinations. Guest and Plan file access is confined to `workspace.dir` with realpath/symlink checks.
+Execution policy, concurrency, context budgeting, retries, and auditing are configured in `~/.taiwei/config.json`. Gateway guests use a default-deny tool policy: only the built-in workspace/read-only tools are allowed by default, while delegation, shell, file-write, memory-management, MCP, plugin, and unrecognized tools are denied. Plan mode is read-only. Custom `policy.rules` are first-match and can explicitly allow or deny narrower role/tool/path combinations. Guest history-tool queries are scoped to the caller identity, and Guest/Plan file access is confined to `workspace.dir` with realpath/symlink checks.
 
 Provider recovery defaults to three attempts for 429/5xx/network failures and honors `Retry-After`; set `fallbackModel` for one final model fallback. Audit events append to `~/.taiwei/audit.jsonl` with secret-shaped argument keys redacted. Administrators can inspect recent entries in Settings or through `GET /api/audit`.
 

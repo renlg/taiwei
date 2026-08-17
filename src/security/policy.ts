@@ -12,7 +12,7 @@ export interface PolicyInput {
 export interface PolicyDecision { effect: PolicyEffect; rule: string; explicit: boolean; allowExternalPath?: boolean; }
 
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch']);
-const READ_TOOLS = new Set(['read_file', 'search_files', 'rag_search', 'session_search', 'session_list', 'session_get']);
+const GUEST_READ_TOOLS = new Set(['read_file', 'search_files', 'rag_search', 'session_search', 'session_list', 'session_get']);
 
 function matchesPattern(value: string, pattern: string): boolean {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*').replaceAll('?', '.');
@@ -49,11 +49,13 @@ export class PolicyEngine {
       }
     }
     if (input.role === 'guest') {
+      if (input.tool === 'delegate_task') return { effect: 'deny', rule: 'builtin.guest.no-delegation', explicit: false };
       if (input.tool === 'bash') return { effect: 'deny', rule: 'builtin.guest.no-bash', explicit: false };
       if (WRITE_TOOLS.has(input.tool)) return { effect: 'deny', rule: 'builtin.guest.no-write', explicit: false };
       if (input.tool.startsWith('memory_')) return { effect: 'deny', rule: 'builtin.guest.no-memory-management', explicit: false };
       if (input.tool.startsWith('mcp_') || input.tool.startsWith('plugin_')) return { effect: 'deny', rule: 'builtin.guest.no-extensions', explicit: false };
-      if (READ_TOOLS.has(input.tool) || input.tool.startsWith('read_') || input.tool.startsWith('search_')) return { effect: 'allow', rule: 'builtin.guest.workspace-read', explicit: false };
+      if (GUEST_READ_TOOLS.has(input.tool)) return { effect: 'allow', rule: 'builtin.guest.workspace-read', explicit: false };
+      return { effect: 'deny', rule: 'builtin.guest.default-deny', explicit: false };
     }
     if (input.agentMode === 'plan') {
       if (input.tool === 'bash' || WRITE_TOOLS.has(input.tool) || input.tool === 'delegate_task' || input.tool.startsWith('memory_')) {

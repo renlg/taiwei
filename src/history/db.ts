@@ -21,7 +21,10 @@ export interface HistorySessionMeta {
   messageCount?: number;
   parentSessionId?: string;
   agentId?: string;
+  ownerIdentity?: string;
 }
+
+export interface HistoryAccessScope { ownerIdentity?: string }
 
 export interface HistoryMessageInput {
   sessionId: string;
@@ -109,9 +112,14 @@ async function openDatabase(path = getPaths().historyDb): Promise<HistoryDatabas
             session_id, timestamp, role, coalesce(content, ''), coalesce(tool_name, '')
           );
         `);
-      for (const statement of ['ALTER TABLE sessions ADD COLUMN parent_session_id TEXT', 'ALTER TABLE sessions ADD COLUMN agent_id TEXT']) {
+      for (const statement of [
+        'ALTER TABLE sessions ADD COLUMN parent_session_id TEXT',
+        'ALTER TABLE sessions ADD COLUMN agent_id TEXT',
+        'ALTER TABLE sessions ADD COLUMN owner_identity TEXT',
+      ]) {
         try { db.exec(statement); } catch { /* already migrated */ }
       }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_owner_updated ON sessions(owner_identity, updated_at DESC)');
       let fts5 = true;
       try {
         const hadFts = Boolean(db.prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'").get());
@@ -147,16 +155,17 @@ function upsertSessionIn(db: DatabaseSync, meta: HistorySessionMeta): void {
   const createdAt = timeValue(meta.createdAt, timeValue(meta.updatedAt, now));
   const updatedAt = timeValue(meta.updatedAt, createdAt);
   db.prepare(`
-    INSERT INTO sessions(id, title, source, model, created_at, updated_at, message_count, parent_session_id, agent_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions(id, title, source, model, created_at, updated_at, message_count, parent_session_id, agent_id, owner_identity)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title = CASE WHEN excluded.title <> '' THEN excluded.title ELSE sessions.title END,
       source = CASE WHEN excluded.source <> '' THEN excluded.source ELSE sessions.source END,
       model = coalesce(excluded.model, sessions.model),
       created_at = min(sessions.created_at, excluded.created_at),
       updated_at = max(sessions.updated_at, excluded.updated_at),
-      message_count = max(sessions.message_count, excluded.message_count)
-  `).run(meta.id, meta.title ?? '', meta.source ?? '', meta.model ?? null, createdAt, updatedAt, Math.max(0, meta.messageCount ?? 0), meta.parentSessionId ?? null, meta.agentId ?? null);
+      message_count = max(sessions.message_count, excluded.message_count),
+      owner_identity = coalesce(sessions.owner_identity, excluded.owner_identity)
+  `).run(meta.id, meta.title ?? '', meta.source ?? '', meta.model ?? null, createdAt, updatedAt, Math.max(0, meta.messageCount ?? 0), meta.parentSessionId ?? null, meta.agentId ?? null, meta.ownerIdentity ?? null);
 }
 
 function appendMessageIn(db: DatabaseSync, message: HistoryMessageInput): boolean {
@@ -261,7 +270,7 @@ function makeSnippet(content: string, query: string): string {
   return `${start > 0 ? '…' : ''}${content.slice(start, end)}${end < content.length ? '…' : ''}`;
 }
 
-export async function searchMessages(query: string, limit = 5): Promise<HistorySearchResult[]> {
+export async function searchMessages(query: string, limit = 5, scope: HistoryAccessScope = {}): Promise<HistorySearchResult[]> {
   const clean = query.trim();
   const { db, fts5 } = await openDatabase();
   if (!clean) return [];
@@ -269,22 +278,34 @@ export async function searchMessages(query: string, limit = 5): Promise<HistoryS
   type Row = { session_id: string; title: string | null; source: string | null; timestamp: number; content: string | null };
   let rows: Row[];
   if (Array.from(clean).length < 3 || !fts5) {
-    rows = db.prepare(`
+    rows = scope.ownerIdentity === undefined ? db.prepare(`
       SELECT m.session_id, s.title, s.source, m.timestamp, m.content
       FROM messages m JOIN sessions s ON s.id = m.session_id
       WHERE m.content LIKE ? ESCAPE '\\'
       ORDER BY m.timestamp DESC, m.id DESC LIMIT ?
-    `).all(`%${clean.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`, count) as unknown as Row[];
+    `).all(`%${clean.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`, count) as unknown as Row[] : db.prepare(`
+      SELECT m.session_id, s.title, s.source, m.timestamp, m.content
+      FROM messages m JOIN sessions s ON s.id = m.session_id
+      WHERE m.content LIKE ? ESCAPE '\\' AND s.owner_identity = ?
+      ORDER BY m.timestamp DESC, m.id DESC LIMIT ?
+    `).all(`%${clean.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`, scope.ownerIdentity, count) as unknown as Row[];
   } else {
     const expression = `"${clean.replaceAll('"', '""')}"`;
-    rows = db.prepare(`
+    rows = scope.ownerIdentity === undefined ? db.prepare(`
       SELECT m.session_id, s.title, s.source, m.timestamp, m.content
       FROM messages_fts f
       JOIN messages m ON m.id = f.rowid
       JOIN sessions s ON s.id = m.session_id
       WHERE messages_fts MATCH ?
       ORDER BY m.timestamp DESC, m.id DESC LIMIT ?
-    `).all(expression, count) as unknown as Row[];
+    `).all(expression, count) as unknown as Row[] : db.prepare(`
+      SELECT m.session_id, s.title, s.source, m.timestamp, m.content
+      FROM messages_fts f
+      JOIN messages m ON m.id = f.rowid
+      JOIN sessions s ON s.id = m.session_id
+      WHERE messages_fts MATCH ? AND s.owner_identity = ?
+      ORDER BY m.timestamp DESC, m.id DESC LIMIT ?
+    `).all(expression, scope.ownerIdentity, count) as unknown as Row[];
   }
   return rows.map((row) => ({
     sessionId: row.session_id,
@@ -295,19 +316,25 @@ export async function searchMessages(query: string, limit = 5): Promise<HistoryS
   }));
 }
 
-export async function listSessions(limit = 10): Promise<HistorySessionSummary[]> {
-  const rows = (await openDatabase()).db.prepare(`
+export async function listSessions(limit = 10, scope: HistoryAccessScope = {}): Promise<HistorySessionSummary[]> {
+  const db = (await openDatabase()).db;
+  const rows = (scope.ownerIdentity === undefined ? db.prepare(`
     SELECT id, title, source, message_count, updated_at
     FROM sessions ORDER BY updated_at DESC LIMIT ?
-  `).all(limitValue(limit, 10)) as unknown as Array<{ id: string; title: string | null; source: string | null; message_count: number; updated_at: number }>;
+  `).all(limitValue(limit, 10)) : db.prepare(`
+    SELECT id, title, source, message_count, updated_at
+    FROM sessions WHERE owner_identity = ? ORDER BY updated_at DESC LIMIT ?
+  `).all(scope.ownerIdentity, limitValue(limit, 10))) as unknown as Array<{ id: string; title: string | null; source: string | null; message_count: number; updated_at: number }>;
   return rows.map((row) => ({ sessionId: row.id, title: row.title ?? '', source: row.source ?? '', messageCount: row.message_count, updatedAt: row.updated_at }));
 }
 
-export async function getSession(id: string, maxMessages = 50): Promise<HistorySession | undefined> {
+export async function getSession(id: string, maxMessages = 50, scope: HistoryAccessScope = {}): Promise<HistorySession | undefined> {
   const { db } = await openDatabase();
-  const meta = db.prepare(`
+  const meta = (scope.ownerIdentity === undefined ? db.prepare(`
     SELECT id, title, source, model, created_at, updated_at, message_count FROM sessions WHERE id = ?
-  `).get(id) as { id: string; title: string | null; source: string | null; model: string | null; created_at: number; updated_at: number; message_count: number } | undefined;
+  `).get(id) : db.prepare(`
+    SELECT id, title, source, model, created_at, updated_at, message_count FROM sessions WHERE id = ? AND owner_identity = ?
+  `).get(id, scope.ownerIdentity)) as { id: string; title: string | null; source: string | null; model: string | null; created_at: number; updated_at: number; message_count: number } | undefined;
   if (!meta) return undefined;
   const messages = db.prepare(`
     SELECT role, content, tool_name, timestamp FROM (

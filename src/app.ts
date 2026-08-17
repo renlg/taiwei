@@ -26,7 +26,7 @@ import { historyTools } from './tools/impl/history.js';
 import { importHistoryIfEmpty } from './history/db.js';
 import { appendMessage, upsertSession } from './history/db.js';
 import { getAgentProfile, type AgentProfile } from './agents/profiles.js';
-import { DelegationManager } from './agent/delegation.js';
+import { DelegationManager, type DelegateRequest } from './agent/delegation.js';
 import { createDelegateTool } from './tools/impl/delegate.js';
 import { BrowserToolRuntime } from './tools/impl/browser.js';
 import { executeWatchdogScript } from './cron/script.js';
@@ -138,19 +138,19 @@ export class TaiweiApp {
     return result;
   }
 
-  private async runChild(request: { task: string; profile: AgentProfile; parentSessionId?: string; depth: number; childSessionId: string; signal: AbortSignal }): Promise<string> {
-    const context = new AgentContext(this.memory, this.skills, true, request.profile);
+  private async runChild(request: DelegateRequest & { childSessionId: string; signal: AbortSignal }): Promise<string> {
+    const context = new AgentContext(request.memory, this.skills, request.extendedMemory, request.profile);
     const config = { ...this.config, ...(request.profile.model ? { model: request.profile.model } : {}) };
     const output = await runAgentTurn(request.task, context, this.registry, config, {
-      signal: request.signal, cwd: resolveWorkspaceDir(config), retainConversation: false,
+      signal: request.signal, cwd: request.workspaceRoot, retainConversation: false,
       agentProfile: request.profile, delegationDepth: request.depth + 1, sessionId: request.childSessionId,
       authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(command, workspace, config.security, handler, commandSignal),
       hooks: this.hooks,
-      role: 'admin', identity: request.parentSessionId ?? 'delegate', workspaceRoot: resolveWorkspaceDir(config), policy: new PolicyEngine(config.policy),
+      role: request.role, identity: request.identity, workspaceRoot: request.workspaceRoot, policy: new PolicyEngine(config.policy),
     });
     try {
       const now = Date.now();
-      await upsertSession({ id: request.childSessionId, title: request.task.slice(0, 80), source: 'delegate', model: request.profile.model ?? config.model, createdAt: now, updatedAt: now, parentSessionId: request.parentSessionId, agentId: request.profile.id });
+      await upsertSession({ id: request.childSessionId, title: request.task.slice(0, 80), source: 'delegate', model: request.profile.model ?? config.model, createdAt: now, updatedAt: now, parentSessionId: request.parentSessionId, agentId: request.profile.id, ownerIdentity: request.identity });
       await appendMessage({ sessionId: request.childSessionId, role: 'user', content: request.task, timestamp: now });
       await appendMessage({ sessionId: request.childSessionId, role: 'assistant', content: output, timestamp: now + 0.001 });
     } catch { /* History is optional. */ }
