@@ -1243,7 +1243,11 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const config = await configState.load();
         const sessionFolder = session.folderId ? await activeFolders.get(session.folderId) : undefined;
         if (session.folderId && !sessionFolder) throw new HttpError(404, 'Session folder not found');
-        const workspace = sessionFolder?.path ?? resolveWorkspaceDir(config);
+        // Guest 的工作目录固定为专属根（guests/<guestId>/workspace），UI 文件夹只做会话分类，不改变写权限边界；
+        // admin 的工作目录跟随会话所在文件夹。
+        const workspace = guestId
+          ? (await activeFolders.defaultFolder()).path
+          : sessionFolder?.path ?? resolveWorkspaceDir(config);
         await mkdir(workspace, { recursive: true });
         if (options.hooks) {
           options.hooks.configure(config.hooks, config.hookTimeoutSeconds, workspace);
