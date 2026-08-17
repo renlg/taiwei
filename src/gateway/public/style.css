@@ -380,7 +380,12 @@ body.guest-mode .admin-only { display: none !important; }
 .tool-entry[open] summary::after { transform: rotate(90deg); }
 .tool-state { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite; }
 .tool-entry.done .tool-state { background: var(--success); animation: none; }
-.tool-detail { margin: 0; padding: 9px 11px; overflow-x: auto; border-top: 1px solid var(--border); color: var(--faint); font: 11px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
+.tool-detail { margin: 0; padding: 9px 11px; overflow-x: auto; border-top: 1px solid var(--border); color: var(--faint); font: 11px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.tool-args { margin: 0; font: inherit; white-space: pre-wrap; }
+.tool-pending, .tool-result-label { margin-top: 9px; }
+.tool-result { color: var(--text); font-family: inherit; white-space: normal; }
+.tool-result p { margin: 6px 0 0; }
+.tool-result img, .tool-result video { display: block; margin-top: 7px; }
 .compression-entry { display: flex; align-items: center; gap: 7px; padding: 8px 10px; color: var(--muted); font: 11.5px ui-monospace, SFMono-Regular, Consolas, monospace; }
 
 .confirmation-row { display: block; margin-left: 41px; }
@@ -621,4 +626,3 @@ body.sidebar-collapsed .sidebar-footer { flex-direction: column; justify-content
 .confirm-card .btn.btn-danger:hover { filter: brightness(1.08); }
 .confirm-card .btn.btn-ok { border-color: transparent; color: #fff; background: var(--accent); box-shadow: 0 4px 14px rgba(124, 108, 242, .28); }
 .confirm-card .btn.btn-ok:hover { filter: brightness(1.08); }
-

@@ -1338,15 +1338,36 @@ function renderTools(container, calls = []) {
     const label = document.createElement('span');
     const preview = JSON.stringify(call.args || {});
     label.textContent = `🔧 ${call.name} ${preview.length > 70 ? `${preview.slice(0, 70)}…` : preview}`;
-    const detail = document.createElement('pre');
+    const detail = document.createElement('div');
     detail.className = 'tool-detail';
-    detail.textContent = JSON.stringify(call.args || {}, null, 2) + (call.result !== undefined ? `\n\n结果\n${call.result}` : '\n\n正在运行…');
+    renderToolDetail(detail, call.args, call.result);
     summary.append(dot, label);
     details.append(summary, detail);
     list.append(details);
   }
   container.append(list);
   return list;
+}
+
+function renderToolDetail(detail, args, result) {
+  const argsBlock = document.createElement('pre');
+  argsBlock.className = 'tool-args';
+  argsBlock.textContent = JSON.stringify(args || {}, null, 2);
+  detail.replaceChildren(argsBlock);
+  if (result === undefined) {
+    const pending = document.createElement('div');
+    pending.className = 'tool-pending';
+    pending.textContent = '正在运行…';
+    detail.append(pending);
+    return;
+  }
+  const label = document.createElement('div');
+  label.className = 'tool-result-label';
+  label.textContent = '结果';
+  const output = document.createElement('div');
+  output.className = 'tool-result';
+  output.innerHTML = renderMarkdown(String(result));
+  detail.append(label, output);
 }
 
 function renderCompression(container, text = '🧹 正在压缩上下文…', done = false) {
@@ -1973,7 +1994,7 @@ async function submit(message, files = []) {
           if (target) {
             target.call.result = item.data.result;
             target.details.classList.add('done');
-            target.details.querySelector('.tool-detail').textContent = `${JSON.stringify(target.call.args, null, 2)}\n\n结果\n${item.data.result}`;
+            renderToolDetail(target.details.querySelector('.tool-detail'), target.call.args, item.data.result);
           }
         } else if (item.event === 'confirm') {
           if (segmentText || answerView.stack.querySelector('.tool-list')) finalizeAssistant(answerView, segmentText);
