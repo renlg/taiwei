@@ -280,21 +280,35 @@ function renderMarkdown(source) {
   const lines = escapeHtml(withoutCode).split(/\r?\n/);
   const output = [];
   let listType = '';
+  let imageLines = [];
   const closeList = () => { if (listType) { output.push(`</${listType}>`); listType = ''; } };
+  const flushImages = () => {
+    if (!imageLines.length) return;
+    const countClass = imageLines.length <= 4 ? `media-grid-${imageLines.length}` : 'media-grid-many';
+    output.push(`<div class="media-grid ${countClass}">${imageLines.map((line) => inlineMarkdown(line)).join('')}</div>`);
+    imageLines = [];
+  };
 
   for (const line of lines) {
     const block = line.match(/^\u0000BLOCK(\d+)\u0000$/);
-    if (block) { closeList(); output.push(blocks[Number(block[1])]); continue; }
+    if (block) { closeList(); flushImages(); output.push(blocks[Number(block[1])]); continue; }
     const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
     const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
     if (unordered || ordered) {
+      flushImages();
       const nextType = unordered ? 'ul' : 'ol';
       if (listType !== nextType) { closeList(); listType = nextType; output.push(`<${listType}>`); }
       output.push(`<li>${inlineMarkdown((unordered || ordered)[1])}</li>`);
       continue;
     }
     closeList();
-    if (!line.trim()) continue;
+    const trimmedLine = line.trim();
+    if (/^!\[[^\]]*\]\(https?:\/\/[^)\s]+\)$/.test(trimmedLine)) {
+      imageLines.push(trimmedLine);
+      continue;
+    }
+    flushImages();
+    if (!trimmedLine) continue;
     const h3 = line.match(/^###\s+(.+)$/);
     const h4 = line.match(/^####\s+(.+)$/);
     const quote = line.match(/^&gt;\s?(.+)$/);
@@ -304,6 +318,7 @@ function renderMarkdown(source) {
     else output.push(`<p>${inlineMarkdown(line)}</p>`);
   }
   closeList();
+  flushImages();
   return output.join('');
 }
 
