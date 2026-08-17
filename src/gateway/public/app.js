@@ -1245,6 +1245,7 @@ function renderSessionList() {
     const item = document.createElement('div');
     item.tabIndex = 0;
     item.setAttribute('role', 'button');
+    item.dataset.sessionId = session.id;
     item.className = `session-item${state.current?.id === session.id ? ' active' : ''}`;
     item.title = session.title;
     const copy = document.createElement('span');
@@ -1342,6 +1343,29 @@ function renderSessionList() {
   };
   for (const folder of childrenByParent.get('') || []) appendFolder(folder, elements.sessionList);
   setStreaming(Boolean(state.controller));
+}
+
+function locateNewestSession() {
+  const newest = state.sessions[0];
+  if (!newest || !state.folders.length) return;
+  const folder = state.folders.find((item) => item.id === newest.folderId)
+    || state.folders.find((item) => item.default)
+    || state.folders[0];
+  const visited = new Set();
+  let currentFolder = folder;
+  while (currentFolder && !visited.has(currentFolder.id)) {
+    visited.add(currentFolder.id);
+    state.expandedFolders.add(currentFolder.id);
+    currentFolder = currentFolder.parentId
+      ? state.folders.find((item) => item.id === currentFolder.parentId)
+      : undefined;
+  }
+  renderSessionList();
+  requestAnimationFrame(() => {
+    const item = [...elements.sessionList.querySelectorAll('.session-item')]
+      .find((element) => element.dataset.sessionId === newest.id);
+    item?.scrollIntoView({ block: 'nearest' });
+  });
 }
 
 function renderConversation(session) {
@@ -1520,7 +1544,6 @@ async function refreshSessions() {
 
 async function refreshFolders() {
   state.folders = await requestJson('/api/folders');
-  for (const folder of state.folders) if (folder.default) state.expandedFolders.add(folder.id);
   renderSessionList();
 }
 
@@ -2252,9 +2275,11 @@ async function loadChat() {
       showChat();
       state.sessions = sessions;
       state.folders = folders;
-      for (const folder of folders) if (folder.default) state.expandedFolders.add(folder.id);
       renderSessionList();
-      if (sessions.length) await loadSession(sessions[0].id);
+      if (sessions.length) {
+        await loadSession(sessions[0].id);
+        locateNewestSession();
+      }
       else renderConversation(null);
       elements.input.focus();
       return;
@@ -2264,7 +2289,6 @@ async function loadChat() {
     showChat();
     state.sessions = sessions;
     state.folders = folders;
-    for (const folder of folders) if (folder.default) state.expandedFolders.add(folder.id);
     const username = info.username || '';
     applyRole(info.role || 'admin', username);
     const lastModel = loadLastModel();
@@ -2287,7 +2311,10 @@ async function loadChat() {
     elements.userTrigger.hidden = !info.authEnabled;
     renderSessionList();
     await loadSettings();
-    if (sessions.length) await loadSession(sessions[0].id);
+    if (sessions.length) {
+      await loadSession(sessions[0].id);
+      locateNewestSession();
+    }
     else renderConversation(null);
   } catch (error) {
     if (error.status === 401) return;
