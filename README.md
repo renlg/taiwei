@@ -135,6 +135,21 @@ Cron arguments that contain spaces should be quoted:
 
 Ctrl+C cancels an active LLM request or tool. Both the REPL and resident gateway start the scheduler. Agent jobs wait for an active interactive turn, while script jobs use no LLM tokens. Jobs support cron/interval schedules or a one-shot ISO `at`, timezones, timeout, retry/backoff, overlap and misfire policies, and console/webhook/no delivery. Every result survives restarts in `~/.taiwei/cron-runs.jsonl`; empty stdout with exit 0 is a silent watchdog success.
 
+### AI-callable watchdogs
+
+Administrators can ask the agent to manage persistent health checks through `watchdog_register`, `watchdog_list`, `watchdog_status`, and `watchdog_remove`. Registration creates or idempotently updates a `kind: "script"` job in the existing cron store with `schedule: "every <interval_seconds>s"`; it does not create a separate watchdog database. A check that exits nonzero is recorded and announced as unhealthy, while exit 0 with empty stdout is silent. A watchdog only checks and alerts—process recovery happens only when its supplied script explicitly performs it. Guests cannot call any `watchdog_*` tool.
+
+The agent selects a whole-second interval from task difficulty and recovery urgency, and may adjust within reason:
+
+| Difficulty | Examples | `interval_seconds` |
+|---|---|---:|
+| Critical | Core service, taiwei gateway 8688, billing process | 5–30 |
+| High | Long-running task, batch job, data sync, long reasoning | 30–60 |
+| Medium | Cleanup, backup, report generation | 60–120 |
+| Low | Low-risk routine check | 120–300 |
+
+More critical or time-sensitive work should use a shorter interval. `timeout_seconds` defaults to 30, and `enabled` defaults to `true`.
+
 Plan and Build are built-in session profiles. Plan hides and rejects shell/file-write tools; Build retains the normal tool set. `delegate_task` starts an isolated child conversation, returns only its final result, inherits the parent’s restrictions, propagates cancellation, and defaults to three concurrent children with depth two.
 
 ### Browser tools
