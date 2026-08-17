@@ -382,6 +382,23 @@
       <div class="resource-list deployment-list" id="deployments-list" aria-label="部署列表"></div>
     </div>
   </dialog>
+  <dialog class="modal confirm-modal" id="confirm-modal">
+    <form class="modal-card confirm-card" id="confirm-form" method="dialog">
+      <div class="confirm-head">
+        <span class="confirm-icon" id="confirm-icon" aria-hidden="true">🗑️</span>
+        <div>
+          <h2 id="confirm-title">确认操作</h2>
+          <p id="confirm-desc"></p>
+        </div>
+      </div>
+      <div class="confirm-object" id="confirm-object"></div>
+      <input class="confirm-input" id="confirm-input" type="text" placeholder="" autocomplete="off">
+      <footer>
+        <button class="btn" type="button" id="confirm-cancel">取消</button>
+        <button class="btn btn-ok" type="button" id="confirm-ok">确认删除</button>
+      </footer>
+    </form>
+  </dialog>
   <div class="toast" id="toast" role="status"></div>
   <script type="module" src="/app.js?v={{ASSET_VERSION}}"></script>
 </body>

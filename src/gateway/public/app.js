@@ -126,6 +126,7 @@ const elements = {
   extendedMemoryList: $('#extended-memory-list'),
   cronOpen: $('#cron-open'), cronModal: $('#cron-modal'), cronClose: $('#cron-close'), cronError: $('#cron-error'), cronList: $('#cron-list'), cronHistory: $('#cron-history'),
   deploymentsOpen: $('#deployments-open'), deploymentsModal: $('#deployments-modal'), deploymentsClose: $('#deployments-close'), deploymentsError: $('#deployments-error'), deploymentsResult: $('#deployments-result'), deploymentsList: $('#deployments-list'),
+  confirmModal: $('#confirm-modal'), confirmForm: $('#confirm-form'), confirmIcon: $('#confirm-icon'), confirmTitle: $('#confirm-title'), confirmDesc: $('#confirm-desc'), confirmObject: $('#confirm-object'), confirmInput: $('#confirm-input'), confirmOk: $('#confirm-ok'), confirmCancel: $('#confirm-cancel'),
   workspaceInput: $('#workspace-input'),
   workspaceResolved: $('#workspace-resolved'),
   workspaceLabel: $('#workspace-label'),
@@ -301,6 +302,85 @@ function showToast(message) {
   elements.toast.classList.add('show');
   clearTimeout(state.toastTimer);
   state.toastTimer = setTimeout(() => elements.toast.classList.remove('show'), 1800);
+}
+
+/* Pretty confirm dialog. Resolves true on confirm, false on cancel/backdrop/Esc.
+   options: { title, desc, object (optional extra line), okText, danger:boolean } */
+function confirmDialog(options = {}) {
+  return new Promise((resolve) => {
+    const { title = '确认操作', desc = '', object = '', okText = '确认', danger = false } = options;
+    elements.confirmModal.classList.remove('prompt-mode');
+    elements.confirmTitle.textContent = title;
+    elements.confirmDesc.textContent = desc;
+    elements.confirmObject.textContent = object || '';
+    elements.confirmInput.style.display = 'none';
+    elements.confirmOk.textContent = okText;
+    elements.confirmOk.className = `btn ${danger ? 'btn-danger' : 'btn-ok'}`;
+    elements.confirmIcon.textContent = danger ? '🗑️' : '⚠️';
+
+    const cleanup = (result) => {
+      elements.confirmOk.removeEventListener('click', onOk);
+      elements.confirmCancel.removeEventListener('click', onCancel);
+      elements.confirmModal.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKey);
+      if (elements.confirmModal.open) elements.confirmModal.close();
+      resolve(result);
+    };
+    const onOk = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onBackdrop = (event) => { if (event.target === elements.confirmModal) cleanup(false); };
+    const onKey = (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); cleanup(false); }
+      else if (event.key === 'Enter') { event.preventDefault(); cleanup(true); }
+    };
+    elements.confirmOk.addEventListener('click', onOk);
+    elements.confirmCancel.addEventListener('click', onCancel);
+    elements.confirmModal.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKey);
+    elements.confirmModal.showModal();
+    elements.confirmOk.focus();
+  });
+}
+
+/* Pretty input dialog (replaces window.prompt). Resolves string|null; null on cancel/Esc. */
+function promptDialog(options = {}) {
+  return new Promise((resolve) => {
+    const { title = '输入', desc = '', placeholder = '', okText = '确定', initial = '' } = options;
+    elements.confirmModal.classList.add('prompt-mode');
+    elements.confirmTitle.textContent = title;
+    elements.confirmDesc.textContent = desc;
+    elements.confirmObject.textContent = '';
+    elements.confirmInput.placeholder = placeholder;
+    elements.confirmInput.value = initial;
+    elements.confirmOk.textContent = okText;
+    elements.confirmOk.className = 'btn btn-ok';
+    elements.confirmIcon.textContent = '✏️';
+
+    const cleanup = (result) => {
+      elements.confirmOk.removeEventListener('click', onOk);
+      elements.confirmCancel.removeEventListener('click', onCancel);
+      elements.confirmModal.removeEventListener('click', onBackdrop);
+      elements.confirmInput.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey);
+      if (elements.confirmModal.open) elements.confirmModal.close();
+      resolve(result);
+    };
+    const onOk = () => cleanup(elements.confirmInput.value.trim() || null);
+    const onCancel = () => cleanup(null);
+    const onBackdrop = (event) => { if (event.target === elements.confirmModal) cleanup(null); };
+    const onKey = (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); cleanup(null); }
+      else if (event.key === 'Enter') { event.preventDefault(); onOk(); }
+    };
+    elements.confirmOk.addEventListener('click', onOk);
+    elements.confirmCancel.addEventListener('click', onCancel);
+    elements.confirmModal.addEventListener('click', onBackdrop);
+    elements.confirmInput.addEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey);
+    elements.confirmModal.showModal();
+    elements.confirmInput.focus();
+    elements.confirmInput.select();
+  });
 }
 
 function addPatternRow(value = '') {
@@ -482,7 +562,14 @@ function renderCleanupResult(result) {
 }
 
 async function cleanupDeploymentRecord(deployment, button) {
-  if (!confirm(`确定清理部署“${deployment.name}”吗？这将停止端口 ${deployment.port}、删除全部项目文件并移除 nginx 代理，且无法撤销。`)) return;
+  const ok = await confirmDialog({
+    title: '清理部署',
+    desc: `将停止端口 ${deployment.port}、删除全部项目文件并移除 nginx 代理，且无法撤销。`,
+    object: deployment.name,
+    okText: '清理',
+    danger: true,
+  });
+  if (!ok) return;
   elements.deploymentsError.textContent = '';
   elements.deploymentsResult.textContent = '';
   button.disabled = true;
@@ -662,7 +749,14 @@ function renderKnowledge(data) {
     meta.textContent = `${formatBytes(file.size)} · ${Number.isNaN(modified.getTime()) ? file.mtime : modified.toLocaleString('zh-CN')}`;
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'knowledge-delete'; remove.textContent = '×'; remove.setAttribute('aria-label', `删除 ${file.path}`);
     remove.addEventListener('click', async () => {
-      if (!confirm(`确定删除知识库文件「${file.path}」吗？`)) return;
+      const ok = await confirmDialog({
+        title: '删除知识库文件',
+        desc: '此操作会删除该文件，且无法撤销。',
+        object: file.path,
+        okText: '删除',
+        danger: true,
+      });
+      if (!ok) return;
       remove.disabled = true;
       try {
         await requestJson(`/api/knowledge?path=${encodeURIComponent(file.path)}`, { method: 'DELETE' });
@@ -753,7 +847,14 @@ function renderMcp(data) {
       finally { test.disabled = false; test.textContent = '测试连接'; }
     });
     remove.addEventListener('click', async () => {
-      if (!confirm(`确定删除 MCP 服务器「${server.name}」吗？`)) return;
+      const ok = await confirmDialog({
+        title: '删除 MCP 服务器',
+        desc: '此操作会删除该 MCP 服务器配置，且无法撤销。',
+        object: server.name,
+        okText: '删除',
+        danger: true,
+      });
+      if (!ok) return;
       remove.disabled = true; elements.mcpError.textContent = '';
       try {
         const result = await requestJson(`/api/mcp?name=${encodeURIComponent(server.name)}`, { method: 'DELETE' });
@@ -949,7 +1050,14 @@ function renderMemory(data) {
     const row = document.createElement('div'); row.className = 'extended-memory-item';
     row.innerHTML = `<span><strong>${escapeHtml(item.name)}.md</strong> <small>${item.chars} 字</small></span><button class="knowledge-delete" type="button" aria-label="删除">×</button>`;
     row.querySelector('button').addEventListener('click', async () => {
-      if (!confirm(`确定删除扩展记忆 ${item.name}.md 吗？`)) return;
+      const ok = await confirmDialog({
+        title: '删除扩展记忆',
+        desc: '此操作会删除该扩展记忆文件，且无法撤销。',
+        object: `${item.name}.md`,
+        okText: '删除',
+        danger: true,
+      });
+      if (!ok) return;
       try { await requestJson(`/api/memory/extended?name=${encodeURIComponent(item.name)}`, { method: 'DELETE' }); await loadMemory(); }
       catch (error) { elements.memoryError.textContent = error.message; }
     });
@@ -1364,7 +1472,15 @@ function renderSessionList() {
     remove.setAttribute('aria-label', `删除 ${session.title}`);
     remove.addEventListener('click', async (event) => {
       event.stopPropagation();
-      if (state.controller || !confirm(`删除会话“${session.title}”？`)) return;
+      if (state.controller) return;
+      const ok = await confirmDialog({
+        title: '删除会话',
+        desc: '此操作会删除该会话的全部对话记录，且无法撤销。',
+        object: session.title,
+        okText: '删除',
+        danger: true,
+      });
+      if (!ok) return;
       await deleteSession(session.id);
     });
     item.append(copy, remove);
@@ -1648,7 +1764,7 @@ async function refreshFolders() {
 
 async function createFolder() {
   if (state.controller) return;
-  const name = window.prompt('新文件夹名称');
+  const name = await promptDialog({ title: '新建文件夹', desc: '输入新文件夹名称', placeholder: '文件夹名称', okText: '创建' });
   if (name === null || !name.trim()) return;
   try {
     const folder = await requestJson('/api/folders', {
@@ -1662,7 +1778,7 @@ async function createFolder() {
 
 async function renameFolder(folder) {
   if (state.controller || folder.system) return;
-  const name = window.prompt('重命名文件夹', folder.name);
+  const name = await promptDialog({ title: '重命名文件夹', desc: '输入新的文件夹名称', placeholder: '文件夹名称', initial: folder.name, okText: '保存' });
   if (name === null || !name.trim() || name.trim() === folder.name) return;
   try {
     await requestJson(`/api/folders/${encodeURIComponent(folder.id)}`, {
@@ -1674,7 +1790,15 @@ async function renameFolder(folder) {
 }
 
 async function deleteFolder(folder) {
-  if (state.controller || folder.system || !confirm(`删除文件夹“${folder.name}”？其中的会话会移到默认文件夹，工作目录中的文件会保留。`)) return;
+  if (state.controller || folder.system) return;
+  const ok = await confirmDialog({
+    title: '删除文件夹',
+    desc: '其中的会话会移到默认文件夹，工作目录中的文件会保留。',
+    object: folder.name,
+    okText: '删除',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await requestJson(`/api/folders/${encodeURIComponent(folder.id)}`, { method: 'DELETE' });
     state.expandedFolders.delete(folder.id);
@@ -2014,7 +2138,14 @@ elements.memorySave.addEventListener('click', async () => {
   finally { elements.memorySave.textContent = '保存'; updateMemoryControls(); }
 });
 elements.memoryClear.addEventListener('click', async () => {
-  if (!confirm('确定清空全部持久记忆吗？此操作无法撤销。')) return;
+  const ok = await confirmDialog({
+    title: '清空持久记忆',
+    desc: '将删除全部核心记忆内容，此操作无法撤销。',
+    object: `共 ${elements.memoryContent.value.length || 0} 字符`,
+    okText: '清空',
+    danger: true,
+  });
+  if (!ok) return;
   elements.memoryError.textContent = '';
   elements.memoryClear.disabled = true;
   try {
@@ -2142,7 +2273,13 @@ elements.shareCreate.addEventListener('click', async () => {
   catch (error) { elements.settingsError.textContent = error.message; }
 });
 elements.shareDisable.addEventListener('click', async () => {
-  if (!confirm('关闭分享后，现有分享链接将立即失效。确定继续吗？')) return;
+  const ok = await confirmDialog({
+    title: '关闭分享',
+    desc: '关闭后，现有分享链接将立即失效。',
+    okText: '关闭',
+    danger: true,
+  });
+  if (!ok) return;
   try { await requestJson('/api/share', { method: 'DELETE' }); await loadSharing(); }
   catch (error) { elements.settingsError.textContent = error.message; }
 });
