@@ -25,6 +25,7 @@ export interface SessionUsage {
   totalTokens: number;
   contextWindow: number;
   model: string;
+  compressed?: boolean;
 }
 
 export interface GatewaySession {

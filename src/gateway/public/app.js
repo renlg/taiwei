@@ -1146,6 +1146,25 @@ function renderTools(container, calls = []) {
   return list;
 }
 
+function renderCompression(container, text = '🧹 正在压缩上下文…', done = false) {
+  let list = container.querySelector('.tool-list');
+  if (!list) {
+    list = document.createElement('div');
+    list.className = 'tool-list';
+    container.insertBefore(list, container.querySelector('.bubble'));
+  }
+  const row = document.createElement('div');
+  row.className = `tool-entry compression-entry${done ? ' done' : ''}`;
+  const dot = document.createElement('i');
+  dot.className = 'tool-state';
+  const label = document.createElement('span');
+  label.textContent = text;
+  row.append(dot, label);
+  list.append(row);
+  autoScroll();
+  return row;
+}
+
 function addMessage(message, options = {}) {
   elements.welcome.classList.add('hidden');
   const row = document.createElement('article');
@@ -1665,6 +1684,16 @@ async function submit(message, files = []) {
   let segmentText = '';
   let serverError = '';
   let usageCheckpoint = 0;
+  let compressionView = null;
+  let compressionPreviousPromptTokens = 0;
+  const clearPendingCompression = () => {
+    if (compressionView && !compressionView.classList.contains('done')) {
+      const list = compressionView.parentElement;
+      compressionView.remove();
+      if (list && !list.children.length) list.remove();
+    }
+    compressionView = null;
+  };
   state.controller = new AbortController();
   setStreaming(true);
   try {
@@ -1696,6 +1725,7 @@ async function submit(message, files = []) {
         const item = parseEvent(block);
         if (!item) continue;
         if (item.event === 'token') {
+          clearPendingCompression();
           const text = item.data.text || '';
           answer += text;
           segmentText += text;
@@ -1707,6 +1737,7 @@ async function submit(message, files = []) {
             totalTokens: state.usage.totalTokens + estimatedTokens,
           });
         } else if (item.event === 'tool') {
+          clearPendingCompression();
           const call = { name: item.data.name, args: item.data.args || {} };
           assistantMessage.toolCalls.push(call);
           let list = answerView.stack.querySelector('.tool-list');
@@ -1730,19 +1761,31 @@ async function submit(message, files = []) {
           enqueueConfirmation(item.data, answerView);
           segmentText = '';
           answerView = addMessage({ role: 'assistant', content: '', timestamp: new Date().toISOString(), toolCalls: [] }, { streaming: true, forceScroll: true });
+        } else if (item.event === 'compressing') {
+          clearPendingCompression();
+          compressionPreviousPromptTokens = state.usage.promptTokens || 0;
+          compressionView = renderCompression(answerView.stack);
         } else if (item.event === 'usage') {
+          const savedTokens = Math.max(0, compressionPreviousPromptTokens - (item.data.promptTokens || 0));
           state.usage = {
             promptTokens: item.data.promptTokens || 0,
             completionTokens: item.data.completionTokens || 0,
             totalTokens: item.data.totalTokens || 0,
             contextWindow: item.data.contextWindow || state.contextWindow,
             model: item.data.model || state.currentModel,
+            compressed: item.data.compressed === true,
           };
           state.contextWindow = state.usage.contextWindow;
           state.current.usage = state.usage;
           usageCheckpoint = answer.length;
           renderUsage();
+          if (item.data.compressed === true) {
+            if (compressionView) compressionView.remove();
+            const suffix = savedTokens > 0 ? ` · 节省约 ${savedTokens.toLocaleString()} tokens` : ` · ${formatTime(new Date().toISOString())}`;
+            compressionView = renderCompression(answerView.stack, `🧹 已压缩上下文${suffix}`, true);
+          } else clearPendingCompression();
         } else if (item.event === 'done') {
+          clearPendingCompression();
           const finalAnswer = item.data.text || answer;
           if (!answer && finalAnswer) segmentText = finalAnswer;
           answer = finalAnswer;

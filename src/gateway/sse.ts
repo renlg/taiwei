@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 
-export type SseEvent = 'token' | 'tool' | 'tool_result' | 'confirm' | 'usage' | 'done' | 'error';
+export type SseEvent = 'token' | 'tool' | 'tool_result' | 'confirm' | 'compressing' | 'usage' | 'done' | 'error';
 
 export function openSse(response: ServerResponse): void {
   response.writeHead(200, {

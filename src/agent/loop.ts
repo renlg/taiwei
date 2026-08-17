@@ -42,6 +42,7 @@ export type AgentEvent =
   | { type: 'token'; text: string }
   | { type: 'tool'; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; name: string; result: string }
+  | { type: 'compressing' }
   | { type: 'usage'; usage: TokenUsage & { contextWindow: number }; model: string; compressed?: boolean }
   | { type: 'done'; text: string };
 
@@ -179,13 +180,16 @@ export async function runAgentTurn(
     let compressedThisRequest = false;
     if (!compressionAttempted && (budgetResult.needsCompression || budgetResult.estimatedTokens > compressionThreshold)) {
       const boundary = compressionBoundary(conversation);
-      if (boundary) compressionAttempted = true;
-      if (config.memoryFlush) {
-        try { await flushMemory(conversation, boundary, config, model, options.signal, context.memory); }
-        catch (error) { if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError'); console.debug(`[taiwei] Memory flush skipped: ${error instanceof Error ? error.message : String(error)}`); }
+      if (boundary) {
+        compressionAttempted = true;
+        options.onEvent?.({ type: 'compressing' });
+        if (config.memoryFlush) {
+          try { await flushMemory(conversation, boundary, config, model, options.signal, context.memory); }
+          catch (error) { if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError'); console.debug(`[taiwei] Memory flush skipped: ${error instanceof Error ? error.message : String(error)}`); }
+        }
+        try { compressedThisRequest = await compressConversation(conversation, boundary, config, model, options.signal); }
+        catch (error) { if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError'); console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`); }
       }
-      try { compressedThisRequest = await compressConversation(conversation, boundary, config, model, options.signal); }
-      catch (error) { if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError'); console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`); }
       budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
     }
     const lastMessage = conversation.at(-1);
@@ -222,20 +226,23 @@ export async function runAgentTurn(
       : budgetResult.estimatedTokens;
     if (!compressionAttempted && promptTokens > compressionThreshold) {
         const boundary = compressionBoundary(conversation);
-        if (boundary) compressionAttempted = true;
-        if (config.memoryFlush) {
-          try { await flushMemory(conversation, boundary, config, model, options.signal, context.memory); }
+        if (boundary) {
+          compressionAttempted = true;
+          options.onEvent?.({ type: 'compressing' });
+          if (config.memoryFlush) {
+            try { await flushMemory(conversation, boundary, config, model, options.signal, context.memory); }
+            catch (error) {
+              if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
+              console.debug(`[taiwei] Memory flush skipped: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+          try { compressedThisRequest = await compressConversation(conversation, boundary, config, model, options.signal); }
           catch (error) {
             if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
-            console.debug(`[taiwei] Memory flush skipped: ${error instanceof Error ? error.message : String(error)}`);
+            console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`);
           }
+          if (compressedThisRequest) budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
         }
-        try { compressedThisRequest = await compressConversation(conversation, boundary, config, model, options.signal); }
-        catch (error) {
-          if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
-          console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        if (compressedThisRequest) budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
     }
     const reportedPromptTokens = compressedThisRequest ? budgetResult.estimatedTokens : promptTokens;
     const completionTokens = result.usage?.completionTokens ?? estimateTokens(result.content, config.tokenEstimateCharsPerToken);

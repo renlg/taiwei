@@ -81,7 +81,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '25';
+const STATIC_ASSET_VERSION = '26';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -1238,6 +1238,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
               const call = [...toolCalls].reverse().find((item) => item.name === event.name && item.result === undefined);
               if (call) call.result = event.result;
               sendSse(response, 'tool_result', { name: event.name, result: event.result });
+            } else if (event.type === 'compressing') {
+              sendSse(response, 'compressing', {});
             } else if (event.type === 'usage') {
               session.usage = {
                 promptTokens: event.usage.promptTokens,
@@ -1245,6 +1247,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
                 totalTokens: event.usage.totalTokens,
                 contextWindow: event.usage.contextWindow ?? activeContextWindow,
                 model: event.model || activeModel,
+                compressed: event.compressed === true,
               };
               sendSse(response, 'usage', session.usage);
             } else {
