@@ -231,6 +231,15 @@ function escapeHtml(value) {
   })[character]);
 }
 
+function containsMedia(result) {
+  if (result === undefined || result === null) return false;
+  const text = String(result);
+  return /!\[[^\]]*\]\(https?:\/\/[^)\s]+\)/i.test(text)
+    || /<img\b/i.test(text)
+    || /\.(?:mp4|webm|mov)(?:\?[^\s<]*)?$/i.test(text)
+    || /https?:\/\/[^\s<>"']+\.(?:mp4|webm|mov)(?:\?[^\s<>"']*)?(?=[\s<>"')]|$)/i.test(text);
+}
+
 function inlineMarkdown(value) {
   const code = [];
   const media = [];
@@ -1341,6 +1350,7 @@ function renderTools(container, calls = []) {
     const detail = document.createElement('div');
     detail.className = 'tool-detail';
     renderToolDetail(detail, call.args, call.result);
+    if (call.result !== undefined && containsMedia(call.result)) details.open = true;
     summary.append(dot, label);
     details.append(summary, detail);
     list.append(details);
@@ -1995,6 +2005,7 @@ async function submit(message, files = []) {
             target.call.result = item.data.result;
             target.details.classList.add('done');
             renderToolDetail(target.details.querySelector('.tool-detail'), target.call.args, item.data.result);
+            if (containsMedia(item.data.result)) target.details.open = true;
           }
         } else if (item.event === 'confirm') {
           if (segmentText || answerView.stack.querySelector('.tool-list')) finalizeAssistant(answerView, segmentText);

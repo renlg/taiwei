@@ -385,7 +385,7 @@ body.guest-mode .admin-only { display: none !important; }
 .tool-pending, .tool-result-label { margin-top: 9px; }
 .tool-result { color: var(--text); font-family: inherit; white-space: normal; }
 .tool-result p { margin: 6px 0 0; }
-.tool-result img, .tool-result video { display: block; margin-top: 7px; }
+.tool-result img, .tool-result video { display: block; max-width: 100%; height: auto; margin-top: 7px; }
 .compression-entry { display: flex; align-items: center; gap: 7px; padding: 8px 10px; color: var(--muted); font: 11.5px ui-monospace, SFMono-Regular, Consolas, monospace; }
 
 .confirmation-row { display: block; margin-left: 41px; }
