@@ -179,6 +179,10 @@ function guestRouteAllowed(method: string, pathname: string): boolean {
   if ((method === 'GET' || method === 'POST') && pathname === '/api/sessions') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/folders') return true;
   if ((method === 'PATCH' || method === 'DELETE') && /^\/api\/folders\/[^/]+$/.test(pathname)) return true;
+  if ((method === 'GET' || method === 'POST') && pathname === '/api/models') return true;
+  if ((method === 'GET' || method === 'POST') && pathname === '/api/model') return true;
+  if ((method === 'GET' || method === 'POST') && pathname === '/api/agents') return true;
+  if ((method === 'GET' || method === 'POST') && pathname === '/api/agent') return true;
   return (method === 'GET' || method === 'DELETE') && /^\/api\/sessions\/[^/]+$/.test(pathname);
 }
 
@@ -1134,7 +1138,6 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         let model: string | undefined;
         let provider: string | undefined;
         if (body.model !== undefined) {
-          if (authenticatedRole !== 'admin') throw new HttpError(403, 'Guests cannot select models');
           if (typeof body.model !== 'string' || !body.model.trim()) throw new HttpError(400, 'model must be a non-empty string');
           model = body.model.trim();
           const listed = await modelState.resolveModels();

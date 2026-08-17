@@ -1834,7 +1834,7 @@ async function createSession(folderId) {
     const session = await requestJson('/api/sessions', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
         folderId,
-        ...(state.role === 'admin' ? { model: state.currentModel, provider: state.currentProvider } : {}),
+        model: state.currentModel, provider: state.currentProvider,
       }),
     });
     state.expandedFolders.add(session.folderId);
@@ -2531,12 +2531,23 @@ elements.theme.addEventListener('click', () => {
 
 async function loadChat() {
   try {
+    const modelsRequest = requestJson('/api/models').catch(() => null);
     if (state.role === 'guest' || state.shareToken) {
       applyRole('guest', state.username);
-      const [sessions, folders] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/folders')]);
+      const [sessions, folders, models] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/folders'), modelsRequest]);
       showChat();
       state.sessions = sessions;
       state.folders = folders;
+      if (!state.shareToken) {
+        state.providers = models?.providers || [];
+        state.models = models?.models?.length ? models.models : [state.currentModel];
+        state.currentModel = models?.current || state.currentModel;
+        state.currentProvider = models?.currentProvider || state.currentProvider;
+        renderModels();
+      } else {
+        elements.modelSwitcher.hidden = true;
+        elements.agentSelector.closest('.agent-switcher').hidden = true;
+      }
       renderSessionList();
       if (sessions.length) {
         await loadSession(sessions[0].id);
@@ -2546,7 +2557,6 @@ async function loadChat() {
       elements.input.focus();
       return;
     }
-    const modelsRequest = requestJson('/api/models').catch(() => null);
     const [sessions, folders, info, models] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/folders'), requestJson('/api/info'), modelsRequest]);
     showChat();
     state.sessions = sessions;
