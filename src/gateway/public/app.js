@@ -1699,6 +1699,35 @@ function renderSessionList() {
   setStreaming(Boolean(state.controller));
 }
 
+function findFirstVisualSession() {
+  if (!state.sessions.length || !state.folders.length) return state.sessions[0] || null;
+  const knownIds = new Set(state.folders.map((f) => f.id));
+  const defaultFolder = state.folders.find((f) => f.default) || state.folders[0];
+  const byFolder = new Map(state.folders.map((f) => [f.id, []]));
+  for (const s of state.sessions) {
+    const fid = knownIds.has(s.folderId) ? s.folderId : defaultFolder.id;
+    byFolder.get(fid).push(s);
+  }
+  const byParent = new Map();
+  for (const f of state.folders) {
+    const key = f.parentId || '';
+    if (!byParent.has(key)) byParent.set(key, []);
+    byParent.get(key).push(f);
+  }
+  for (const arr of byParent.values()) arr.sort((a, b) => Number(b.system) - Number(a.system) || a.name.localeCompare(b.name));
+  const walk = (parentId) => {
+    const children = byParent.get(parentId || '') || [];
+    for (const folder of children) {
+      const sessions = byFolder.get(folder.id) || [];
+      if (sessions.length) return sessions[0];
+      const found = walk(folder.id);
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(null) || state.sessions[0];
+}
+
 function locateNewestSession() {
   const newest = state.sessions[0];
   if (!newest || !state.folders.length) return;
@@ -2698,8 +2727,9 @@ async function loadChat() {
         elements.agentSelector.closest('.agent-switcher').hidden = true;
       }
       renderSessionList();
-      if (sessions.length) {
-        await loadSession(sessions[0].id);
+      const firstVisual = findFirstVisualSession();
+      if (firstVisual) {
+        await loadSession(firstVisual.id);
         locateNewestSession();
       }
       else renderConversation(null);
@@ -2732,8 +2762,9 @@ async function loadChat() {
     elements.userTrigger.hidden = !info.authEnabled;
     renderSessionList();
     await loadSettings();
-    if (sessions.length) {
-      await loadSession(sessions[0].id);
+    const firstVisual = findFirstVisualSession();
+    if (firstVisual) {
+      await loadSession(firstVisual.id);
       locateNewestSession();
     }
     else renderConversation(null);
