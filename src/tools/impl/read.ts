@@ -5,14 +5,37 @@ import { resolveInWorkspace } from '../../util/paths.js';
 
 export const readTool: ToolSpec = {
   name: 'read_file',
-  description: 'Read a UTF-8 text file.',
+  description: 'Read a UTF-8 text file. Supports optional pagination via offset (1-based start line) and limit (number of lines). When offset or limit is provided, output includes line numbers in "NNN | content" format.',
   parameters: {
-    type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false,
+    type: 'object',
+    properties: {
+      path: { type: 'string' },
+      offset: { type: 'number', description: 'Start line number (1-based). Lines before this are skipped.' },
+      limit: { type: 'number', description: 'Maximum number of lines to return.' },
+    },
+    required: ['path'],
+    additionalProperties: false,
   },
   async execute(args, context) {
     const path = context.workspaceOnly
       ? await resolveInWorkspace(String(args.path), context.workspaceRoot ?? context.cwd)
       : resolve(context.cwd, String(args.path));
-    return readFile(path, 'utf8');
+
+    const offset = args.offset != null ? Math.max(1, Number(args.offset)) : undefined;
+    const limit = args.limit != null ? Math.max(1, Number(args.limit)) : undefined;
+
+    if (offset === undefined && limit === undefined) {
+      return readFile(path, 'utf8');
+    }
+
+    const full = await readFile(path, 'utf8');
+    const allLines = full.split('\n');
+    const startIdx = (offset ?? 1) - 1;
+    const endIdx = limit != null ? Math.min(allLines.length, startIdx + limit) : allLines.length;
+    const slice = allLines.slice(startIdx, endIdx);
+
+    return slice
+      .map((line, i) => `${String(startIdx + i + 1).padStart(String(endIdx).length, ' ')} | ${line}`)
+      .join('\n');
   },
 };
