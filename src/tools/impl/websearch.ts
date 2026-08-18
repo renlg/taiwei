@@ -1,7 +1,7 @@
 import type { ToolSpec, ToolConfigSchema } from '../registry.js';
 
 const CONFIG: ToolConfigSchema = {
-  provider: { type: 'string', default: 'tavily', label: '搜索提供商', description: 'tavily 或 serper' },
+  provider: { type: 'string', default: 'serper', label: '搜索提供商', description: 'serper 或 tavily' },
   apiKey: { type: 'string', default: '', label: 'API Key', description: '留空则读取环境变量 TAIWEI_WEB_SEARCH_API_KEY' },
 };
 
@@ -52,7 +52,7 @@ export const webSearchTool: ToolSpec = {
     const query = typeof args.query === 'string' ? args.query.trim() : '';
     if (!query) throw new Error('query must be a non-empty string');
     const limit = Math.max(1, Math.min(10, typeof args.limit === 'number' ? Math.floor(args.limit) : 5));
-    const provider = typeof context.toolConfig?.provider === 'string' ? context.toolConfig.provider : 'tavily';
+    const provider = typeof context.toolConfig?.provider === 'string' ? context.toolConfig.provider : 'serper';
     const configuredKey = typeof context.toolConfig?.apiKey === 'string' ? context.toolConfig.apiKey : '';
     const apiKey = configuredKey || process.env.TAIWEI_WEB_SEARCH_API_KEY || '';
     if (!apiKey) {
