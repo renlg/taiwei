@@ -74,7 +74,7 @@ body.guest-mode .admin-only { display: none !important; }
 
 .app-shell { height: 100dvh; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
 .sidebar { position: relative; z-index: 30; display: flex; min-width: 0; flex-direction: column; padding: 18px 14px 14px; background: var(--sidebar); border-right: 1px solid var(--border); transition: width .25s, transform .25s, padding .25s, background .25s; }
-.brand-row { height: 40px; display: flex; align-items: center; justify-content: space-between; margin: 0 7px 19px; }
+.brand-row { height: 40px; display: flex; align-items: center; justify-content: space-between; margin: 0 7px 19px; flex-shrink: 0; }
 .brand { display: flex; gap: 10px; align-items: center; color: var(--text); text-decoration: none; font-size: 18px; font-weight: 760; letter-spacing: -.02em; }
 .brand-mark { display: block; width: 32px; height: 32px; flex: 0 0 auto; object-fit: contain; border: 1px solid var(--border); border-radius: 20%; box-shadow: 0 3px 10px rgba(0, 0, 0, .2); }
 .icon-button { width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border: 1px solid transparent; border-radius: 11px; color: var(--muted); background: transparent; cursor: pointer; transition: .18s; }
@@ -85,11 +85,11 @@ body.guest-mode .admin-only { display: none !important; }
 .new-chat:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 .sidebar-new { width: 100%; height: 44px; margin-bottom: 12px; }
 .sidebar-new > span:first-child { color: #fff; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 7px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); font-size: 18px; font-weight: 400; }
-.sidebar-sections { display: grid; gap: 3px; margin-bottom: 22px; }
+.sidebar-sections { display: grid; gap: 3px; margin-bottom: 22px; flex-shrink: 0; }
 .sidebar-section-button { width: 100%; min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid transparent; border-radius: 10px; color: var(--muted); background: transparent; cursor: pointer; text-align: left; transition: .16s; }
 .sidebar-section-button:hover, .sidebar-section-button:focus-visible { color: var(--text); border-color: var(--border); background: var(--surface-hover); }
 .sidebar-section-icon { width: 22px; flex: none; color: var(--accent); text-align: center; font-size: 16px; }
-.history-heading { display: flex; align-items: center; justify-content: space-between; margin: 0 9px 9px; color: var(--faint); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.history-heading { display: flex; align-items: center; justify-content: space-between; margin: 0 9px 9px; color: var(--faint); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; flex-shrink: 0; }
 .history-actions { display: inline-flex; align-items: center; gap: 6px; }
 .history-actions button { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 7px; color: var(--accent); background: transparent; cursor: pointer; font-size: 17px; line-height: 1; }
 .history-actions button:hover { border-color: var(--border); background: var(--surface-hover); }
@@ -122,7 +122,7 @@ body.guest-mode .admin-only { display: none !important; }
 .session-delete { width: 27px; height: 27px; align-self: center; padding: 0; border: 0; border-radius: 7px; opacity: 0; color: var(--faint); background: transparent; cursor: pointer; transition: .16s; }
 .session-item:hover .session-delete, .session-delete:focus-visible { opacity: 1; }
 .session-delete:hover { color: var(--danger); background: rgba(240, 109, 117, .12); }
-.sidebar-footer { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 9px; margin: 11px 8px 0; color: var(--faint); font-size: 12px; border-top: 1px solid var(--border); padding-top: 13px; }
+.sidebar-footer { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 9px; margin: 11px 8px 0; color: var(--faint); font-size: 12px; border-top: 1px solid var(--border); padding-top: 13px; flex-shrink: 0; }
 .sidebar-runtime { min-width: 0; }
 .local-status { min-width: 0; display: flex; align-items: center; gap: 9px; }
 .local-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 12%, transparent); }
@@ -183,9 +183,6 @@ body.guest-mode .admin-only { display: none !important; }
 .hook-test-result { min-height: 0; max-height: 150px; margin: 8px 0 0; padding: 0; overflow: auto; color: var(--faint); background: transparent; font: 10.5px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
 .hook-test-result:empty { display: none; }
 .settings-explainer { margin: 0 0 12px; color: var(--muted); font-size: 11px; }
-.share-actions, .share-link-row { display: flex; gap: 8px; margin: 9px 0; }
-.share-link-row input { min-width: 0; flex: 1; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); background: var(--bg); }
-.share-settings h3 { margin: 18px 0 8px; font-size: 12px; }
 
 .management-card { width: min(900px, calc(100vw - 28px)); min-height: min(610px, calc(100dvh - 32px)); display: flex; flex-direction: column; overflow: hidden; }
 .management-error { min-height: 18px; margin: -8px 0 8px; color: var(--danger); font-size: 11px; }

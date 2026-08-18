@@ -150,14 +150,6 @@ const elements = {
   hookTestEvent: $('#hook-test-event'),
   hookTest: $('#hook-test'),
   hookTestResult: $('#hook-test-result'),
-  shareSettings: $('.share-settings'),
-  shareToggle: $('#share-toggle'),
-  shareStatus: $('#share-status'),
-  shareCreate: $('#share-create'),
-  shareDisable: $('#share-disable'),
-  shareLinkRow: $('#share-link-row'),
-  shareUrl: $('#share-url'),
-  shareCopy: $('#share-copy'),
   auditSettings: $('.audit-settings'), auditToggle: $('#audit-toggle'), auditStatus: $('#audit-status'), auditFilter: $('#audit-filter'), auditList: $('#audit-list'),
   sidebarToggle: $('#sidebar-toggle'),
   sidebarClose: $('#sidebar-close'),
@@ -204,7 +196,6 @@ const WORKSPACE_OPEN_STORAGE_KEY = 'taiwei-settings-workspace-open';
 const SECURITY_OPEN_STORAGE_KEY = 'taiwei-settings-security-open';
 const HOOKS_OPEN_STORAGE_KEY = 'taiwei-settings-hooks-open';
 const CUSTOM_PROMPT_OPEN_STORAGE_KEY = 'taiwei-settings-customprompt-open';
-const SHARE_OPEN_STORAGE_KEY = 'taiwei-settings-share-open';
 const AUDIT_OPEN_STORAGE_KEY = 'taiwei-settings-audit-open';
 const LAST_MODEL_STORAGE_PREFIX = 'taiwei-last-model:';
 
@@ -515,17 +506,6 @@ async function loadSettings() {
   return settings;
 }
 
-function renderSharing(share) {
-  elements.shareStatus.textContent = share.enabled ? '已开启' : '未开启';
-  elements.shareDisable.hidden = !share.enabled;
-  elements.shareLinkRow.hidden = !share.enabled || !share.url;
-  elements.shareUrl.value = share.url || '';
-}
-
-async function loadSharing() {
-  renderSharing(await requestJson('/api/share'));
-}
-
 async function loadAudit() {
   const { entries } = await requestJson('/api/audit?limit=100');
   const filter = elements.auditFilter.value.trim().toLowerCase();
@@ -537,12 +517,11 @@ async function loadAudit() {
 async function openSettings() {
   elements.settingsError.textContent = '';
   try {
-    await Promise.all([loadSettings(), loadCustomPrompt(), loadSharing()]);
+    await Promise.all([loadSettings(), loadCustomPrompt()]);
     setSettingsCollapseOpen(elements.customPromptSettings, elements.customPromptToggle, CUSTOM_PROMPT_OPEN_STORAGE_KEY, localStorage.getItem(CUSTOM_PROMPT_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.workspaceSettings, elements.workspaceToggle, WORKSPACE_OPEN_STORAGE_KEY, localStorage.getItem(WORKSPACE_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.securitySettings, elements.securityToggle, SECURITY_OPEN_STORAGE_KEY, localStorage.getItem(SECURITY_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.hooksSettings, elements.hooksToggle, HOOKS_OPEN_STORAGE_KEY, localStorage.getItem(HOOKS_OPEN_STORAGE_KEY) === 'true');
-    setSettingsCollapseOpen(elements.shareSettings, elements.shareToggle, SHARE_OPEN_STORAGE_KEY, localStorage.getItem(SHARE_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.auditSettings, elements.auditToggle, AUDIT_OPEN_STORAGE_KEY, localStorage.getItem(AUDIT_OPEN_STORAGE_KEY) === 'true');
     if (elements.auditToggle.getAttribute('aria-expanded') === 'true') await loadAudit();
     elements.settingsModal.showModal();
@@ -2437,34 +2416,12 @@ elements.securityToggle.addEventListener('click', () => {
 elements.hooksToggle.addEventListener('click', () => {
   setSettingsCollapseOpen(elements.hooksSettings, elements.hooksToggle, HOOKS_OPEN_STORAGE_KEY, elements.hooksToggle.getAttribute('aria-expanded') !== 'true', true);
 });
-elements.shareToggle.addEventListener('click', () => {
-  setSettingsCollapseOpen(elements.shareSettings, elements.shareToggle, SHARE_OPEN_STORAGE_KEY, elements.shareToggle.getAttribute('aria-expanded') !== 'true', true);
-});
 elements.auditToggle.addEventListener('click', async () => {
   const open = elements.auditToggle.getAttribute('aria-expanded') !== 'true';
   setSettingsCollapseOpen(elements.auditSettings, elements.auditToggle, AUDIT_OPEN_STORAGE_KEY, open, true);
   if (open) await loadAudit().catch((error) => { elements.auditList.textContent = error.message; });
 });
 elements.auditFilter.addEventListener('input', () => { void loadAudit(); });
-elements.shareCreate.addEventListener('click', async () => {
-  try { await requestJson('/api/share', { method: 'POST' }); await loadSharing(); showToast('已生成新的分享链接'); }
-  catch (error) { elements.settingsError.textContent = error.message; }
-});
-elements.shareDisable.addEventListener('click', async () => {
-  const ok = await confirmDialog({
-    title: '关闭分享',
-    desc: '关闭后，现有分享链接将立即失效。',
-    okText: '关闭',
-    danger: true,
-  });
-  if (!ok) return;
-  try { await requestJson('/api/share', { method: 'DELETE' }); await loadSharing(); }
-  catch (error) { elements.settingsError.textContent = error.message; }
-});
-elements.shareCopy.addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(elements.shareUrl.value); showToast('分享链接已复制'); }
-  catch { elements.shareUrl.select(); document.execCommand('copy'); }
-});
 elements.workspaceInput.addEventListener('input', updateWorkspaceStatus);
 elements.customPromptInput.addEventListener('input', () => {
   elements.customPromptFeedback.textContent = '';
