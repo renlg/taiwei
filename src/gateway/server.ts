@@ -32,6 +32,7 @@ import { readAudit } from '../observability/audit.js';
 import type { PluginLoader } from '../plugins/loader.js';
 import type { ChatMessage } from '../llm/client.js';
 import { cleanupDeployment, DEPLOYMENT_NAME_PATTERN, DeploymentStore, OWNER_HASH_PATTERN, validateDeploymentInput, type DeploymentRepository } from './deployments.js';
+import { uploadToOss } from './oss.js';
 
 export interface GatewayHistoryIndex {
   upsertSession(meta: HistorySessionMeta): Promise<void>;
@@ -83,7 +84,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '32';
+const STATIC_ASSET_VERSION = '33';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -112,6 +113,7 @@ const TEXT_EXTENSIONS = new Set([
   '.zsh', '.fish', '.xml', '.toml', '.ini', '.conf', '.env', '.rs', '.rb', '.php', '.swift',
   '.kt', '.kts', '.scala', '.vue', '.svelte', '.tex', '.rst', '.properties', '.gradle', '.dockerfile',
 ]);
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg']);
 const KNOWLEDGE_EXTENSIONS = new Set(['.md', '.txt']);
 
 function memoryStats(content: string): { chars: number; lines: number } {
@@ -346,24 +348,33 @@ function validateToolConfig(value: unknown, schema: ToolConfigSchema | undefined
   return validated;
 }
 
-async function attachmentContext(files: unknown, uploadsDirectory: string): Promise<string> {
+export async function attachmentContext(files: unknown, uploadsDirectory: string): Promise<string> {
   if (files === undefined) return '';
   if (!Array.isArray(files) || files.length > MAX_FILES_PER_MESSAGE) throw new HttpError(400, `files must contain at most ${MAX_FILES_PER_MESSAGE} uploads`);
   const sections: string[] = [];
   for (const item of files) {
     if (!item || typeof item !== 'object') throw new HttpError(400, 'Invalid uploaded file metadata');
     const candidate = item as Partial<UploadedFile>;
-    if (typeof candidate.path !== 'string' || !withinDirectory(candidate.path, uploadsDirectory)) throw new HttpError(400, 'Invalid uploaded file path');
-    const info = await stat(candidate.path).catch(() => undefined);
-    if (!info?.isFile()) throw new HttpError(400, 'Uploaded file does not exist');
+    if (typeof candidate.path !== 'string') throw new HttpError(400, 'Invalid uploaded file path');
+    const remote = candidate.path.startsWith('http://') || candidate.path.startsWith('https://');
+    if (!remote && !withinDirectory(candidate.path, uploadsDirectory)) throw new HttpError(400, 'Invalid uploaded file path');
+    const info = remote ? undefined : await stat(candidate.path).catch(() => undefined);
+    if (!remote && !info?.isFile()) throw new HttpError(400, 'Uploaded file does not exist');
     const name = sanitizeFilename(typeof candidate.name === 'string' ? candidate.name : candidate.path.split('/').pop() ?? 'attachment');
     const extension = extname(name).toLowerCase();
-    if (TEXT_EXTENSIONS.has(extension) || name.toLowerCase() === 'dockerfile') {
+    let remoteExtension = '';
+    if (remote) {
+      try { remoteExtension = extname(new URL(candidate.path).pathname).toLowerCase(); } catch {}
+    }
+    if (remote && IMAGE_EXTENSIONS.has(remoteExtension || extension)) {
+      sections.push(`![${name}](${candidate.path})`);
+    } else if (!remote && (TEXT_EXTENSIONS.has(extension) || name.toLowerCase() === 'dockerfile')) {
       const content = (await readFile(candidate.path, 'utf8')).slice(0, ATTACHMENT_TEXT_LIMIT).replaceAll('```', '``\u200b`');
-      const truncated = info.size > Buffer.byteLength(content) ? '\n[内容已截断]' : '';
+      const truncated = info!.size > Buffer.byteLength(content) ? '\n[内容已截断]' : '';
       sections.push(`[附件: ${name}]\n\`\`\`${extension.slice(1) || 'text'}\n${content}${truncated}\n\`\`\``);
     } else {
-      sections.push(`[附件: ${name}] 路径: ${resolve(candidate.path)} (可通过工具读取)`);
+      const path = remote ? candidate.path : resolve(candidate.path);
+      sections.push(`[附件: ${name}] 路径: ${path} (可通过工具读取)`);
     }
   }
   return sections.length ? `\n\n${sections.join('\n\n')}` : '';
@@ -1216,13 +1227,20 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const name = sanitizeFilename(decodedName);
         if (!rawName) throw new HttpError(400, '缺少文件名');
         const data = await readUpload(request);
+        const type = request.headers['content-type'] || 'application/octet-stream';
+        const config = await configState.load();
+        if (config.oss.enabled) {
+          const uploaded = await uploadToOss(data, name, type, config.oss);
+          json(response, 201, { name, url: uploaded.url, path: uploaded.url, size: data.byteLength, type });
+          return;
+        }
         const requestedGroup = request.headers['x-session-id'];
         const group = sanitizeFilename(typeof requestedGroup === 'string' ? requestedGroup : 'unassigned');
         const directory = join(uploadsDirectory, group);
         await mkdir(directory, { recursive: true });
         const path = join(directory, `${Date.now()}-${randomUUID()}-${name}`);
         await writeFile(path, data, { flag: 'wx' });
-        json(response, 201, { name, path: resolve(path), size: data.byteLength, type: request.headers['content-type'] || 'application/octet-stream' });
+        json(response, 201, { name, path: resolve(path), size: data.byteLength, type });
         return;
       }
       if (method === 'POST' && pathname === '/api/chat') {

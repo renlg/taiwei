@@ -49,6 +49,14 @@ export interface TaiweiConfig {
     host: string;
     port: number;
   };
+  oss: {
+    enabled: boolean;
+    accessKeyId: string;
+    accessKeySecret: string;
+    bucket: string;
+    endpoint: string;
+    prefix: string;
+  };
   auth: {
     enabled: boolean;
     username: string;
@@ -106,6 +114,14 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   gateway: {
     host: '127.0.0.1',
     port: 8688,
+  },
+  oss: {
+    enabled: false,
+    accessKeyId: '',
+    accessKeySecret: '',
+    bucket: 'renlg',
+    endpoint: 'oss-cn-hangzhou.aliyuncs.com',
+    prefix: 'taiwei',
   },
   auth: {
     enabled: false,
@@ -196,6 +212,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     policy: { rules: Array.isArray(storedConfig.policy?.rules) ? storedConfig.policy.rules : [] },
     browser: { ...DEFAULT_CONFIG.browser, ...storedConfig.browser },
     gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },
+    oss: { ...DEFAULT_CONFIG.oss, ...storedConfig.oss },
     auth: { ...DEFAULT_CONFIG.auth, ...storedConfig.auth },
     oauth: { ...DEFAULT_CONFIG.oauth, ...storedConfig.oauth },
     share: { ...DEFAULT_CONFIG.share, ...storedConfig.share },
@@ -285,6 +302,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       policy: { rules: Array.isArray(storedConfig.policy?.rules) ? storedConfig.policy.rules : [] },
       browser: { ...DEFAULT_CONFIG.browser, ...storedConfig.browser },
       gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },
+      oss: { ...DEFAULT_CONFIG.oss, ...storedConfig.oss },
       auth: { ...DEFAULT_CONFIG.auth, ...storedConfig.auth },
       oauth: { ...DEFAULT_CONFIG.oauth, ...storedConfig.oauth },
       share: { ...DEFAULT_CONFIG.share, ...storedConfig.share },
@@ -308,6 +326,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       delegation: { ...DEFAULT_CONFIG.delegation }, browser: { ...DEFAULT_CONFIG.browser },
       budget: { ...DEFAULT_CONFIG.budget }, retry: { ...DEFAULT_CONFIG.retry }, runtime: { ...DEFAULT_CONFIG.runtime }, policy: { rules: [] },
       gateway: { ...DEFAULT_CONFIG.gateway },
+      oss: { ...DEFAULT_CONFIG.oss },
       auth: { ...DEFAULT_CONFIG.auth },
       oauth: { ...DEFAULT_CONFIG.oauth },
       share: { ...DEFAULT_CONFIG.share },

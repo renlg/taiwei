@@ -43,6 +43,7 @@ const elements = {
   attachmentButton: $('#attachment-button'),
   fileInput: $('#file-input'),
   attachmentList: $('#attachment-list'),
+  attachmentTextHint: $('#attachment-text-hint'),
   contextMeter: $('#context-meter'),
   contextFill: $('#context-fill'),
   contextPercent: $('#context-percent'),
@@ -1288,18 +1289,31 @@ function formatFileSize(value) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function isImageAttachment(attachment) {
+  return String(attachment.type || '').startsWith('image/') || /\.(?:png|jpe?g|webp|gif|bmp|svg)$/i.test(attachment.name || '');
+}
+
+function attachmentPreviewUrl(attachment) {
+  if (attachment.url) return attachment.url;
+  if (!attachment.previewUrl && attachment.file) attachment.previewUrl = URL.createObjectURL(attachment.file);
+  return attachment.previewUrl || '';
+}
+
+function releaseAttachment(attachment) {
+  if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+  delete attachment.previewUrl;
+}
+
+function updateAttachmentTextHint() {
+  elements.attachmentTextHint.hidden = !state.attachments.length || Boolean(elements.input.value.trim());
+}
+
 function renderAttachments() {
   elements.attachmentList.replaceChildren();
   for (const attachment of state.attachments) {
     const chip = document.createElement('div');
-    chip.className = `attachment-chip${attachment.uploading ? ' uploading' : ''}`;
-    const name = document.createElement('span');
-    name.className = 'attachment-name';
-    name.textContent = attachment.name;
-    name.title = attachment.name;
-    const size = document.createElement('span');
-    size.className = 'attachment-size';
-    size.textContent = attachment.uploading ? '上传中…' : formatFileSize(attachment.size);
+    const image = isImageAttachment(attachment);
+    chip.className = `attachment-chip${image ? ' attachment-thumbnail' : ''}${attachment.uploading ? ' uploading' : ''}`;
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'attachment-remove';
@@ -1308,18 +1322,42 @@ function renderAttachments() {
     remove.disabled = Boolean(state.controller);
     remove.addEventListener('click', () => {
       state.attachments = state.attachments.filter((item) => item.id !== attachment.id);
+      releaseAttachment(attachment);
       renderAttachments();
       resizeInput();
     });
-    chip.append(name, size, remove);
+    if (image) {
+      const thumbnail = document.createElement('img');
+      thumbnail.src = attachmentPreviewUrl(attachment);
+      thumbnail.alt = attachment.name;
+      thumbnail.title = `${attachment.name} · ${formatFileSize(attachment.size)}`;
+      if (attachment.uploading) {
+        const status = document.createElement('span');
+        status.className = 'attachment-upload-status';
+        status.textContent = '上传中…';
+        chip.append(thumbnail, status, remove);
+      } else {
+        chip.append(thumbnail, remove);
+      }
+    } else {
+      const name = document.createElement('span');
+      name.className = 'attachment-name';
+      name.textContent = attachment.name;
+      name.title = attachment.name;
+      const size = document.createElement('span');
+      size.className = 'attachment-size';
+      size.textContent = attachment.uploading ? '上传中…' : formatFileSize(attachment.size);
+      chip.append(name, size, remove);
+    }
     elements.attachmentList.append(chip);
   }
   elements.attachmentButton.disabled = Boolean(state.controller) || state.attachments.length >= 5;
   elements.send.disabled = Boolean(state.controller) || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
+  updateAttachmentTextHint();
 }
 
 async function uploadFile(file) {
-  const attachment = { id: crypto.randomUUID(), name: file.name, size: file.size, type: file.type, uploading: true };
+  const attachment = { id: crypto.randomUUID(), name: file.name, size: file.size, type: file.type, file, uploading: true };
   state.attachments.push(attachment);
   renderAttachments();
   try {
@@ -1337,9 +1375,11 @@ async function uploadFile(file) {
       if (response.status === 401) showLogin();
       throw new Error(body.error || `上传失败 (${response.status})`);
     }
-    Object.assign(attachment, body, { uploading: false });
+    Object.assign(attachment, body, { url: body.url, uploading: false });
+    if (attachment.url) releaseAttachment(attachment);
   } catch (error) {
     state.attachments = state.attachments.filter((item) => item.id !== attachment.id);
+    releaseAttachment(attachment);
     showToast(`${file.name}：${error.message}`);
   }
   renderAttachments();
@@ -1879,6 +1919,7 @@ async function loadSession(id) {
     state.currentProvider = session.providerId || state.currentProvider;
     state.currentAgent = session.agentId || 'build';
     elements.agentSelector.value = state.currentAgent;
+    state.attachments.forEach(releaseAttachment);
     state.attachments = [];
     renderAttachments();
     renderConversation(session);
@@ -1904,6 +1945,7 @@ async function createSession(folderId) {
     state.currentProvider = session.providerId || state.currentProvider;
     state.currentAgent = session.agentId || 'build';
     elements.agentSelector.value = state.currentAgent;
+    state.attachments.forEach(releaseAttachment);
     state.attachments = [];
     renderAttachments();
     await refreshSessions();
@@ -1968,7 +2010,7 @@ async function submit(message, files = []) {
       body: JSON.stringify({
         message,
         sessionId: state.current.id,
-        files: files.map(({ name, path, size, type }) => ({ name, path, size, type })),
+        files: files.map(({ name, path, url, size, type }) => ({ name, path, ...(url ? { url } : {}), size, type })),
       }),
       signal: state.controller.signal,
     });
@@ -2108,6 +2150,7 @@ function resizeInput() {
   elements.input.style.height = 'auto';
   elements.input.style.height = `${Math.min(elements.input.scrollHeight, 170)}px`;
   elements.send.disabled = Boolean(state.controller) || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
+  updateAttachmentTextHint();
 }
 
 elements.composer.addEventListener('submit', (event) => {
@@ -2115,6 +2158,7 @@ elements.composer.addEventListener('submit', (event) => {
   const message = elements.input.value.trim();
   if (!message || state.controller || state.attachments.some((file) => file.uploading)) return;
   const files = state.attachments.filter((file) => file.path);
+  state.attachments.forEach(releaseAttachment);
   state.attachments = [];
   renderAttachments();
   elements.input.value = '';

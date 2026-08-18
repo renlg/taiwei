@@ -464,6 +464,13 @@ body.guest-mode .composer-main { grid-template-columns: minmax(0, 1fr) 52px; }
 .attachment-size { flex: none; color: var(--faint); }
 .attachment-remove { width: 19px; height: 19px; display: grid; flex: none; place-items: center; padding: 0; border: 0; border-radius: 50%; color: var(--faint); background: transparent; cursor: pointer; font-size: 15px; line-height: 1; }
 .attachment-remove:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.attachment-thumbnail { position: relative; width: 68px; height: 68px; flex: 0 0 68px; margin-bottom: 5px; padding: 0; overflow: hidden; border-radius: 11px; background: var(--surface-hover); }
+.attachment-thumbnail img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.attachment-thumbnail .attachment-remove { position: absolute; top: 3px; right: 3px; color: #fff; background: rgba(8, 10, 15, .68); box-shadow: 0 1px 5px rgba(0,0,0,.28); }
+.attachment-thumbnail .attachment-remove:hover { color: #fff; background: var(--danger); }
+.attachment-upload-status { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; background: rgba(8, 10, 15, .58); font-size: 10px; font-weight: 650; }
+.attachment-text-hint { margin: -1px 0 3px; color: var(--faint); font-size: 10px; }
+.attachment-text-hint[hidden] { display: none; }
 .composer-footer { min-height: 34px; display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
 .composer-controls, .composer-actions { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .composer-hint { color: var(--faint); font-size: 10px; }
@@ -574,6 +581,7 @@ body.sidebar-collapsed .sidebar-footer { flex-direction: column; justify-content
 
 @media (max-width: 480px) {
   .media-grid-2, .media-grid-3, .media-grid-4, .media-grid-many { grid-template-columns: minmax(0, 1fr); }
+  .attachment-thumbnail { width: 60px; height: 60px; flex-basis: 60px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

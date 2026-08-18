@@ -210,7 +210,24 @@ Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so histo
 
 The composer includes a circular context-usage ring. taiwei requests OpenAI-compatible streaming usage (`stream_options.include_usage`), normalizes `prompt_tokens`, `completion_tokens`, and `total_tokens`, and emits an SSE `usage` event after each provider call. The gateway accumulates those provider-reported values in the current session file, and the browser updates the ring as usage arrives (with a small interim completion estimate while text is streaming). Hover or focus the ring to inspect the totals, window size, and percentage.
 
-Use the paperclip button to attach up to five files to a message. Each file is uploaded only to `~/.taiwei/uploads/` with a 10 MB per-file limit and a sanitized filename. Text-like formats are included in the model message up to 8,000 characters; binary files are represented by their absolute local path so the agent can inspect them with its existing tools. `POST /api/upload` uses a raw request body with the URL-encoded filename in `X-File-Name`, avoiding a multipart dependency.
+Use the paperclip button to attach up to five files to a message. Files have a 10 MB per-file limit and a sanitized display filename. By default they are stored under `~/.taiwei/uploads/`; when `oss.enabled` is true they are uploaded directly to public-read Aliyun OSS with a built-in V1 signature implementation. Remote image attachments are passed to the model as Markdown images, while local text-like formats are included up to 8,000 characters and other files are represented by their path. `POST /api/upload` uses a raw request body with the URL-encoded filename in `X-File-Name`, avoiding a multipart dependency.
+
+Aliyun OSS upload configuration (no SDK or additional dependency is required):
+
+```json
+{
+  "oss": {
+    "enabled": true,
+    "accessKeyId": "<ALIYUN_ACCESS_KEY_ID>",
+    "accessKeySecret": "<ALIYUN_ACCESS_KEY_SECRET>",
+    "bucket": "renlg",
+    "endpoint": "oss-cn-hangzhou.aliyuncs.com",
+    "prefix": "taiwei"
+  }
+}
+```
+
+The bucket must allow public reads for the returned object URL to be accessible. Keep `accessKeySecret` private. If `oss.enabled` is false or the `oss` section is absent, uploads continue to use local disk.
 
 Health checks are available at `GET /api/health`. Model state is exposed through `GET /api/models`, `GET /api/model`, and `POST /api/model`; these routes use the same authentication policy as the other gateway APIs. Session management is exposed locally through `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`, and the optional `sessionId` field on `POST /api/chat`.
 
