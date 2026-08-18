@@ -10,10 +10,17 @@ export interface SessionToolCall {
   result?: string;
 }
 
+export interface SessionAttachment {
+  name: string;
+  url: string;
+  type?: string;
+}
+
 export interface SessionMessage {
   role: 'user' | 'assistant';
   content: string;
   agentContent?: string;
+  attachments?: SessionAttachment[];
   toolCalls?: SessionToolCall[];
   timestamp: string;
   status?: 'stopped' | 'error';

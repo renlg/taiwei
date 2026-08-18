@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { ChatBridge } from './chat.js';
 import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
 import { LoginLockStore, type LoginLock } from './login-locks.js';
-import { SessionStore, type SessionToolCall } from './sessions.js';
+import { SessionStore, type SessionAttachment, type SessionToolCall } from './sessions.js';
 import { FolderStore, guestFolderName, workspaceFolderMetadata } from './folders.js';
 import { openSse, sendSse } from './sse.js';
 import { getCurrentModel, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
@@ -1279,11 +1279,18 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           }
         }
         const agentMessage = `${message}${await attachmentContext(body.files, uploadsDirectory)}`;
+        const messageAttachments: SessionAttachment[] | undefined = Array.isArray(body.files) && body.files.length
+          ? body.files.map((file: { name?: string; path?: string; url?: string; type?: string }) => ({
+            name: file.name ?? file.path?.split('/').pop() ?? 'attachment',
+            url: file.url ?? file.path ?? '',
+            ...(file.type ? { type: file.type } : {}),
+          }))
+          : undefined;
         const history = activeSessions.toChatHistory(session);
         const activeModel = session.currentModel ?? await modelState.getCurrentModel();
         const activeContextWindow = await contextWindowFor(activeModel);
         if (!session.messages.some((item) => item.role === 'user')) session.title = activeSessions.titleFrom(message) || session.title;
-        session.messages.push({ role: 'user', content: message, ...(agentMessage !== message ? { agentContent: agentMessage } : {}), timestamp: new Date().toISOString() });
+        session.messages.push({ role: 'user', content: message, ...(agentMessage !== message ? { agentContent: agentMessage } : {}), ...(messageAttachments ? { attachments: messageAttachments } : {}), timestamp: new Date().toISOString() });
         openSse(response);
         let completed = false;
         let answer = '';

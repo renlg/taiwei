@@ -293,13 +293,13 @@ body.guest-mode .admin-only { display: none !important; }
 .tool-card-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .tool-card-copy { min-width: 0; }
 .tool-card-name { display: block; margin-bottom: 4px; font: 12.5px ui-monospace, SFMono-Regular, Consolas, monospace; }
-.tool-card-description { display: block; overflow: hidden; margin: 0; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.tool-card-description { display: block; margin: 0; color: var(--muted); font-size: 10.5px; white-space: normal; word-break: break-word; overflow-wrap: anywhere; }
 .tool-config { margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--border); }
 .tool-config summary { width: fit-content; color: var(--accent); cursor: pointer; font-size: 10.5px; font-weight: 650; }
-.tool-config-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: end; margin-top: 10px; }
+.tool-config-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; align-items: end; margin-top: 10px; }
 .tool-config-form label { min-width: 0; margin: 0; }
-.tool-config-form input { margin-top: 5px; }
-.tool-config-form small { display: block; min-height: 16px; margin-top: 4px; }
+.tool-config-form input { width: 100%; min-width: 0; margin-top: 5px; }
+.tool-config-form small { display: block; min-height: 16px; margin-top: 4px; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .tool-config-form .small-button { justify-self: end; }
 .markdown-view p { margin: 0 0 11px; }
 .markdown-view h3, .markdown-view h4 { margin: 17px 0 8px; line-height: 1.35; }
@@ -371,6 +371,13 @@ body.guest-mode .admin-only { display: none !important; }
 .copy-message:hover { color: var(--text); background: var(--surface-hover); }
 .streaming-caret { display: inline-block; width: 7px; height: 16px; margin-left: 3px; vertical-align: -3px; border-radius: 2px; background: var(--accent); animation: blink .8s infinite; }
 .stop-note { margin-top: 10px; color: var(--faint); font-size: 12px; }
+
+.message-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.message-attachment-image { max-width: min(280px, 100%); max-height: 220px; border-radius: 10px; object-fit: cover; cursor: pointer; }
+.message-attachment-file { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px; color: #fff; background: rgba(255,255,255,.15); text-decoration: none; font-size: 12.5px; transition: background .15s; }
+a.message-attachment-file:hover { background: rgba(255,255,255,.25); text-decoration: none; }
+.message-attachment-icon { font-size: 15px; flex-shrink: 0; }
+.message-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .tool-list { display: grid; gap: 6px; margin: 0 0 10px; }
 .tool-entry { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--surface) 55%, transparent); }

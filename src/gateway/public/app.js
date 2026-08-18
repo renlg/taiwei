@@ -1293,6 +1293,36 @@ function isImageAttachment(attachment) {
   return String(attachment.type || '').startsWith('image/') || /\.(?:png|jpe?g|webp|gif|bmp|svg)$/i.test(attachment.name || '');
 }
 
+function renderMessageAttachments(attachments) {
+  const area = document.createElement('div');
+  area.className = 'message-attachments';
+  for (const att of attachments) {
+    const remote = /^https?:\/\//i.test(att.url || '');
+    if (isImageAttachment(att) && att.url) {
+      const img = document.createElement('img');
+      img.src = att.url;
+      img.alt = att.name;
+      img.loading = 'lazy';
+      img.className = 'message-attachment-image';
+      if (remote) { img.addEventListener('click', () => window.open(att.url, '_blank', 'noopener')); }
+      area.append(img);
+    } else {
+      const link = document.createElement(remote ? 'a' : 'span');
+      link.className = 'message-attachment-file';
+      if (remote) { link.href = att.url; link.target = '_blank'; link.rel = 'noopener'; }
+      const icon = document.createElement('span');
+      icon.className = 'message-attachment-icon';
+      icon.textContent = '\uD83D\uDCC4';
+      const name = document.createElement('span');
+      name.className = 'message-attachment-name';
+      name.textContent = att.name;
+      link.append(icon, name);
+      area.append(link);
+    }
+  }
+  return area;
+}
+
 function attachmentPreviewUrl(attachment) {
   if (attachment.url) return attachment.url;
   if (!attachment.previewUrl && attachment.file) attachment.previewUrl = URL.createObjectURL(attachment.file);
@@ -1475,8 +1505,16 @@ function addMessage(message, options = {}) {
   renderTools(stack, message.toolCalls);
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  if (message.role === 'assistant') bubble.innerHTML = renderMarkdown(message.content || '');
-  else bubble.textContent = message.content;
+  if (message.role === 'assistant') {
+    bubble.innerHTML = renderMarkdown(message.content || '');
+  } else if (message.attachments?.length) {
+    bubble.append(renderMessageAttachments(message.attachments));
+    const textDiv = document.createElement('div');
+    textDiv.textContent = message.content;
+    bubble.append(textDiv);
+  } else {
+    bubble.textContent = message.content;
+  }
   if (options.streaming) {
     const caret = document.createElement('span');
     caret.className = 'streaming-caret';
@@ -1982,7 +2020,12 @@ function parseEvent(block) {
 async function submit(message, files = []) {
   if (state.controller) return;
   if (!state.current && !await createSession()) return;
-  const userMessage = { role: 'user', content: message, timestamp: new Date().toISOString() };
+  const userAttachments = files.filter((f) => f.path || f.url).map((f) => ({
+    name: f.name,
+    url: f.url || f.path,
+    ...(f.type ? { type: f.type } : {}),
+  }));
+  const userMessage = { role: 'user', content: message, timestamp: new Date().toISOString(), ...(userAttachments.length ? { attachments: userAttachments } : {}) };
   addMessage(userMessage, { forceScroll: true });
   const assistantMessage = { role: 'assistant', content: '', timestamp: new Date().toISOString(), toolCalls: [] };
   let answerView = addMessage(assistantMessage, { streaming: true, forceScroll: true });
