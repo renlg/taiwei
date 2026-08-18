@@ -1,7 +1,6 @@
 import type { AgentContext } from './context.js';
 import { resolveCompressThreshold, resolveContextWindow, type TaiweiConfig } from '../config/config.js';
-import { streamChat } from '../llm/client.js';
-import type { ChatMessage, TokenUsage } from '../llm/client.js';
+import { messageText, streamChat, type ChatMessage, type ContentBlock, type TokenUsage } from '../llm/client.js';
 import { toOpenAITool } from '../llm/tools.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ConfirmationHandler } from '../security/commands.js';
@@ -36,6 +35,7 @@ export interface RunTurnOptions {
   policy?: PolicyEngine;
   providerId?: string;
   model?: string;
+  userContent?: ContentBlock[];
 }
 
 export type AgentEvent =
@@ -69,7 +69,7 @@ function renderHistory(messages: ChatMessage[]): string {
       return `assistant: ${message.content ?? ''}\ntool calls: ${JSON.stringify(message.tool_calls)}`;
     }
     if (message.role === 'tool') return `tool (${message.name ?? message.tool_call_id}): ${message.content}`;
-    return `${message.role}: ${message.content}`;
+    return `${message.role}: ${messageText(message)}`;
   }).join('\n\n');
 }
 
@@ -84,7 +84,7 @@ function renderFlushHistory(messages: ChatMessage[]): string {
     if (message.role === 'assistant' && message.tool_calls?.length) {
       return `assistant: ${message.content ?? ''}\ntool calls: ${JSON.stringify(message.tool_calls)}`;
     }
-    return `${message.role}: ${message.content}`;
+    return `${message.role}: ${messageText(message)}`;
   }).join('\n');
 }
 
@@ -159,7 +159,7 @@ export async function runAgentTurn(
   emitEvent(startEvent); await appendAudit(startEvent).catch(() => {});
   const conversation = options.retainConversation === false ? [] : context.messages;
   if (options.agentProfile) context.profile = options.agentProfile;
-  conversation.push({ role: 'user', content: prompt });
+  conversation.push({ role: 'user', content: options.userContent?.length ? options.userContent : prompt });
   let fullText = '';
   let compressionAttempted = false;
   const maxTurns = options.agentProfile?.maxTurns ?? config.maxTurns;
@@ -193,7 +193,7 @@ export async function runAgentTurn(
       budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
     }
     const lastMessage = conversation.at(-1);
-    const lastMessagePreview = typeof lastMessage?.content === 'string' ? lastMessage.content.slice(0, 500) : '';
+    const lastMessagePreview = messageText(lastMessage ?? { role: 'user', content: '' }).slice(0, 500);
     const beforeLLM = await options.hooks?.run('beforeLLM', {
       sessionId: options.sessionId, model, messagesCount: conversation.length,
       lastMessagePreview,

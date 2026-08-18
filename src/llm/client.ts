@@ -8,10 +8,26 @@ export interface ToolCall {
   function: { name: string; arguments: string };
 }
 
+export type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+export type UserContent = string | ContentBlock[];
+
 export type ChatMessage =
-  | { role: 'system' | 'user'; content: string }
+  | { role: 'system' | 'user'; content: UserContent }
   | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[] }
   | { role: 'tool'; content: string; tool_call_id: string; name?: string };
+
+export function messageText(message: ChatMessage): string {
+  if (typeof message.content === 'string') return message.content;
+  if (!message.content) return '';
+  return message.content.filter((block): block is { type: 'text'; text: string } => block.type === 'text').map((block) => block.text).join('');
+}
+
+export function hasVisionContent(message: ChatMessage): boolean {
+  return Array.isArray(message.content) && message.content.some((block) => block.type === 'image_url');
+}
 
 export interface TokenUsage {
   promptTokens: number;

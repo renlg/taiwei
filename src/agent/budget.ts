@@ -51,7 +51,7 @@ export function applyContextBudget(
     for (const message of messages) {
       if (message.role !== 'tool' || historyTokens <= available) continue;
       const original = message.content;
-      if (original.startsWith('[truncated ')) continue;
+      if (typeof original !== 'string' || original.startsWith('[truncated ')) continue;
       message.content = `[truncated ${original.length} chars]`;
       prunedChars += Math.max(0, original.length - message.content.length);
       historyTokens = estimateMessages(messages, charsPerToken);

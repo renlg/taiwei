@@ -1,6 +1,7 @@
 import { AgentContext } from './agent/context.js';
 import { InterruptManager, TurnQueue } from './agent/interrupt.js';
 import { runAgentTurn, type AgentEvent } from './agent/loop.js';
+import type { ContentBlock } from './llm/client.js';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { loadConfig, resolveToolSettings, resolveWorkspaceDir, type TaiweiConfig } from './config/config.js';
@@ -76,7 +77,7 @@ export class TaiweiApp {
     if (options.scheduler !== false) { await this.scheduler.start(); console.log(`[taiwei] Scheduler started (${(await this.cronJobs.list()).filter((job) => job.enabled).length} enabled jobs)`); }
   }
 
-  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string; providerId?: string; model?: string; workspaceRoot?: string } = {}): Promise<string> {
+  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string; providerId?: string; model?: string; workspaceRoot?: string; userContent?: ContentBlock[] } = {}): Promise<string> {
     const runtimeSessionId = options.runtimeSessionId ?? options.sessionId ?? 'local';
     return this.runtime.run(runtimeSessionId, async (runtimeSignal) => {
       const localSignal = options.sessionId ? undefined : this.interrupt.beginTurn();
@@ -109,6 +110,7 @@ export class TaiweiApp {
           delegationDepth: options.delegationDepth,
           role: options.role ?? 'admin', identity: options.identity ?? options.role ?? 'admin',
           workspaceRoot: cwd, policy: new PolicyEngine(this.config.policy),
+          userContent: options.userContent,
         });
       } finally { if (localSignal) this.interrupt.endTurn(); }
     });

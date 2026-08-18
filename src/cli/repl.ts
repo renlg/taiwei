@@ -257,7 +257,7 @@ export async function runRepl(app: TaiweiApp): Promise<void> {
             });
             for (const [index, message] of turnMessages.entries()) {
               await appendMessage({
-                sessionId: historySessionId, role: message.role, content: message.content ?? '',
+                sessionId: historySessionId, role: message.role, content: typeof message.content === 'string' ? message.content : (message.role === 'assistant' ? message.content ?? '' : ''),
                 toolName: message.role === 'tool' ? message.name : undefined,
                 timestamp: now + index / 1_000,
               });

@@ -1,7 +1,7 @@
 import type { TaiweiApp } from '../app.js';
 import { AgentContext } from '../agent/context.js';
 import type { AgentEvent } from '../agent/loop.js';
-import type { ChatMessage } from '../llm/client.js';
+import type { ChatMessage, ContentBlock } from '../llm/client.js';
 import type { ConfirmationDecision, ConfirmationRequest } from '../security/commands.js';
 import { renderRetrievedContext } from '../rag/prompt.js';
 import { retrieve } from '../rag/retrieve.js';
@@ -15,14 +15,14 @@ export interface ChatSink {
 }
 
 export interface ChatBridge {
-  run(message: string, sink: ChatSink, history?: ChatMessage[], sessionId?: string, memory?: MemoryStore, agentId?: string, role?: 'admin' | 'guest', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string): Promise<void>;
+  run(message: string, sink: ChatSink, history?: ChatMessage[], sessionId?: string, memory?: MemoryStore, agentId?: string, role?: 'admin' | 'guest', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string, userContent?: ContentBlock[]): Promise<void>;
   stop(sessionId?: string): boolean;
 }
 
 export class AgentChatBridge implements ChatBridge {
   constructor(private readonly app: TaiweiApp) {}
 
-  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], sessionId?: string, memory?: MemoryStore, agentId = 'build', role: 'admin' | 'guest' = 'admin', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string): Promise<void> {
+  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], sessionId?: string, memory?: MemoryStore, agentId = 'build', role: 'admin' | 'guest' = 'admin', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string, userContent?: ContentBlock[]): Promise<void> {
     const context = new AgentContext(memory ?? this.app.memory, this.app.skills, !memory);
     context.setMessages(history);
     for (const skill of this.app.context.listActiveSkills()) context.activateSkill(skill);
@@ -42,6 +42,7 @@ export class AgentChatBridge implements ChatBridge {
         skipBeforeMessageHook: true,
         agentId,
         role, identity: identity ?? role, runtimeSessionId, providerId, model, workspaceRoot,
+        userContent,
       });
     } catch (error) {
       const reason = error instanceof Error ? error : new Error(String(error));

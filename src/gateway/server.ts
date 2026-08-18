@@ -30,7 +30,7 @@ import { CronScheduler, jobNextRun } from '../cron/scheduler.js';
 import { BUILTIN_AGENTS, getAgentProfile } from '../agents/profiles.js';
 import { readAudit } from '../observability/audit.js';
 import type { PluginLoader } from '../plugins/loader.js';
-import type { ChatMessage } from '../llm/client.js';
+import type { ChatMessage, ContentBlock } from '../llm/client.js';
 import { cleanupDeployment, DEPLOYMENT_NAME_PATTERN, DeploymentStore, OWNER_HASH_PATTERN, validateDeploymentInput, type DeploymentRepository } from './deployments.js';
 import { uploadToOss } from './oss.js';
 
@@ -106,6 +106,7 @@ const STATIC_CONTENT_TYPES: Record<string, string> = {
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_FILES_PER_MESSAGE = 5;
 const ATTACHMENT_TEXT_LIMIT = 8_000;
+const MAX_IMAGE_BASE64_BYTES = 5 * 1024 * 1024;
 const TEXT_EXTENSIONS = new Set([
   '.txt', '.md', '.markdown', '.json', '.jsonl', '.yaml', '.yml', '.csv', '.tsv', '.log',
   '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.py', '.java', '.go', '.c', '.h', '.cc',
@@ -378,6 +379,70 @@ export async function attachmentContext(files: unknown, uploadsDirectory: string
     }
   }
   return sections.length ? `\n\n${sections.join('\n\n')}` : '';
+}
+
+const IMAGE_MIME_MAP: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+};
+
+function imageMimeType(extension: string): string {
+  return IMAGE_MIME_MAP[extension] ?? 'image/png';
+}
+
+export async function buildMultimodalContent(files: unknown, uploadsDirectory: string): Promise<{ blocks: ContentBlock[]; fallbackText: string }> {
+  if (files === undefined) return { blocks: [], fallbackText: '' };
+  if (!Array.isArray(files) || files.length > MAX_FILES_PER_MESSAGE) throw new HttpError(400, `files must contain at most ${MAX_FILES_PER_MESSAGE} uploads`);
+  const blocks: ContentBlock[] = [];
+  const fallbackSections: string[] = [];
+  for (const item of files) {
+    if (!item || typeof item !== 'object') throw new HttpError(400, 'Invalid uploaded file metadata');
+    const candidate = item as Partial<UploadedFile>;
+    if (typeof candidate.path !== 'string') throw new HttpError(400, 'Invalid uploaded file path');
+    const remote = candidate.path.startsWith('http://') || candidate.path.startsWith('https://');
+    if (!remote && !withinDirectory(candidate.path, uploadsDirectory)) throw new HttpError(400, 'Invalid uploaded file path');
+    const info = remote ? undefined : await stat(candidate.path).catch(() => undefined);
+    if (!remote && !info?.isFile()) throw new HttpError(400, 'Uploaded file does not exist');
+    const name = sanitizeFilename(typeof candidate.name === 'string' ? candidate.name : candidate.path.split('/').pop() ?? 'attachment');
+    const extension = extname(name).toLowerCase();
+    let remoteExtension = '';
+    if (remote) {
+      try { remoteExtension = extname(new URL(candidate.path).pathname).toLowerCase(); } catch {}
+    }
+    const effectiveExtension = remoteExtension || extension;
+    if (IMAGE_EXTENSIONS.has(effectiveExtension)) {
+      if (remote) {
+        blocks.push({ type: 'image_url', image_url: { url: candidate.path } });
+        blocks.push({ type: 'text', text: `[用户上传了图片: ${name}]` });
+      } else if (info!.size <= MAX_IMAGE_BASE64_BYTES) {
+        const buffer = await readFile(candidate.path);
+        const base64 = buffer.toString('base64');
+        const mime = imageMimeType(effectiveExtension);
+        blocks.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } });
+        blocks.push({ type: 'text', text: `[用户上传了图片: ${name}]` });
+      } else {
+        fallbackSections.push(`![${name}](${resolve(candidate.path)})`);
+        blocks.push({ type: 'text', text: `[图片 ${name} 超过大小限制，无法内联]` });
+      }
+    } else if (TEXT_EXTENSIONS.has(effectiveExtension) || name.toLowerCase() === 'dockerfile') {
+      if (remote) {
+        fallbackSections.push(`[附件: ${name}] 路径: ${candidate.path} (可通过工具读取)`);
+        blocks.push({ type: 'text', text: `[附件: ${name}] 路径: ${candidate.path}` });
+      } else {
+        const content = (await readFile(candidate.path, 'utf8')).slice(0, ATTACHMENT_TEXT_LIMIT);
+        const truncated = info!.size > Buffer.byteLength(content) ? '\n[内容已截断]' : '';
+        const lang = effectiveExtension.slice(1) || 'text';
+        blocks.push({ type: 'text', text: `[文件: ${name}]\n\`\`\`${lang}\n${content}${truncated}\n\`\`\`` });
+      }
+    } else {
+      const path = remote ? candidate.path : resolve(candidate.path);
+      fallbackSections.push(`[附件: ${name}] 路径: ${path} (可通过工具读取)`);
+      blocks.push({ type: 'text', text: `[附件: ${name}] 路径: ${path}` });
+    }
+  }
+  const fallbackText = fallbackSections.length ? `\n\n${fallbackSections.join('\n\n')}` : '';
+  return { blocks, fallbackText };
 }
 
 export function createGatewayServer(options: GatewayServerOptions): Server {
@@ -1278,7 +1343,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             return;
           }
         }
-        const agentMessage = `${message}${await attachmentContext(body.files, uploadsDirectory)}`;
+        const agentMessageBase = `${message}${await attachmentContext(body.files, uploadsDirectory)}`;
         const messageAttachments: SessionAttachment[] | undefined = Array.isArray(body.files) && body.files.length
           ? body.files.map((file: { name?: string; path?: string; url?: string; type?: string }) => ({
             name: file.name ?? file.path?.split('/').pop() ?? 'attachment',
@@ -1289,6 +1354,26 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const history = activeSessions.toChatHistory(session);
         const activeModel = session.currentModel ?? await modelState.getCurrentModel();
         const activeContextWindow = await contextWindowFor(activeModel);
+        const activeProviderId = session.providerId;
+        let visionEnabled = false;
+        try {
+          const providers = config.providers ?? [];
+          const provider = activeProviderId ? providers.find((p) => p.id === activeProviderId) : providers[0];
+          if (provider) {
+            const modelDef = (provider.models ?? []).find((m) => m.id === activeModel);
+            visionEnabled = modelDef?.capabilities?.vision === true;
+          }
+        } catch {}
+        const multimodalEnabled = visionEnabled && config.gateway.multimodal?.enabled !== false;
+        let agentMessage = agentMessageBase;
+        let userContent: ContentBlock[] | undefined;
+        if (multimodalEnabled && Array.isArray(body.files) && body.files.length > 0) {
+          const multimodal = await buildMultimodalContent(body.files, uploadsDirectory);
+          if (multimodal.blocks.length > 0) {
+            userContent = [...multimodal.blocks, { type: 'text', text: message }];
+            agentMessage = message;
+          }
+        }
         if (!session.messages.some((item) => item.role === 'user')) session.title = activeSessions.titleFrom(message) || session.title;
         session.messages.push({ role: 'user', content: message, ...(agentMessage !== message ? { agentContent: agentMessage } : {}), ...(messageAttachments ? { attachments: messageAttachments } : {}), timestamp: new Date().toISOString() });
         openSse(response);
@@ -1335,7 +1420,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             sendSse(response, 'confirm', request);
             return confirmations.wait(request);
           },
-        }, history, session.id, turnMemory, session.agentId ?? 'build', authenticatedRole, authenticatedUsername ?? authenticatedRole, runtimeSessionId, session.providerId, session.currentModel, workspace);
+        }, history, session.id, turnMemory, session.agentId ?? 'build', authenticatedRole, authenticatedUsername ?? authenticatedRole, runtimeSessionId, session.providerId, session.currentModel, workspace, userContent);
         if (contextMessages) session.contextMessages = contextMessages;
         const content = finalText ?? answer;
         if (finalText !== undefined || content || toolCalls.length || turnError) {

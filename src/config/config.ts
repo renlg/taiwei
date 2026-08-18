@@ -48,6 +48,7 @@ export interface TaiweiConfig {
   gateway: {
     host: string;
     port: number;
+    multimodal: { enabled: boolean };
   };
   oss: {
     enabled: boolean;
@@ -114,6 +115,7 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   gateway: {
     host: '127.0.0.1',
     port: 8688,
+    multimodal: { enabled: true },
   },
   oss: {
     enabled: false,
