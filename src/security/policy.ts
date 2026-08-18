@@ -12,7 +12,7 @@ export interface PolicyInput {
 export interface PolicyDecision { effect: PolicyEffect; rule: string; explicit: boolean; allowExternalPath?: boolean; }
 
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch']);
-const GUEST_READ_TOOLS = new Set(['read_file', 'search_files', 'rag_search', 'generate_image', 'generate_video', 'session_search', 'session_list', 'session_get']);
+const GUEST_READ_TOOLS = new Set(['read_file', 'search_files', 'rag_search', 'web_search', 'generate_image', 'generate_video', 'session_search', 'session_list', 'session_get']);
 
 function matchesPattern(value: string, pattern: string): boolean {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*').replaceAll('?', '.');
@@ -59,7 +59,7 @@ export class PolicyEngine {
       return { effect: 'deny', rule: 'builtin.guest.default-deny', explicit: false };
     }
     if (input.agentMode === 'plan') {
-      if (input.tool === 'bash' || WRITE_TOOLS.has(input.tool) || input.tool === 'delegate_task' || input.tool.startsWith('memory_') || input.tool === 'watchdog_register' || input.tool === 'watchdog_remove') {
+      if (input.tool === 'bash' || WRITE_TOOLS.has(input.tool) || input.tool === 'delegate_task' || input.tool.startsWith('memory_') || input.tool === 'watchdog_register' || input.tool === 'watchdog_remove' || input.tool.startsWith('browser_') || input.tool.startsWith('mcp_')) {
         return { effect: 'deny', rule: 'builtin.plan.read-only', explicit: false };
       }
       return { effect: 'allow', rule: 'builtin.plan.read', explicit: false };

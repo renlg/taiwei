@@ -51,7 +51,9 @@ Edit `~/.taiwei/config.json`, or set environment variables:
   "tools": {
     "rag_search": { "enabled": true, "limit": 5 },
     "bash": { "enabled": true, "defaultCwd": "" },
-    "search_files": { "enabled": true, "maxResults": 50 }
+    "search_files": { "enabled": true, "maxResults": 50 },
+    "web_search": { "enabled": true, "provider": "tavily", "apiKey": "" },
+    "delegate_task": { "enabled": true, "allowedAgents": "research" }
   },
   "plugins": {},
   "gateway": {
@@ -114,7 +116,7 @@ The optional legacy `models` array remains the user-curated candidate list for t
 ./bin/taiwei --version
 ```
 
-The TUI starts with a recent-session picker and supports streamed messages/tool activity, input history, command completion, resize handling, `/resume <id>`, `/export <path>`, `/agent <plan|build>`, and session-local `/model <provider>/<model>`. Ctrl+C cancels an active turn or clears the draft, Ctrl+D exits, and Ctrl+L clears the pane. Non-TTY input automatically uses the readline REPL. The REPL commands are:
+The TUI starts with a recent-session picker and supports streamed messages/tool activity, input history, command completion, resize handling, `/resume <id>`, `/export <path>`, `/agent <plan|build|research>`, and session-local `/model <provider>/<model>`. Ctrl+C cancels an active turn or clears the draft, Ctrl+D exits, and Ctrl+L clears the pane. Non-TTY input automatically uses the readline REPL. The REPL commands are:
 
 ```text
 /help  /exit  /stop  /clear  /model [name]  /agent list|use|reset
@@ -150,7 +152,7 @@ The agent selects a whole-second interval from task difficulty and recovery urge
 
 More critical or time-sensitive work should use a shorter interval. `timeout_seconds` defaults to 30, and `enabled` defaults to `true`.
 
-Plan and Build are built-in session profiles. Plan hides and rejects shell/file-write tools; Build retains the normal tool set. `delegate_task` starts an isolated child conversation, returns only its final result, inherits the parent’s restrictions, propagates cancellation, and defaults to three concurrent children with depth two.
+Plan, Build, and Research are built-in session profiles. Plan hides and rejects shell, file-write, browser, and MCP tools; Build retains the normal tool set; Research allows only `search_files`, `read_file`, and `web_search` (read-only investigation). `delegate_task` starts an isolated child conversation, returns only its final result, inherits the parent’s restrictions, propagates cancellation, and defaults to three concurrent children with depth two. Delegation defaults to the `research` agent (least-privilege read-only); administrators may enable `plan` or `build` via the `delegate_task` tool setting `allowedAgents`.
 
 ### Browser tools
 
@@ -167,6 +169,10 @@ The tools navigate, click, fill, extract text/links, and save workspace-local PN
 Put Markdown or text files under `~/.taiwei/knowledge/`, then run `/rag index` to rebuild the index. The same index also includes Markdown files in `~/.taiwei/memory/`; sources retain a `knowledge/` or `memory/` prefix. Indexing embeds chunks in batches of up to 32 and stores vectors alongside the BM25 data in `~/.taiwei/rag-index.json`. Searches fuse the top BM25 and cosine-similarity candidates with Reciprocal Rank Fusion and return the best five results. The web gateway performs this retrieval automatically before every user message and injects matching knowledge into that turn.
 
 If query embedding fails because of a timeout, network error, or upstream response, search automatically falls back to BM25. Legacy indexes without vectors also remain readable and use BM25; run `/rag index` to add vectors.
+
+### Web search
+
+The `web_search` tool queries the public web through a configurable third-party provider. Supported providers are `tavily` (default) and `serper`. Configure the API key in the tool settings panel or set the `TAIWEI_WEB_SEARCH_API_KEY` environment variable. Without a key the tool returns a configuration error instead of making a network request. The tool is available to all agent profiles; the `research` profile includes it in its allow list by default.
 
 The workspace defaults to `~/workspace` (with `~` expanded using the operating-system home directory). taiwei creates it on startup and uses it as the default working directory for bash and other filesystem tools; it is a starting directory, not a jail, so commands may still use `cd`. Run `/workspace <path>` or use the web settings panel to change it. A running turn keeps its original directory, while later turns use the saved value.
 

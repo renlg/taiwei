@@ -4,29 +4,77 @@ export interface AgentProfile {
   prompt: string;
   model?: string;
   maxTurns?: number;
-  toolPolicy?: { deny: string[] };
+  toolPolicy?: { allow?: string[]; deny?: string[] };
 }
 
 export const BUILTIN_AGENTS: readonly AgentProfile[] = [
   {
     id: 'plan', mode: 'plan',
     prompt: 'Plan mode: investigate, reason, and propose a precise plan. You are read-only and must not modify files or execute shell commands.',
-    toolPolicy: { deny: ['bash', 'write_file', 'edit_file', 'apply_patch', 'memory_append', 'memory_extend', 'plugin_*'] },
+    toolPolicy: { deny: ['bash', 'write_file', 'edit_file', 'apply_patch', 'memory_append', 'memory_extend', 'plugin_*', 'browser_*', 'mcp_*'] },
   },
   { id: 'build', mode: 'build', prompt: 'Build mode: implement and verify requested changes using the available tools.' },
+  {
+    id: 'research', mode: 'plan',
+    prompt: 'Research mode: you may only search code, read files, and search the public web to investigate and report findings. You cannot modify files, run shell commands, manage memory, browse interactively, or call MCP/plugin tools.',
+    toolPolicy: { allow: ['search_files', 'read_file', 'web_search'] },
+  },
 ];
 
 export function getAgentProfile(id = 'build'): AgentProfile {
   const profile = BUILTIN_AGENTS.find((item) => item.id === id);
   if (!profile) throw new Error(`Unknown agent profile: ${id}`);
-  return { ...profile, toolPolicy: profile.toolPolicy ? { deny: [...profile.toolPolicy.deny] } : undefined };
+  return {
+    ...profile,
+    toolPolicy: profile.toolPolicy ? {
+      ...(profile.toolPolicy.allow ? { allow: [...profile.toolPolicy.allow] } : {}),
+      ...(profile.toolPolicy.deny ? { deny: [...profile.toolPolicy.deny] } : {}),
+    } : undefined,
+  };
+}
+
+export function matchesToolPattern(name: string, pattern: string): boolean {
+  return pattern.endsWith('*') ? name.startsWith(pattern.slice(0, -1)) : name === pattern;
 }
 
 export function toolDenied(name: string, profile?: AgentProfile): boolean {
-  return profile?.toolPolicy?.deny.some((pattern) => pattern.endsWith('*') ? name.startsWith(pattern.slice(0, -1)) : name === pattern) ?? false;
+  const policy = profile?.toolPolicy;
+  if (!policy) return false;
+  if (policy.allow && policy.allow.length > 0) {
+    return !policy.allow.some((pattern) => matchesToolPattern(name, pattern));
+  }
+  return policy.deny?.some((pattern) => matchesToolPattern(name, pattern)) ?? false;
+}
+
+function intersectAllow(parent?: string[], child?: string[]): string[] | undefined {
+  if (!parent || !child) return undefined;
+  const result: string[] = [];
+  for (const pattern of parent) {
+    if (child.includes(pattern)) result.push(pattern);
+    else if (pattern.endsWith('*')) {
+      for (const childPattern of child) {
+        if (childPattern.startsWith(pattern.slice(0, -1)) || pattern.slice(0, -1).startsWith(childPattern.slice(0, -1))) {
+          result.push(childPattern.endsWith('*') || pattern.endsWith('*') ? (childPattern.length <= pattern.length ? childPattern : pattern) : childPattern);
+        }
+      }
+    } else if (child.some((cp) => cp.endsWith('*') && matchesToolPattern(pattern, cp))) {
+      result.push(pattern);
+    }
+  }
+  return result.length > 0 ? result : undefined;
 }
 
 export function narrowProfile(parent: AgentProfile, child: AgentProfile): AgentProfile {
   if (parent.mode === 'plan' && child.mode === 'build') throw new Error('A plan agent cannot delegate to a build agent');
-  return { ...child, toolPolicy: { deny: [...new Set([...(parent.toolPolicy?.deny ?? []), ...(child.toolPolicy?.deny ?? [])])] } };
+  const parentAllow = parent.toolPolicy?.allow;
+  const childAllow = child.toolPolicy?.allow;
+  if (parentAllow && parentAllow.length > 0 && childAllow && childAllow.length > 0) {
+    const intersection = intersectAllow(parentAllow, childAllow);
+    if (!intersection) throw new Error(`Agent "${child.id}" has no tools in common with the parent allow list`);
+    const mergedDeny = [...new Set([...(parent.toolPolicy?.deny ?? []), ...(child.toolPolicy?.deny ?? [])])];
+    return { ...child, toolPolicy: { allow: intersection, ...(mergedDeny.length > 0 ? { deny: mergedDeny } : {}) } };
+  }
+  const allow = parentAllow?.slice() ?? childAllow?.slice();
+  const deny = [...new Set([...(parent.toolPolicy?.deny ?? []), ...(child.toolPolicy?.deny ?? [])])];
+  return { ...child, toolPolicy: { ...(allow ? { allow } : {}), ...(deny.length > 0 ? { deny } : {}) } };
 }

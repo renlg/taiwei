@@ -25,7 +25,7 @@ const HELP = `Commands:
   /stop                         Cancel the active turn
   /clear                        Clear conversation history
   /model [name]                 List models or change the current model
-  /agent list|use <id>|reset    Select Plan or Build agent
+  /agent list|use <id>|reset    Select Plan, Build, or Research agent
   /workspace <path>             Change the default tool working directory
   /skill list|load|unload ...   Manage active skills
   /cron list                    List scheduled jobs
@@ -107,7 +107,7 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
       if (!action || action === 'list') output(BUILTIN_AGENTS.map((profile) => `${profile.id === app.activeAgentId ? '*' : ' '} ${profile.id} (${profile.mode})`).join('\n'));
       else if (action === 'use' && args[0]) { getAgentProfile(args[0]); app.activeAgentId = args[0]; app.context.clear(); output(`[taiwei] Agent set to ${args[0]}.`); }
       else if (action === 'reset') { app.activeAgentId = 'build'; app.context.clear(); output('[taiwei] Agent reset to build.'); }
-      else throw new Error('Usage: /agent list | /agent use <plan|build> | /agent reset');
+      else throw new Error('Usage: /agent list | /agent use <plan|build|research> | /agent reset');
       break;
     }
     case '/workspace': {

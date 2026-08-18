@@ -125,7 +125,7 @@ export class TerminalTui {
       if (command === '/exit') { this.closed = true; return; }
       if (command === '/stop') { this.app.stopSession(this.sessionId); return; }
       if (command === '/clear') { this.app.context.clear(); this.messages = []; this.status('Conversation cleared'); return; }
-      if (command === '/help') { this.status('/resume <id> · /export <path> · /agent [plan|build] · /model [provider/model] · /clear · /exit'); return; }
+      if (command === '/help') { this.status('/resume <id> · /export <path> · /agent [plan|build|research] · /model [provider/model] · /clear · /exit'); return; }
       if (command === '/resume' && args[0]) { await this.resume(args[0]); this.render(); return; }
       if (command === '/export' && args[0]) { const session = await getSession(this.sessionId, 10_000); await writeFile(args.join(' '), `${JSON.stringify(session, null, 2)}\n`, 'utf8'); this.status(`Exported ${args.join(' ')}`); return; }
       if (command === '/agent') {

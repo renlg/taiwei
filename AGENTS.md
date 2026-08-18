@@ -124,6 +124,13 @@ Add password login to the web gateway (it currently binds 0.0.0.0 with no auth â
 - Guest and Plan file operations use a realpath-aware workspace boundary check that rejects `..` and symlink escapes, including nonexistent write targets. Bash warns when `defaultCwd` is external, but its cwd is not a jail.
 - Gateway turns have per-session controllers. Stop/disconnect targets the authenticated identity plus browser session; sessions serialize their own turns while `runtime.maxConcurrentTurns` limits total active turns (default 4).
 
+## Agent Profiles and Delegation Least-Privilege (implemented)
+
+- `AgentProfile.toolPolicy` supports both `allow` (whitelist) and `deny` (blacklist). When `allow` is non-empty, only listed tools are permitted; otherwise `deny` is consulted. `toolDenied()` and `narrowProfile()` in `src/agents/profiles.ts` enforce this transparently; `ToolRegistry.list()/dispatch()` and `agent/loop.ts` gain allow-list semantics with zero changes.
+- Three built-in profiles: `plan` (read-only deny list including `browser_*` and `mcp_*`), `build` (full tool set), and `research` (allow list: `search_files`, `read_file`, `web_search` only; `mode: 'plan'`).
+- `delegate_task` defaults to the `research` agent instead of inheriting the caller's profile. Administrators opt in to broader delegation through the `allowedAgents` tool config setting (comma-separated agent ids, default `research`). Attempting to delegate to a disallowed agent throws a clear error.
+- `narrowProfile()` intersects parent and child allow lists (throws when both have allow but the intersection is empty) and unions deny lists. A `plan`-mode parent still cannot delegate to a `build`-mode child.
+
 ## Context Budget and Provider Recovery (implemented)
 
 - `src/agent/budget.ts` estimates tokens before requests using `tokenEstimateCharsPerToken` (default 4), applies `budget.systemMax/historyMax/toolsMax/outputReserve`, prunes old tool results first, and then uses history summary/memory flush. Estimates trigger compression when providers omit usage.
