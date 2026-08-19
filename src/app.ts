@@ -33,6 +33,7 @@ import { getAgentProfile, type AgentProfile } from './agents/profiles.js';
 import { DelegationManager, type DelegateRequest } from './agent/delegation.js';
 import { createDelegateTool } from './tools/impl/delegate.js';
 import { createWatchdogTools } from './tools/impl/watchdog.js';
+import { taskTools } from './tools/impl/task.js';
 import { BrowserToolRuntime } from './tools/impl/browser.js';
 import { executeWatchdogScript } from './cron/script.js';
 import { SessionRuntime } from './agent/runtime.js';
@@ -66,7 +67,7 @@ export class TaiweiApp {
     await mkdir(workspace, { recursive: true });
     this.hooks = new HookRunner(this.config.hooks, this.config.hookTimeoutSeconds, workspace);
     this.delegation = new DelegationManager((request) => this.runChild(request), this.config.delegation.maxConcurrent, this.config.delegation.maxDepth);
-    for (const tool of [bashTool, readTool, writeTool, editTool, searchTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills), ...createMemoryTools(this.memory), ...createWatchdogTools(this.cronJobs, this.scheduler), ...this.browser.tools()]) this.registry.register(tool);
+    for (const tool of [bashTool, readTool, writeTool, editTool, searchTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills), ...createMemoryTools(this.memory), ...createWatchdogTools(this.cronJobs, this.scheduler), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
     this.registry.register(createDelegateTool(this.delegation));
     // history.db is a rebuildable index. A missing/unsupported SQLite runtime must never block chat startup.
     await importHistoryIfEmpty().catch(() => {});

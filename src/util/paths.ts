@@ -23,6 +23,7 @@ export interface TaiweiPaths {
   audit: string;
   folders: string;
   workspaces: string;
+  tasks: string;
 }
 
 export function getPaths(): TaiweiPaths {
@@ -48,6 +49,7 @@ export function getPaths(): TaiweiPaths {
     audit: join(home, 'audit.jsonl'),
     folders: join(home, 'folders.json'),
     workspaces: join(home, 'workspaces'),
+    tasks: join(home, 'tasks'),
   };
 }
 

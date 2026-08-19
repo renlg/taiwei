@@ -152,6 +152,17 @@ The agent selects a whole-second interval from task difficulty and recovery urge
 
 More critical or time-sensitive work should use a shorter interval. `timeout_seconds` defaults to 30, and `enabled` defaults to `true`.
 
+### Background task tools
+
+The agent can start long-running commands (deploys, batch jobs, data syncs) as detached background processes and block-wait for them within the same turn — similar to Hermes `process wait/poll`.
+
+- **`task_start(command, cwd?, timeout_ms?)`** — spawn a detached background process. stdout and stderr are written to per-task log files under `~/.taiwei/tasks/<id>/`. Returns `{ id, pid, cwd, startedAt }`. The optional `timeout_ms` is a safety net that kills the process after the given wall-clock duration.
+- **`task_wait(id, timeout_seconds?)`** — block until the task exits or the wait timeout expires (default 3600 s). Returns complete `stdout`, `stderr`, `exitCode`, `exitSignal`, `duration`, and `status` (`completed` or `timed_out`). A timed-out wait does **not** kill the task; use `task_kill` afterwards.
+- **`task_poll(id)`** — non-blocking status check: returns `running`/`completed`/`timed_out`/`killed`, partial stdout/stderr, exit code, and uptime.
+- **`task_kill(id)`** — SIGTERM with a 3-second grace period, then SIGKILL. No-op for tasks that have already finished.
+
+Multiple tasks run concurrently. The task registry (`~/.taiwei/tasks/registry.json`) persists across turns and restarts; finished tasks retain their full logs. All `task_*` tools are admin-only; guests are denied the entire family, and plan mode blocks `task_start` and `task_kill`.
+
 Plan, Build, and Research are built-in session profiles. Plan hides and rejects shell, file-write, browser, and MCP tools; Build retains the normal tool set; Research allows only `search_files`, `read_file`, and `web_search` (read-only investigation). `delegate_task` starts an isolated child conversation, returns only its final result, inherits the parent’s restrictions, propagates cancellation, and defaults to three concurrent children with depth two. Delegation defaults to the `research` agent (least-privilege read-only); administrators may enable `plan` or `build` via the `delegate_task` tool setting `allowedAgents`.
 
 ### Browser tools
@@ -350,6 +361,7 @@ guests/           guest-scoped core memory and web sessions
 gateway-sessions.json  durable gateway login tokens
 login-locks.json   durable login failure and lock state
 uploads/           local web-chat attachments
+tasks/             background task registry and per-task logs
 ```
 
 ### Skills
