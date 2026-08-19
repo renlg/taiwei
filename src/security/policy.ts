@@ -49,7 +49,6 @@ export class PolicyEngine {
       }
     }
     if (input.role === 'guest') {
-      if (input.tool.startsWith('watchdog_')) return { effect: 'deny', rule: 'builtin.guest.no-watchdog-management', explicit: false };
       if (input.tool.startsWith('task_')) return { effect: 'deny', rule: 'builtin.guest.no-task-management', explicit: false };
       if (input.tool === 'delegate_task') return { effect: 'deny', rule: 'builtin.guest.no-delegation', explicit: false };
       if (input.tool === 'bash') return { effect: 'deny', rule: 'builtin.guest.no-bash', explicit: false };
@@ -60,7 +59,7 @@ export class PolicyEngine {
       return { effect: 'deny', rule: 'builtin.guest.default-deny', explicit: false };
     }
     if (input.agentMode === 'plan') {
-      if (input.tool === 'bash' || WRITE_TOOLS.has(input.tool) || input.tool === 'delegate_task' || input.tool.startsWith('memory_') || input.tool === 'watchdog_register' || input.tool === 'watchdog_remove' || input.tool === 'task_start' || input.tool === 'task_kill' || input.tool.startsWith('browser_') || input.tool.startsWith('mcp_')) {
+      if (input.tool === 'bash' || WRITE_TOOLS.has(input.tool) || input.tool === 'delegate_task' || input.tool.startsWith('memory_') || input.tool === 'task_start' || input.tool === 'task_kill' || input.tool.startsWith('browser_') || input.tool.startsWith('mcp_')) {
         return { effect: 'deny', rule: 'builtin.plan.read-only', explicit: false };
       }
       return { effect: 'allow', rule: 'builtin.plan.read', explicit: false };

@@ -32,10 +32,8 @@ import { appendMessage, upsertSession } from './history/db.js';
 import { getAgentProfile, type AgentProfile } from './agents/profiles.js';
 import { DelegationManager, type DelegateRequest } from './agent/delegation.js';
 import { createDelegateTool } from './tools/impl/delegate.js';
-import { createWatchdogTools } from './tools/impl/watchdog.js';
 import { taskTools } from './tools/impl/task.js';
 import { BrowserToolRuntime } from './tools/impl/browser.js';
-import { executeWatchdogScript } from './cron/script.js';
 import { SessionRuntime } from './agent/runtime.js';
 import { PolicyEngine } from './security/policy.js';
 
@@ -67,7 +65,7 @@ export class TaiweiApp {
     await mkdir(workspace, { recursive: true });
     this.hooks = new HookRunner(this.config.hooks, this.config.hookTimeoutSeconds, workspace);
     this.delegation = new DelegationManager((request) => this.runChild(request), this.config.delegation.maxConcurrent, this.config.delegation.maxDepth);
-    for (const tool of [bashTool, readTool, writeTool, editTool, searchTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills), ...createMemoryTools(this.memory), ...createWatchdogTools(this.cronJobs, this.scheduler), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
+    for (const tool of [bashTool, readTool, writeTool, editTool, searchTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills), ...createMemoryTools(this.memory), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
     this.registry.register(createDelegateTool(this.delegation));
     // history.db is a rebuildable index. A missing/unsupported SQLite runtime must never block chat startup.
     await importHistoryIfEmpty().catch(() => {});
@@ -120,8 +118,8 @@ export class TaiweiApp {
   stopSession(sessionId: string): boolean { return this.runtime.stop(sessionId); }
 
   private async executeCron(job: CronJob, signal: AbortSignal): Promise<CronExecutionResult> {
-    if (job.kind === 'script') return this.executeScript(job, signal);
-    if (job.kind === 'command') throw new Error('Cron command jobs are not supported; use kind "script" or "agent"');
+    if (job.kind === 'script') throw new Error(`Cron job "${job.name}" has unsupported kind "script"`);
+    if (job.kind === 'command') throw new Error('Cron command jobs are not supported; use kind "agent"');
     const result = await this.runtime.run(`cron:${job.id}`, async (runtimeSignal) => {
       const cronContext = new AgentContext(this.memory, this.skills);
       try {
@@ -162,10 +160,6 @@ export class TaiweiApp {
       await appendMessage({ sessionId: request.childSessionId, role: 'assistant', content: output, timestamp: now + 0.001 });
     } catch { /* History is optional. */ }
     return output;
-  }
-
-  private async executeScript(job: CronJob, signal: AbortSignal): Promise<CronExecutionResult> {
-    return executeWatchdogScript(job.script!, resolveWorkspaceDir(this.config), signal);
   }
 
   private async deliverCron(job: CronJob, run: CronRun): Promise<void> {
