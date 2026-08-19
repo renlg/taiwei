@@ -460,15 +460,16 @@ body.guest-mode .composer-main { grid-template-columns: minmax(0, 1fr) 52px; }
 .attachment-button { width: 36px; height: 36px; display: grid; place-items: center; align-self: center; padding: 0; border: 1px solid transparent; border-radius: 11px; color: var(--muted); background: transparent; cursor: pointer; font-size: 17px; transition: .16s; }
 .attachment-button:hover { color: var(--text); border-color: var(--border); background: var(--surface-hover); }
 .attachment-button:disabled { opacity: .35; cursor: default; }
-.attachment-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.attachment-list { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; max-width: 100%; scrollbar-width: none; }
+.attachment-list::-webkit-scrollbar { display: none; }
 .attachment-list:empty { display: none; }
-.attachment-chip { min-width: 0; max-width: min(260px, 100%); display: flex; align-items: center; gap: 6px; margin: 0 0 5px; padding: 5px 6px 5px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: var(--surface-hover); font-size: 10.5px; }
+.attachment-chip { min-width: 0; flex: 1 1 0; max-width: 220px; display: flex; align-items: center; gap: 6px; margin: 0; padding: 5px 6px 5px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: var(--surface-hover); font-size: 10.5px; }
 .attachment-chip.uploading { opacity: .65; }
 .attachment-name { overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
 .attachment-size { flex: none; color: var(--faint); }
 .attachment-remove { width: 19px; height: 19px; display: grid; flex: none; place-items: center; padding: 0; border: 0; border-radius: 50%; color: var(--faint); background: transparent; cursor: pointer; font-size: 15px; line-height: 1; }
 .attachment-remove:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
-.attachment-thumbnail { position: relative; width: 68px; height: 68px; flex: 0 0 68px; margin-bottom: 5px; padding: 0; overflow: hidden; border-radius: 11px; background: var(--surface-hover); }
+.attachment-thumbnail { position: relative; width: 68px; height: 68px; flex: 0 0 68px; padding: 0; overflow: hidden; border-radius: 11px; background: var(--surface-hover); }
 .attachment-thumbnail img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .attachment-thumbnail .attachment-remove { position: absolute; top: 3px; right: 3px; color: #fff; background: rgba(8, 10, 15, .68); box-shadow: 0 1px 5px rgba(0,0,0,.28); }
 .attachment-thumbnail .attachment-remove:hover { color: #fff; background: var(--danger); }

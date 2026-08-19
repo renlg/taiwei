@@ -57,6 +57,21 @@ function imageMarkdown(item: MediaItem | undefined, index?: number): string | nu
   return null;
 }
 
+const IMAGE_URL_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg']);
+
+function validateReferenceImage(url: string): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '参考图 URL 必须是 http/https 协议';
+    const ext = (parsed.pathname.match(/\.[a-zA-Z0-9]+$/) || [''])[0].toLowerCase();
+    if (ext && IMAGE_URL_EXTENSIONS.has(ext)) return null;
+    return `参考图 URL 不是图片类型（${url}）。只有图片文件（png/jpg/jpeg/webp/gif/bmp）才能用作参考图`;
+  } catch {
+    return `参考图 URL 无效（${url}）`;
+  }
+}
+
 export const imageGenTool: ToolSpec = {
   name: 'generate_image',
   description: '生成图片。当用户要求画图/生成图片/设计图/示意图/海报/头像/logo等视觉内容时调用。生成结果会自动在聊天中显示。',
@@ -80,6 +95,8 @@ export const imageGenTool: ToolSpec = {
       const count = imageCount(args.n);
       const quality = argumentString(args.quality, 'standard');
       const referenceImage = argumentString(args.image, '');
+      const imageError = validateReferenceImage(referenceImage);
+      if (imageError) return `图片生成失败: ${imageError}`;
       const images: string[] = [];
       for (let index = 0; index < count; index += 1) {
         const requestPrompt = count > 1 && !referenceImage ? `${prompt}, variation ${index + 1}` : prompt;
@@ -227,6 +244,8 @@ export const videoGenTool: ToolSpec = {
       const requestedSize = argumentString(args.size, '');
       const quality = argumentString(args.quality, 'medium');
       const referenceImage = argumentString(args.image, '');
+      const imageError = validateReferenceImage(referenceImage);
+      if (imageError) return `视频生成失败: ${imageError}`;
       const body = await postMedia('/videos', {
         model: argumentString(args.model, 'agnes-video-v2.0'),
         prompt,

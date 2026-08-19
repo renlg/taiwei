@@ -84,7 +84,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '37';
+const STATIC_ASSET_VERSION = '38';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -124,6 +124,7 @@ function memoryStats(content: string): { chars: number; lines: number } {
 interface UploadedFile {
   name: string;
   path: string;
+  url: string;
   size: number;
   type: string;
 }
@@ -349,10 +350,17 @@ function validateToolConfig(value: unknown, schema: ToolConfigSchema | undefined
   return validated;
 }
 
+function isImageFile(name: string, mimeType: string | undefined, extension: string): boolean {
+  if (IMAGE_EXTENSIONS.has(extension)) return true;
+  if (typeof mimeType === 'string' && mimeType.startsWith('image/')) return true;
+  return false;
+}
+
 export async function attachmentContext(files: unknown, uploadsDirectory: string): Promise<string> {
   if (files === undefined) return '';
   if (!Array.isArray(files) || files.length > MAX_FILES_PER_MESSAGE) throw new HttpError(400, `files must contain at most ${MAX_FILES_PER_MESSAGE} uploads`);
   const sections: string[] = [];
+  const imageRefs: Array<{ name: string; url: string }> = [];
   for (const item of files) {
     if (!item || typeof item !== 'object') throw new HttpError(400, 'Invalid uploaded file metadata');
     const candidate = item as Partial<UploadedFile>;
@@ -367,18 +375,52 @@ export async function attachmentContext(files: unknown, uploadsDirectory: string
     if (remote) {
       try { remoteExtension = extname(new URL(candidate.path).pathname).toLowerCase(); } catch {}
     }
-    if (remote && IMAGE_EXTENSIONS.has(remoteExtension || extension)) {
-      sections.push(`![${name}](${candidate.path})`);
-    } else if (!remote && (TEXT_EXTENSIONS.has(extension) || name.toLowerCase() === 'dockerfile')) {
-      const content = (await readFile(candidate.path, 'utf8')).slice(0, ATTACHMENT_TEXT_LIMIT).replaceAll('```', '``\u200b`');
-      const truncated = info!.size > Buffer.byteLength(content) ? '\n[内容已截断]' : '';
-      sections.push(`[附件: ${name}]\n\`\`\`${extension.slice(1) || 'text'}\n${content}${truncated}\n\`\`\``);
+    const effectiveExtension = remoteExtension || extension;
+    const mimeType = typeof candidate.type === 'string' ? candidate.type : undefined;
+    const fileUrl = remote ? candidate.path : (typeof candidate.url === 'string' && candidate.url ? candidate.url : resolve(candidate.path));
+    if (isImageFile(name, mimeType, effectiveExtension)) {
+      sections.push(`[图片] ${name}: ${fileUrl}`);
+      if (remote || typeof candidate.url === 'string') {
+        imageRefs.push({ name, url: fileUrl });
+      }
+    } else if (TEXT_EXTENSIONS.has(effectiveExtension) || name.toLowerCase() === 'dockerfile') {
+      sections.push(`[文本] ${name}: ${fileUrl}`);
     } else {
-      const path = remote ? candidate.path : resolve(candidate.path);
-      sections.push(`[附件: ${name}] 路径: ${path} (可通过工具读取)`);
+      sections.push(`[附件] ${name}: ${fileUrl}`);
     }
   }
-  return sections.length ? `\n\n${sections.join('\n\n')}` : '';
+  if (!sections.length) return '';
+  const instructions = buildGenerationInstructions(imageRefs);
+  return `\n\n---用户上传文件---\n${sections.join('\n')}${instructions}`;
+}
+
+function buildGenerationInstructions(imageRefs: Array<{ name: string; url: string }>): string {
+  const lines: string[] = [];
+  lines.push('');
+  if (imageRefs.length > 0) {
+    lines.push('以上图片可在图片/视频生成任务中用作参考图（保持人物/风格一致性）。');
+    lines.push(`调用 generate_image 时，将图片 URL 传给 image 参数；调用 generate_video 时同理。可使用的参考图：${imageRefs.map((ref) => ref.url).join(', ')}`);
+  }
+  lines.push('注意：只有图片类型文件（MIME 为 image/* 或扩展名为 png/jpg/jpeg/webp/gif/bmp）才能作为 generate_image 和 generate_video 的 image 参数。非图片文件绝不能传给生成工具的 image 参数。');
+  return lines.join('\n');
+}
+
+export function attachmentGenerationInstructions(files: unknown): string {
+  if (!Array.isArray(files) || files.length === 0) return '';
+  const imageRefs: Array<{ name: string; url: string }> = [];
+  for (const item of files) {
+    if (!item || typeof item !== 'object') continue;
+    const candidate = item as Partial<UploadedFile>;
+    const name = sanitizeFilename(typeof candidate.name === 'string' ? candidate.name : '');
+    const extension = extname(name).toLowerCase();
+    const mimeType = typeof candidate.type === 'string' ? candidate.type : undefined;
+    if (!isImageFile(name, mimeType, extension)) continue;
+    const remote = typeof candidate.path === 'string' && (candidate.path.startsWith('http://') || candidate.path.startsWith('https://'));
+    const url = remote ? candidate.path : (typeof candidate.url === 'string' ? candidate.url : '');
+    if (url) imageRefs.push({ name, url });
+  }
+  if (imageRefs.length === 0 && !files.some((item) => item && typeof item === 'object')) return '';
+  return buildGenerationInstructions(imageRefs);
 }
 
 const IMAGE_MIME_MAP: Record<string, string> = {
@@ -1370,8 +1412,10 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         if (multimodalEnabled && Array.isArray(body.files) && body.files.length > 0) {
           const multimodal = await buildMultimodalContent(body.files, uploadsDirectory);
           if (multimodal.blocks.length > 0) {
-            userContent = [...multimodal.blocks, { type: 'text', text: message }];
-            agentMessage = message;
+            const genInstructions = attachmentGenerationInstructions(body.files);
+            const textWithInstructions = genInstructions ? `${message}\n${genInstructions}` : message;
+            userContent = [...multimodal.blocks, { type: 'text', text: textWithInstructions }];
+            agentMessage = `${message}${genInstructions}`;
           }
         }
         if (!session.messages.some((item) => item.role === 'user')) session.title = activeSessions.titleFrom(message) || session.title;

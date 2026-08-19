@@ -2239,7 +2239,7 @@ elements.fileInput.addEventListener('change', async () => {
   if (!selected.length) return;
   if (!state.current && !await createSession()) return;
   const available = Math.max(0, 5 - state.attachments.length);
-  if (selected.length > available) showToast('每条消息最多添加 5 个附件');
+  if (selected.length > available) showToast('最多上传 5 个文件');
   await Promise.all(selected.slice(0, available).map(uploadFile));
 });
 
