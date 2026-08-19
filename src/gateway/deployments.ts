@@ -22,6 +22,7 @@ export interface DeploymentRecord {
   dir: string;
   status: DeploymentStatus;
   url: string;
+  repo: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -34,6 +35,7 @@ export interface DeploymentInput {
   dir: string;
   status: DeploymentStatus;
   url: string;
+  repo?: string | null;
 }
 
 export interface CleanupStep {
@@ -60,6 +62,7 @@ interface DeploymentRow {
   dir: string;
   status: DeploymentStatus;
   url: string;
+  repo: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -74,6 +77,7 @@ function mapRow(row: DeploymentRow): DeploymentRecord {
     dir: row.dir,
     status: row.status,
     url: row.url,
+    repo: row.repo ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -105,6 +109,7 @@ export class DeploymentStore implements DeploymentRepository {
             dir TEXT NOT NULL,
             status TEXT NOT NULL,
             url TEXT NOT NULL,
+            repo TEXT,
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL,
             UNIQUE(name, owner_hash)
@@ -112,6 +117,10 @@ export class DeploymentStore implements DeploymentRepository {
           CREATE INDEX IF NOT EXISTS idx_deployments_owner_name ON deployments(owner_hash, name);
           CREATE INDEX IF NOT EXISTS idx_deployments_updated_at ON deployments(updated_at DESC);
         `);
+        const columns = db.prepare('PRAGMA table_info(deployments)').all() as Array<{ name: string }>;
+        if (!columns.some((col) => col.name === 'repo')) {
+          db.exec('ALTER TABLE deployments ADD COLUMN repo TEXT');
+        }
         this.opened = db;
         return db;
       })().catch((error) => {
@@ -142,16 +151,17 @@ export class DeploymentStore implements DeploymentRepository {
     const db = await this.open();
     const now = Date.now();
     db.prepare(`
-      INSERT INTO deployments(name, owner_hash, path, port, dir, status, url, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO deployments(name, owner_hash, path, port, dir, status, url, repo, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(name, owner_hash) DO UPDATE SET
         path = excluded.path,
         port = excluded.port,
         dir = excluded.dir,
         status = excluded.status,
         url = excluded.url,
+        repo = excluded.repo,
         updated_at = excluded.updated_at
-    `).run(input.name, input.ownerHash, input.path, input.port, input.dir, input.status, input.url, now, now);
+    `).run(input.name, input.ownerHash, input.path, input.port, input.dir, input.status, input.url, input.repo ?? null, now, now);
     return (await this.getDeployment(input.name, input.ownerHash))!;
   }
 
@@ -195,7 +205,16 @@ export function validateDeploymentInput(
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('url must use http or https');
   }
   if (!DEPLOYMENT_STATUSES.includes(body.status as DeploymentStatus)) throw new Error(`status must be one of: ${DEPLOYMENT_STATUSES.join(', ')}`);
-  return { name, ownerHash, path: expectedPath, port: Number(body.port), dir: deploymentDir, url, status: body.status as DeploymentStatus };
+  let repo: string | null = null;
+  if (body.repo !== undefined && body.repo !== null) {
+    if (typeof body.repo !== 'string') throw new Error('repo must be a string');
+    const trimmed = body.repo.trim();
+    if (trimmed) {
+      if (!/^[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)?$/.test(trimmed)) throw new Error('repo must be owner/name or a bare name');
+      repo = trimmed;
+    }
+  }
+  return { name, ownerHash, path: expectedPath, port: Number(body.port), dir: deploymentDir, url, status: body.status as DeploymentStatus, repo };
 }
 
 async function executableResult(command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {

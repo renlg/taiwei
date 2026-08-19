@@ -625,7 +625,16 @@ async function loadDeployments(clearResult = true) {
     heading.append(name, badge);
     const meta = document.createElement('div');
     meta.className = 'deployment-meta';
-    meta.textContent = `端口 ${deployment.port} · ${deployment.ownerHash} · 创建 ${deploymentDate(deployment.createdAt)} · 更新 ${deploymentDate(deployment.updatedAt)}`;
+    meta.textContent = `端口 ${deployment.port} · ${deployment.ownerHash} · 创建 ${deploymentDate(deployment.createdAt)} · 更新 ${deploymentDate(deployment.updatedAt)} · `;
+    const repoHref = deployment.repo
+      ? `http://14.103.23.160/gitea/${deployment.repo}`
+      : `http://14.103.23.160/gitea/admin/${deployment.name}`;
+    const repoLink = document.createElement('a');
+    repoLink.href = repoHref;
+    repoLink.target = '_blank';
+    repoLink.rel = 'noopener noreferrer';
+    repoLink.textContent = deployment.repo || `admin/${deployment.name}`;
+    meta.append(repoLink);
     const link = document.createElement('a');
     link.href = deployment.url || deployment.path;
     link.target = '_blank';
