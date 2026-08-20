@@ -228,7 +228,7 @@ export const videoGenTool: ToolSpec = {
     properties: {
       prompt: { type: 'string', description: '要生成的视频内容描述。' },
       model: { type: 'string', enum: ['agnes-video-v2.0', 'free-video'], default: 'agnes-video-v2.0' },
-      duration: { type: 'number', description: '视频时长（秒），会限制在 1 到 15 秒。', default: 5, minimum: 1, maximum: 15 },
+      duration: { type: 'number', description: '视频时长（秒），会限制在 1 到 15 秒。', default: 10, minimum: 1, maximum: 15 },
       size: { type: 'string', description: '480p、720p、1080p、4k 或 WxH。', default: '720p' },
       quality: { type: 'string', enum: ['low', 'medium', 'high'], description: '视频质量别名：low→480p、medium→720p、high→1080p；同时提供 size 时以 size 为准。', default: 'medium' },
       image: { type: 'string', description: '参考图/首帧图片 URL（可选）；上游支持可能有限。' },
@@ -249,7 +249,7 @@ export const videoGenTool: ToolSpec = {
       const body = await postMedia('/videos', {
         model: argumentString(args.model, 'agnes-video-v2.0'),
         prompt,
-        duration: clampDuration(args.duration),
+        duration: clampDuration(args.duration === undefined ? 10 : args.duration),
         size: requestedSize || qualitySizes[quality] || '720p',
         ...(referenceImage ? { image: referenceImage } : {}),
       }, context);
