@@ -38,9 +38,11 @@ export async function resolveModels(): Promise<ModelListResult> {
 
 export async function resolveModelCatalog(): Promise<ModelListResult> {
   const config = await loadConfig(); const legacy = await resolveModels();
+  // 只暴露文本模型（modality 缺省为 text）；图片/视频生成 provider 不进模型选择器
+  const textProviders = config.providers.filter((provider) => (provider.modality ?? 'text') === 'text');
   return { ...legacy, source: config.providers.length ? 'config' : legacy.source, currentProvider: config.defaultProvider,
     models: config.providers.length ? [] : legacy.models,
-    providers: config.providers.map((provider) => ({ id: provider.id, name: provider.name, models: providerModels(provider) })) };
+    providers: textProviders.map((provider) => ({ id: provider.id, name: provider.name, models: providerModels(provider) })) };
 }
 
 export async function listModels(): Promise<string[]> {

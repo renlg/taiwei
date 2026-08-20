@@ -13,6 +13,8 @@ export interface ProviderConfig {
   type: ProviderType;
   defaultModel?: string;
   models?: ModelDef[];
+  /** 模型能力类型：text（默认，文本）/ image（图片生成）/ video（视频生成）。模型选择器只展示 text。 */
+  modality?: 'text' | 'image' | 'video';
 }
 
 export interface ProviderRequest {
