@@ -745,6 +745,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             defaultName: guestFolderName(authenticatedUsername ?? '访客'),
             defaultDirName: guestFolderName(authenticatedUsername ?? '访客'),
             defaultPath: () => guestWorkspace!,
+            maxProjects: 9,
           })
         : new FolderStore({
             file: taiweiPaths.folders,

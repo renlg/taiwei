@@ -23,6 +23,8 @@ export interface FolderStoreOptions {
   defaultName: string;
   defaultDirName: string;
   defaultPath: () => string | Promise<string>;
+  /** 顶层项目（文件夹）数量上限；不设则无限制。普通用户用此限制项目数，admin 不设。 */
+  maxProjects?: number;
 }
 
 const VALID_ID = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -76,6 +78,13 @@ export class FolderStore {
     const parent = parentId ? folders.find((folder) => folder.id === parentId) : undefined;
     if (parentId && !parent) throw new Error('Parent folder not found');
     this.assertUniqueName(folders, name, parentId);
+    // 普通用户项目数上限：顶层文件夹（parentId 为空的）计入，子文件夹不计
+    if (this.options.maxProjects !== undefined && !parentId) {
+      const topLevelCount = folders.filter((folder) => !folder.parentId && !folder.system).length;
+      if (topLevelCount >= this.options.maxProjects) {
+        throw new Error(`项目数量已达上限（${this.options.maxProjects} 个）`);
+      }
+    }
     const id = randomUUID().replaceAll('-', '').slice(0, 12);
     const baseDirName = folderDirName(name);
     let dirName = baseDirName;

@@ -52,7 +52,8 @@ export class PolicyEngine {
       if (input.tool.startsWith('watchdog_')) return { effect: 'deny', rule: 'builtin.guest.no-watchdog-management', explicit: false };
       if (input.tool.startsWith('task_')) return { effect: 'deny', rule: 'builtin.guest.no-task-management', explicit: false };
       if (input.tool === 'delegate_task') return { effect: 'deny', rule: 'builtin.guest.no-delegation', explicit: false };
-      if (input.tool === 'bash') return { effect: 'deny', rule: 'builtin.guest.no-bash', explicit: false };
+      // guest bash 放行：由 bash 工具内部的 constrainGuestBash（工作目录/系统命令约束）+ enforceGuestGit（git 强制本账号+token）保证安全
+      if (input.tool === 'bash') return { effect: 'allow', rule: 'builtin.guest.jailed-bash', explicit: false };
       if (input.tool.startsWith('memory_')) return { effect: 'deny', rule: 'builtin.guest.no-memory-management', explicit: false };
       if (input.tool.startsWith('mcp_') || input.tool.startsWith('plugin_')) return { effect: 'deny', rule: 'builtin.guest.no-extensions', explicit: false };
       if (WRITE_TOOLS.has(input.tool)) return { effect: 'allow', rule: 'builtin.guest.workspace-write', explicit: false };
