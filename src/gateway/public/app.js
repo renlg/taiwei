@@ -244,6 +244,64 @@ function isVideoMediaUrl(url) {
     || /^https?:\/\/(?:video[.-]|[^/]*[.-]video[.-])/i.test(url);
 }
 
+function mediaDownloadFilename(url, kind, index) {
+  const fallback = kind === 'video' ? 'mp4' : 'png';
+  const dataType = String(url).match(/^data:(?:image|video)\/([a-z0-9.+-]+)[;,]/i)?.[1];
+  let extension = dataType?.replace('jpeg', 'jpg').replace(/\+xml$/i, '');
+  if (!extension) {
+    try {
+      extension = new URL(url, globalThis.location?.href || 'http://localhost/').pathname.match(/\.([a-z0-9]{2,5})$/i)?.[1];
+    } catch { /* Keep the media-type fallback for malformed URLs. */ }
+  }
+  return `taiwei-${kind}-${index}.${String(extension || fallback).toLowerCase()}`;
+}
+
+function makeMediaDownloadButton(url, kind, index) {
+  const link = document.createElement('a');
+  link.className = 'media-download-button';
+  link.href = url;
+  link.download = mediaDownloadFilename(url, kind, index);
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.dataset.mediaDownload = '';
+  link.setAttribute('aria-label', `下载${kind === 'video' ? '视频' : '图片'}`);
+  link.textContent = '⭳ 下载';
+  return link;
+}
+
+function decorateMediaDownloads(container) {
+  const mediaItems = [...container.querySelectorAll('img, video')]
+    .filter((media) => !media.closest('.media-download'));
+  mediaItems.forEach((media, index) => {
+    const kind = media.tagName === 'VIDEO' ? 'video' : 'image';
+    const wrapper = document.createElement('span');
+    wrapper.className = 'media-download';
+    media.replaceWith(wrapper);
+    wrapper.append(media, makeMediaDownloadButton(media.currentSrc || media.src, kind, index + 1));
+  });
+}
+
+async function downloadMedia(url, filename, fallbackLink) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`下载失败 (${response.status})`);
+    const objectUrl = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch {
+    // Cross-origin media may reject fetch without CORS. Reuse the native
+    // download link so supporting browsers save it and others open the file.
+    fallbackLink.dataset.downloadFallback = 'true';
+    fallbackLink.click();
+    delete fallbackLink.dataset.downloadFallback;
+  }
+}
+
 function mediaUrlsFromResult(result) {
   const source = String(result ?? '');
   const urls = [];
@@ -1454,6 +1512,7 @@ function renderToolDetail(detail, args, result, toolName = '') {
       else { media.alt = '生成的图片'; media.loading = 'lazy'; }
       gallery.append(media);
     }
+    decorateMediaDownloads(gallery);
     output.append(gallery);
   }
   detail.append(label, output);
@@ -1501,6 +1560,7 @@ function addMessage(message, options = {}) {
   bubble.className = 'bubble';
   if (message.role === 'assistant') {
     bubble.innerHTML = renderAssistantMarkdown(message.content || '', message.toolCalls);
+    decorateMediaDownloads(bubble);
   } else if (message.attachments?.length) {
     bubble.append(renderMessageAttachments(message.attachments));
     const textDiv = document.createElement('div');
@@ -1541,6 +1601,7 @@ function addMessage(message, options = {}) {
 function updateAssistant(view, content, streaming = true) {
   view.message.content = content;
   view.bubble.innerHTML = renderAssistantMarkdown(content, view.message.toolCalls);
+  decorateMediaDownloads(view.bubble);
   if (streaming) {
     const caret = document.createElement('span');
     caret.className = 'streaming-caret';
@@ -2569,6 +2630,11 @@ document.addEventListener('click', (event) => {
   if (!elements.userMenu.contains(event.target)) closeUserMenu();
   const codeButton = event.target.closest('[data-copy-code]');
   if (codeButton) copyText(codeButton.closest('.code-block').querySelector('code').textContent, codeButton);
+  const downloadLink = event.target.closest('[data-media-download]');
+  if (downloadLink && downloadLink.dataset.downloadFallback !== 'true') {
+    event.preventDefault();
+    downloadMedia(downloadLink.href, downloadLink.download, downloadLink);
+  }
   const chip = event.target.closest('[data-prompt]');
   if (chip && !state.controller) {
     elements.input.value = chip.dataset.prompt;
