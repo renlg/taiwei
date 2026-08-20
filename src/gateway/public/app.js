@@ -126,7 +126,7 @@ const elements = {
   memoryIndexStatus: $('#memory-index-status'),
   extendedMemoryList: $('#extended-memory-list'),
   cronOpen: $('#cron-open'), cronModal: $('#cron-modal'), cronClose: $('#cron-close'), cronError: $('#cron-error'), cronList: $('#cron-list'), cronHistory: $('#cron-history'),
-  deploymentsOpen: $('#deployments-open'), deploymentsModal: $('#deployments-modal'), deploymentsClose: $('#deployments-close'), deploymentsError: $('#deployments-error'), deploymentsResult: $('#deployments-result'), deploymentsList: $('#deployments-list'),
+  deploymentsOpen: $('#deployments-open'),
   confirmModal: $('#confirm-modal'), confirmForm: $('#confirm-form'), confirmIcon: $('#confirm-icon'), confirmTitle: $('#confirm-title'), confirmDesc: $('#confirm-desc'), confirmObject: $('#confirm-object'), confirmInput: $('#confirm-input'), confirmOk: $('#confirm-ok'), confirmCancel: $('#confirm-cancel'),
   workspaceInput: $('#workspace-input'),
   workspaceResolved: $('#workspace-resolved'),
@@ -563,7 +563,7 @@ async function openSettings() {
 }
 
 function closeResourcePanels(except) {
-  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
+  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal, elements.cronModal]) {
     if (modal !== except && modal.open) modal.close();
   }
 }
@@ -598,98 +598,9 @@ async function openCron() {
   try { await loadCron(); } catch (error) { elements.cronError.textContent = error.message; }
 }
 
-function deploymentDate(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
-}
-
-function deploymentStatusText(status) {
-  return { running: '运行中', stopped: '已停止', cleaned: '已清理', failed: '失败' }[status] || status;
-}
-
-function renderCleanupResult(result) {
-  const labels = { stop_port: '停止端口', delete_files: '删除文件', remove_nginx: '清理 nginx' };
-  elements.deploymentsResult.textContent = result.steps.map((step) => `${step.status === 'failed' ? '✕' : '✓'} ${labels[step.step] || step.step}：${step.message}`).join('\n');
-  elements.deploymentsResult.classList.toggle('failed', !result.ok);
-}
-
-async function cleanupDeploymentRecord(deployment, button) {
-  const ok = await confirmDialog({
-    title: '清理部署',
-    desc: `将停止端口 ${deployment.port}、删除全部项目文件并移除 nginx 代理，且无法撤销。`,
-    object: deployment.name,
-    okText: '清理',
-    danger: true,
-  });
-  if (!ok) return;
-  elements.deploymentsError.textContent = '';
-  elements.deploymentsResult.textContent = '';
-  button.disabled = true;
-  button.textContent = '清理中…';
-  try {
-    const result = await requestJson(`/api/deployments/${encodeURIComponent(deployment.name)}?ownerHash=${encodeURIComponent(deployment.ownerHash)}`, { method: 'DELETE' });
-    renderCleanupResult(result);
-    await loadDeployments(false);
-  } catch (error) {
-    elements.deploymentsError.textContent = error.message;
-    button.disabled = false;
-    button.textContent = '清理';
-  }
-}
-
-async function loadDeployments(clearResult = true) {
-  elements.deploymentsError.textContent = '';
-  if (clearResult) elements.deploymentsResult.textContent = '';
-  const { deployments } = await requestJson('/api/deployments');
-  if (!deployments.length) {
-    renderResourceEmpty(elements.deploymentsList, '暂无部署记录');
-    return;
-  }
-  elements.deploymentsList.replaceChildren();
-  for (const deployment of deployments) {
-    const row = document.createElement('article');
-    row.className = 'deployment-item';
-    const main = document.createElement('div');
-    main.className = 'deployment-main';
-    const heading = document.createElement('div');
-    heading.className = 'deployment-heading';
-    const name = document.createElement('strong'); name.textContent = deployment.name;
-    const badge = document.createElement('span'); badge.className = `deployment-status ${deployment.status}`; badge.textContent = deploymentStatusText(deployment.status);
-    heading.append(name, badge);
-    const meta = document.createElement('div');
-    meta.className = 'deployment-meta';
-    meta.textContent = `端口 ${deployment.port} · ${deployment.ownerHash} · 创建 ${deploymentDate(deployment.createdAt)} · 更新 ${deploymentDate(deployment.updatedAt)} · `;
-    const repoHref = deployment.repo
-      ? `http://14.103.23.160/gitea/${deployment.repo}`
-      : `http://14.103.23.160/gitea/admin/${deployment.name}`;
-    const repoLink = document.createElement('a');
-    repoLink.href = repoHref;
-    repoLink.target = '_blank';
-    repoLink.rel = 'noopener noreferrer';
-    repoLink.textContent = deployment.repo || `admin/${deployment.name}`;
-    meta.append(repoLink);
-    const link = document.createElement('a');
-    link.href = deployment.url || deployment.path;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.textContent = deployment.url || deployment.path;
-    main.append(heading, link, meta);
-    const cleanup = document.createElement('button');
-    cleanup.className = 'small-button deployment-cleanup';
-    cleanup.textContent = deployment.status === 'cleaned' ? '已清理' : '清理';
-    cleanup.disabled = deployment.status === 'cleaned';
-    cleanup.addEventListener('click', () => cleanupDeploymentRecord(deployment, cleanup));
-    row.append(main, cleanup);
-    elements.deploymentsList.append(row);
-  }
-}
-
-async function openDeployments() {
+function openDeployments() {
   if (state.role !== 'admin') return;
-  closeResourcePanels(elements.deploymentsModal);
-  if (!elements.deploymentsModal.open) elements.deploymentsModal.showModal();
-  elements.body.classList.remove('sidebar-open');
-  try { await loadDeployments(); } catch (error) { elements.deploymentsError.textContent = error.message; }
+  window.open('http://14.103.23.160/gitea/', '_blank', 'noopener,noreferrer');
 }
 
 function formatBytes(bytes) {
@@ -2315,8 +2226,7 @@ elements.memoryClose.addEventListener('click', () => elements.memoryModal.close(
 elements.cronOpen.addEventListener('click', openCron);
 elements.cronClose.addEventListener('click', () => elements.cronModal.close());
 elements.deploymentsOpen.addEventListener('click', openDeployments);
-elements.deploymentsClose.addEventListener('click', () => elements.deploymentsModal.close());
-for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
+for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal, elements.cronModal]) {
   modal.addEventListener('click', (event) => { if (event.target === modal) modal.close(); });
 }
 elements.memoryContent.addEventListener('input', updateMemoryControls);
