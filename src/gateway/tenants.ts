@@ -233,8 +233,8 @@ export class TenantAccountStore implements TenantAccountRepository {
 
 export interface GiteaClient {
   createUser(accountName: string, password: string): Promise<void>;
-  createToken(accountName: string): Promise<string>;
-  createOrganization(accountName: string): Promise<void>;
+  createToken(accountName: string, password: string): Promise<string>;
+  createOrganization(accountName: string, token: string): Promise<void>;
   deleteOrDisableUser(accountName: string): Promise<void>;
   deleteOrganizationIfEmpty(orgName: string): Promise<'deleted' | 'retained'>;
 }
@@ -259,23 +259,37 @@ export class RestGiteaClient implements GiteaClient {
     return response;
   }
 
+  private basicAuth(accountName: string, password: string): string {
+    return `Basic ${Buffer.from(`${accountName}:${password}`).toString('base64')}`;
+  }
+
   async createUser(accountName: string, password: string): Promise<void> {
-    try { await this.request('/admin/users', { method: 'POST', body: JSON.stringify({ login: accountName, email: `${accountName}@localhost`, password, must_change_password: false }) }); }
+    try { await this.request('/admin/users', { method: 'POST', body: JSON.stringify({ username: accountName, email: `${accountName}@example.com`, password, must_change_password: false }) }); }
     catch (error) {
-      if (!/\((?:409|422)\)/.test((error as Error).message)) throw error;
-      await this.request(`/admin/users/${encodeURIComponent(accountName)}`);
+      if (!/\s\((\d+)\)/.test((error as Error).message)) throw error;
+      const code = Number((error as Error).message.match(/\s\((\d+)\)/)?.[1]);
+      if (code !== 409 && code !== 422) throw error;
+      // account already exists → verify it is fetchable, otherwise rethrow
+      await this.request(`/users/${encodeURIComponent(accountName)}`);
     }
   }
-  async createToken(accountName: string): Promise<string> {
-    const response = await this.request(`/users/${encodeURIComponent(accountName)}/tokens`, { method: 'POST', body: JSON.stringify({ name: 'taiwei', scopes: ['all'] }) });
+  async createToken(accountName: string, password: string): Promise<string> {
+    const authHeader = this.basicAuth(accountName, password);
+    const response = await this.request(`/users/${encodeURIComponent(accountName)}/tokens`, {
+      method: 'POST',
+      headers: { authorization: authHeader },
+      body: JSON.stringify({ name: 'taiwei', scopes: ['all'] }),
+    });
     const body = await response.json() as { sha1?: unknown };
     if (typeof body.sha1 !== 'string' || !body.sha1) throw new Error('Gitea token response did not include sha1');
     return body.sha1;
   }
-  async createOrganization(accountName: string): Promise<void> {
-    try { await this.request('/orgs', { method: 'POST', body: JSON.stringify({ username: accountName, org_name: accountName, description: `taiwei tenant ${accountName}` }) }); }
+  async createOrganization(accountName: string, token: string): Promise<void> {
+    try { await this.request('/orgs', { method: 'POST', headers: { authorization: `token ${token}` }, body: JSON.stringify({ username: accountName, org_name: accountName, description: `taiwei tenant ${accountName}` }) }); }
     catch (error) {
-      if (!/\((?:409|422)\)/.test((error as Error).message)) throw error;
+      if (!/\s\((\d+)\)/.test((error as Error).message)) throw error;
+      const code = Number((error as Error).message.match(/\s\((\d+)\)/)?.[1]);
+      if (code !== 409 && code !== 422) throw error;
       await this.request(`/orgs/${encodeURIComponent(accountName)}`);
     }
   }
@@ -304,7 +318,7 @@ function runOsCommand(command: string, args: string[]): void {
 
 export class SystemTenantOsProvider implements TenantOsProvider {
   async createAccount(accountName: string): Promise<void> {
-    try { runOsCommand('useradd', ['-m', '--shell', '/bin/bash', '--gecos', `taiwei tenant ${accountName}`, accountName]); }
+    try { runOsCommand('useradd', ['-m', '--shell', '/bin/bash', '-c', `taiwei tenant ${accountName}`, accountName]); }
     catch (error) {
       try { runOsCommand('id', ['-u', accountName]); return; }
       catch { throw error; }
@@ -321,6 +335,8 @@ function errorText(step: string, error: unknown): string { return `${step}: ${er
 
 export class TenantAccountService {
   private readonly pending = new Map<string, Promise<TenantAccount>>();
+  // in-memory plaintext passwords for Gitea re-provision (survives within process lifetime only; never persisted)
+  private readonly giteaPlain = new Map<string, string>();
 
   constructor(
     private readonly config: () => Promise<TaiweiConfig>,
@@ -363,17 +379,26 @@ export class TenantAccountService {
         try {
           await gitea.createUser(account.accountName, password);
           account = await this.store.updateProvisioning(account.id, { giteaUserProvisioned: true, giteaPasswordHash: hashPassword(password) });
+          this.giteaPlain.set(account.accountName, password);
         } catch (error) { failures.push(errorText('Gitea account creation failed', error)); }
       }
       if (account.giteaUserProvisioned && !account.giteaTokenProvisioned) {
-        try {
-          const token = await gitea.createToken(account.accountName);
-          account = await this.store.updateProvisioning(account.id, { giteaApiToken: token, giteaTokenProvisioned: true });
-        } catch (error) { failures.push(errorText('Gitea token creation failed after account creation succeeded', error)); }
+        const plain = this.giteaPlain.get(account.accountName);
+        if (!plain) failures.push('Gitea token creation skipped: plaintext password not available for re-provision (restart clears it; delete and re-login to rebuild)');
+        else {
+          try {
+            const token = await gitea.createToken(account.accountName, plain);
+            account = await this.store.updateProvisioning(account.id, { giteaApiToken: token, giteaTokenProvisioned: true });
+          } catch (error) { failures.push(errorText('Gitea token creation failed after account creation succeeded', error)); }
+        }
       }
       if (account.giteaUserProvisioned && !account.giteaOrgProvisioned) {
-        try { await gitea.createOrganization(account.accountName); account = await this.store.updateProvisioning(account.id, { giteaOrgProvisioned: true }); }
-        catch (error) { failures.push(errorText('Gitea organization creation failed after account creation succeeded', error)); }
+        const token = account.giteaApiToken;
+        if (!token) failures.push('Gitea organization creation skipped: token not available');
+        else {
+          try { await gitea.createOrganization(account.accountName, token); account = await this.store.updateProvisioning(account.id, { giteaOrgProvisioned: true }); }
+          catch (error) { failures.push(errorText('Gitea organization creation failed after account creation succeeded', error)); }
+        }
       }
     }
     return this.store.updateProvisioning(account.id, { error: failures.length ? failures.join('; ') : null });
