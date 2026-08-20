@@ -2014,7 +2014,11 @@ async function submit(message, files = []) {
       body: JSON.stringify({
         message,
         sessionId: state.current.id,
-        files: files.map(({ name, path, url, size, type }) => ({ name, path, ...(url ? { url } : {}), size, type })),
+        files: files.map(({ name, path, url, size, type, content, contentTruncated }) => ({
+          name, path, ...(url ? { url } : {}), size, type,
+          ...(content !== undefined ? { content } : {}),
+          ...(contentTruncated !== undefined ? { contentTruncated } : {}),
+        })),
       }),
       signal: state.controller.signal,
     });

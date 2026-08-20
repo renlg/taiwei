@@ -58,6 +58,7 @@ export interface GatewayServerOptions {
   authSessions?: AuthSessionStore;
   loginLocks?: LoginLockStore;
   uploadsDirectory?: string;
+  ossUpload?: typeof uploadToOss;
   confirmations?: ConfirmationBroker;
   configState?: { load(): Promise<TaiweiConfig>; save(config: TaiweiConfig): Promise<void> };
   hooks?: HookRunner;
@@ -87,7 +88,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '42';
+const STATIC_ASSET_VERSION = '43';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -130,6 +131,8 @@ interface UploadedFile {
   url: string;
   size: number;
   type: string;
+  content?: string;
+  contentTruncated?: boolean;
 }
 
 class HttpError extends Error {
@@ -360,6 +363,44 @@ function isImageFile(name: string, mimeType: string | undefined, extension: stri
   return false;
 }
 
+function isTextFile(name: string, mimeType: string | undefined, extension: string): boolean {
+  if (isImageFile(name, mimeType, extension)) return false;
+  if (TEXT_EXTENSIONS.has(extension) || name.toLowerCase() === 'dockerfile') return true;
+  const normalizedMime = mimeType?.split(';', 1)[0]?.trim().toLowerCase();
+  return normalizedMime?.startsWith('text/') === true
+    || normalizedMime === 'application/json'
+    || normalizedMime === 'application/ld+json'
+    || normalizedMime === 'application/javascript'
+    || normalizedMime === 'application/xml'
+    || normalizedMime === 'application/yaml'
+    || normalizedMime === 'application/x-yaml';
+}
+
+function uploadedText(data: Buffer, name: string, mimeType: string): { content?: string; contentTruncated?: true } {
+  if (!isTextFile(name, mimeType, extname(name).toLowerCase())) return {};
+  const decoded = data.toString('utf8');
+  return {
+    content: decoded.slice(0, ATTACHMENT_TEXT_LIMIT),
+    ...(decoded.length > ATTACHMENT_TEXT_LIMIT ? { contentTruncated: true as const } : {}),
+  };
+}
+
+function validateAttachedContent(candidate: Partial<UploadedFile>, textFile: boolean): { content?: string; truncated: boolean } {
+  if (candidate.contentTruncated !== undefined && typeof candidate.contentTruncated !== 'boolean') {
+    throw new HttpError(400, 'Invalid attachment contentTruncated flag');
+  }
+  if (candidate.content === undefined) {
+    if (candidate.contentTruncated !== undefined) throw new HttpError(400, 'Attachment contentTruncated requires content');
+    return { truncated: false };
+  }
+  if (!textFile) throw new HttpError(400, 'Attachment content is only allowed for text files');
+  if (typeof candidate.content !== 'string') throw new HttpError(400, 'Attachment content must be a string');
+  if (candidate.content.length > ATTACHMENT_TEXT_LIMIT) {
+    throw new HttpError(400, `Attachment content must contain at most ${ATTACHMENT_TEXT_LIMIT} characters`);
+  }
+  return { content: candidate.content, truncated: candidate.contentTruncated === true };
+}
+
 export async function attachmentContext(files: unknown, uploadsDirectory: string): Promise<string> {
   if (files === undefined) return '';
   if (!Array.isArray(files) || files.length > MAX_FILES_PER_MESSAGE) throw new HttpError(400, `files must contain at most ${MAX_FILES_PER_MESSAGE} uploads`);
@@ -382,13 +423,19 @@ export async function attachmentContext(files: unknown, uploadsDirectory: string
     const effectiveExtension = remoteExtension || extension;
     const mimeType = typeof candidate.type === 'string' ? candidate.type : undefined;
     const fileUrl = remote ? candidate.path : (typeof candidate.url === 'string' && candidate.url ? candidate.url : resolve(candidate.path));
+    const textFile = isTextFile(name, mimeType, effectiveExtension);
+    const attachedText = validateAttachedContent(candidate, textFile);
     if (isImageFile(name, mimeType, effectiveExtension)) {
       sections.push(`[图片] ${name}: ${fileUrl}`);
       if (remote || typeof candidate.url === 'string') {
         imageRefs.push({ name, url: fileUrl });
       }
-    } else if (TEXT_EXTENSIONS.has(effectiveExtension) || name.toLowerCase() === 'dockerfile') {
-      sections.push(`[文本] ${name}: ${fileUrl}`);
+    } else if (textFile) {
+      if (attachedText.content !== undefined) {
+        sections.push(`[附件: ${name}]\n${attachedText.content}${attachedText.truncated ? '\n[内容已截断]' : ''}`);
+      } else {
+        sections.push(`[文本] ${name}: ${fileUrl}`);
+      }
     } else {
       sections.push(`[附件] ${name}: ${fileUrl}`);
     }
@@ -457,6 +504,9 @@ export async function buildMultimodalContent(files: unknown, uploadsDirectory: s
       try { remoteExtension = extname(new URL(candidate.path).pathname).toLowerCase(); } catch {}
     }
     const effectiveExtension = remoteExtension || extension;
+    const mimeType = typeof candidate.type === 'string' ? candidate.type : undefined;
+    const textFile = isTextFile(name, mimeType, effectiveExtension);
+    const attachedText = validateAttachedContent(candidate, textFile);
     if (IMAGE_EXTENSIONS.has(effectiveExtension)) {
       if (remote) {
         blocks.push({ type: 'image_url', image_url: { url: candidate.path } });
@@ -471,13 +521,16 @@ export async function buildMultimodalContent(files: unknown, uploadsDirectory: s
         fallbackSections.push(`![${name}](${resolve(candidate.path)})`);
         blocks.push({ type: 'text', text: `[图片 ${name} 超过大小限制，无法内联]` });
       }
-    } else if (TEXT_EXTENSIONS.has(effectiveExtension) || name.toLowerCase() === 'dockerfile') {
-      if (remote) {
+    } else if (textFile) {
+      if (attachedText.content !== undefined) {
+        blocks.push({ type: 'text', text: `[附件: ${name}]\n${attachedText.content}${attachedText.truncated ? '\n[内容已截断]' : ''}` });
+      } else if (remote) {
         fallbackSections.push(`[附件: ${name}] 路径: ${candidate.path} (可通过工具读取)`);
         blocks.push({ type: 'text', text: `[附件: ${name}] 路径: ${candidate.path}` });
       } else {
-        const content = (await readFile(candidate.path, 'utf8')).slice(0, ATTACHMENT_TEXT_LIMIT);
-        const truncated = info!.size > Buffer.byteLength(content) ? '\n[内容已截断]' : '';
+        const decoded = await readFile(candidate.path, 'utf8');
+        const content = decoded.slice(0, ATTACHMENT_TEXT_LIMIT);
+        const truncated = decoded.length > ATTACHMENT_TEXT_LIMIT ? '\n[内容已截断]' : '';
         const lang = effectiveExtension.slice(1) || 'text';
         blocks.push({ type: 'text', text: `[文件: ${name}]\n\`\`\`${lang}\n${content}${truncated}\n\`\`\`` });
       }
@@ -1353,10 +1406,11 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         if (!rawName) throw new HttpError(400, '缺少文件名');
         const data = await readUpload(request);
         const type = request.headers['content-type'] || 'application/octet-stream';
+        const text = uploadedText(data, name, type);
         const config = await configState.load();
         if (config.oss.enabled) {
-          const uploaded = await uploadToOss(data, name, type, config.oss);
-          json(response, 201, { name, url: uploaded.url, path: uploaded.url, size: data.byteLength, type });
+          const uploaded = await (options.ossUpload ?? uploadToOss)(data, name, type, config.oss);
+          json(response, 201, { name, url: uploaded.url, path: uploaded.url, size: data.byteLength, type, ...text });
           return;
         }
         const requestedGroup = request.headers['x-session-id'];
@@ -1365,7 +1419,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         await mkdir(directory, { recursive: true });
         const path = join(directory, `${Date.now()}-${randomUUID()}-${name}`);
         await writeFile(path, data, { flag: 'wx' });
-        json(response, 201, { name, path: resolve(path), size: data.byteLength, type });
+        json(response, 201, { name, path: resolve(path), size: data.byteLength, type, ...text });
         return;
       }
       if (method === 'POST' && pathname === '/api/chat') {
@@ -1433,7 +1487,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             const genInstructions = attachmentGenerationInstructions(body.files);
             const textWithInstructions = genInstructions ? `${message}\n${genInstructions}` : message;
             userContent = [...multimodal.blocks, { type: 'text', text: textWithInstructions }];
-            agentMessage = `${message}${genInstructions}`;
+            agentMessage = `${agentMessageBase}${genInstructions}`;
           }
         }
         if (!session.messages.some((item) => item.role === 'user')) session.title = activeSessions.titleFrom(message) || session.title;
