@@ -344,7 +344,7 @@ export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpe
         const token = /\b(?:git\s+(?:push|clone|fetch|pull)|curl\b)/i.test(`${command}\n${scripts.join('\n')}`)
           ? await lookupGiteaToken(context.identity)
           : undefined;
-        const result = await executeFile('runuser', ['-u', guestOsUser, '--', '/bin/bash', '-lc', command], {
+        const result = await executeFile('runuser', ['-u', guestOsUser, '--preserve-environment', '--', '/bin/bash', '-lc', command], {
           cwd, signal: context.signal, timeout: Number(args.timeout_ms ?? 120_000), maxBuffer: 10 * 1024 * 1024,
           env: guestEnvironment(guestOsUser, guestHome(context.workspaceRoot ?? cwd, guestOsUser), token),
         });
