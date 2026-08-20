@@ -192,7 +192,10 @@ async function enforceGuestGit(
       return { command: rewrite ? command.replace(original, rewritten) : command };
     }
     // 无显式 URL：走默认 remote origin —— 校验 .git/config 里的 remote 必须指向本人仓库
-    const config = await readGitConfig(cwd);
+    // 命令可能先 cd 到子目录（cd proj && git push），需用实际 git 目录读配置
+    const cdMatch = command.match(/\bcd\s+([^\s;&|()]+)/);
+    const gitDir = cdMatch ? resolve(cwd, cdMatch[1].replace(/^["']|["']$/g, '')) : cwd;
+    const config = await readGitConfig(gitDir);
     if (!config) return { error: `${GUEST_DENIAL}：找不到可验证的 git remote，禁止远程操作` };
     if (/^https?:\/\/[^/@]+@/i.test(config.remoteUrl)) return { error: `${GUEST_DENIAL}：git remote 不能携带账号或 token，凭据由当前登录用户上下文提供` };
     const owner = config.remoteOwner;
