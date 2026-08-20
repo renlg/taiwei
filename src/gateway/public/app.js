@@ -1401,14 +1401,16 @@ function renderTools(container, calls = []) {
   const list = document.createElement('div');
   list.className = 'tool-list';
   for (const call of calls) {
+    const isMediaGeneration = MEDIA_GENERATION_TOOLS.has(call.name);
     const details = document.createElement('details');
-    details.className = `tool-entry${call.result !== undefined ? ' done' : ''}`;
+    details.className = `tool-entry${isMediaGeneration ? ' tool-entry-media' : ''}${call.result !== undefined ? ' done' : ''}`;
     const summary = document.createElement('summary');
     const dot = document.createElement('i');
     dot.className = 'tool-state';
     const label = document.createElement('span');
     const preview = JSON.stringify(call.args || {});
-    label.textContent = `🔧 ${call.name} ${preview.length > 70 ? `${preview.slice(0, 70)}…` : preview}`;
+    const toolIcon = call.name === 'generate_image' ? '🖼️' : call.name === 'generate_video' ? '🎬' : '🔧';
+    label.textContent = `${toolIcon} ${call.name} ${preview.length > 70 ? `${preview.slice(0, 70)}…` : preview}`;
     const detail = document.createElement('div');
     detail.className = 'tool-detail';
     renderToolDetail(detail, call.args, call.result, call.name);

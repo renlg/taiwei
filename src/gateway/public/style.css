@@ -384,6 +384,8 @@ a.message-attachment-file:hover { background: rgba(255,255,255,.25); text-decora
 .tool-list { display: grid; gap: 6px; margin: 0 0 10px; }
 .tool-entry { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--surface) 55%, transparent); }
 .tool-entry summary { display: flex; align-items: center; gap: 7px; padding: 8px 10px; color: var(--muted); cursor: pointer; font: 11.5px ui-monospace, SFMono-Regular, Consolas, monospace; list-style: none; }
+.tool-entry-media { border-color: color-mix(in srgb, var(--accent) 48%, var(--border)); border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface)); box-shadow: 0 5px 18px color-mix(in srgb, var(--accent) 12%, transparent); }
+.tool-entry-media summary { color: var(--text); font-weight: 700; }
 .tool-entry summary::-webkit-details-marker { display: none; }
 .tool-entry summary::after { content: '›'; margin-left: auto; transition: transform .15s; }
 .tool-entry[open] summary::after { transform: rotate(90deg); }
@@ -401,6 +403,7 @@ a.message-attachment-file:hover { background: rgba(255,255,255,.25); text-decora
 .media-grid-2, .media-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .media-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .media-grid-many { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
+.tool-entry-media .media-grid { padding: 8px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border)); border-radius: 11px; background: color-mix(in srgb, var(--accent-soft) 36%, transparent); }
 .compression-entry { display: flex; align-items: center; gap: 7px; padding: 8px 10px; color: var(--muted); font: 11.5px ui-monospace, SFMono-Regular, Consolas, monospace; }
 
 .confirmation-row { display: block; margin-left: 41px; }
