@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { Buffer } from 'node:buffer';
 import { hashPassword } from '../config/password.js';
 import type { TaiweiConfig } from '../config/config.js';
 import { getPaths } from '../util/paths.js';
@@ -164,12 +165,13 @@ export class TenantAccountStore implements TenantAccountRepository {
       if (!existing) {
         const next = db.prepare('SELECT COALESCE(MAX(tenant_uid), 0) + 1 AS uid FROM tenant_accounts').get() as { uid: number };
         const accountName = `guest${next.uid}`;
+        const orgName = `${accountName}-org`;
         const now = Date.now();
         db.prepare(`INSERT INTO tenant_accounts(
           username, tenant_uid, account_name, os_username, gitea_username, gitea_org_name,
           os_password_hash, gitea_password_hash, gitea_api_token, status, error, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 'active', NULL, ?, ?)`)
-          .run(username, next.uid, accountName, accountName, accountName, accountName, osPasswordHash, giteaPasswordHash, now, now);
+          .run(username, next.uid, accountName, accountName, accountName, orgName, osPasswordHash, giteaPasswordHash, now, now);
       }
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
@@ -285,12 +287,18 @@ export class RestGiteaClient implements GiteaClient {
     return body.sha1;
   }
   async createOrganization(accountName: string, token: string): Promise<void> {
-    try { await this.request('/orgs', { method: 'POST', headers: { authorization: `token ${token}` }, body: JSON.stringify({ username: accountName, org_name: accountName, description: `taiwei tenant ${accountName}` }) }); }
-    catch (error) {
+    const orgName = `${accountName}-org`;
+    try {
+      await this.request('/orgs', {
+        method: 'POST',
+        headers: { authorization: `token ${token}` },
+        body: JSON.stringify({ username: orgName, org_name: orgName, description: `taiwei tenant ${accountName}` }),
+      });
+    } catch (error) {
       if (!/\s\((\d+)\)/.test((error as Error).message)) throw error;
       const code = Number((error as Error).message.match(/\s\((\d+)\)/)?.[1]);
       if (code !== 409 && code !== 422) throw error;
-      await this.request(`/orgs/${encodeURIComponent(accountName)}`);
+      await this.request(`/orgs/${encodeURIComponent(orgName)}`, { headers: { authorization: `token ${token}` } });
     }
   }
   async deleteOrDisableUser(accountName: string): Promise<void> {
