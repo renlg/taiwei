@@ -1318,8 +1318,12 @@ function renderAttachments() {
   updateAttachmentTextHint();
 }
 
+function makeLocalId() {
+  return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
+}
+
 async function uploadFile(file) {
-  const attachment = { id: crypto.randomUUID(), name: file.name, size: file.size, type: file.type, file, uploading: true };
+  const attachment = { id: makeLocalId(), name: file.name, size: file.size, type: file.type, file, uploading: true };
   state.attachments.push(attachment);
   renderAttachments();
   try {

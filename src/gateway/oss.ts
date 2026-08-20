@@ -15,6 +15,11 @@ export interface OssUploadResult {
   objectKey: string;
 }
 
+export interface OssUploadOverride {
+  objectKey?: string;
+  prefix?: string;
+}
+
 function normalizeEndpoint(value: string): URL {
   const raw = value.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
   if (!raw) throw new Error('OSS endpoint is required');
@@ -51,14 +56,14 @@ export function createOssAuthorization(config: Pick<OssConfig, 'accessKeyId' | '
   return `OSS ${config.accessKeyId}:${signature}`;
 }
 
-export async function uploadToOss(data: Buffer, filename: string, contentType: string, config: OssConfig): Promise<OssUploadResult> {
+export async function uploadToOss(data: Buffer, filename: string, contentType: string, config: OssConfig, override: OssUploadOverride = {}): Promise<OssUploadResult> {
   if (!config.accessKeyId || !config.accessKeySecret || !config.bucket) {
     throw new Error('OSS is enabled but accessKeyId, accessKeySecret, or bucket is missing');
   }
   if (!/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(config.bucket)) throw new Error('OSS bucket is invalid');
 
   const endpoint = normalizeEndpoint(config.endpoint);
-  const objectKey = createOssObjectKey(filename, config.prefix);
+  const objectKey = override.objectKey ?? createOssObjectKey(filename, override.prefix ?? config.prefix);
   const objectPath = encodedObjectKey(objectKey);
   const date = new Date().toUTCString();
   const hostname = `${config.bucket}.${endpoint.hostname}`;

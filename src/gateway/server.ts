@@ -183,8 +183,9 @@ function guestIdForUsername(username: string): string {
   return `guest-${safe || 'user'}`;
 }
 
-function guestRouteAllowed(method: string, pathname: string): boolean {
+export function guestRouteAllowed(method: string, pathname: string): boolean {
   if (method === 'POST' && pathname === '/api/chat') return true;
+  if (method === 'POST' && pathname === '/api/upload') return true;
   if (method === 'POST' && pathname === '/api/stop') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/sessions') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/folders') return true;
@@ -1409,7 +1410,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const text = uploadedText(data, name, type);
         const config = await configState.load();
         if (config.oss.enabled) {
-          const uploaded = await (options.ossUpload ?? uploadToOss)(data, name, type, config.oss);
+          const uploadOverride = guestId ? { prefix: `${config.oss.prefix}/guests/${guestId}` } : undefined;
+          const uploaded = await (options.ossUpload ?? uploadToOss)(data, name, type, config.oss, uploadOverride);
           json(response, 201, { name, url: uploaded.url, path: uploaded.url, size: data.byteLength, type, ...text });
           return;
         }
