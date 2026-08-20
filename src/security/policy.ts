@@ -52,7 +52,7 @@ export class PolicyEngine {
       if (input.tool.startsWith('watchdog_')) return { effect: 'deny', rule: 'builtin.guest.no-watchdog-management', explicit: false };
       if (input.tool.startsWith('task_')) return { effect: 'deny', rule: 'builtin.guest.no-task-management', explicit: false };
       if (input.tool === 'delegate_task') return { effect: 'deny', rule: 'builtin.guest.no-delegation', explicit: false };
-      // guest bash 放行：由 bash 工具内部的 constrainGuestBash（工作目录/系统命令约束）+ enforceGuestGit（git 强制本账号+token）保证安全
+      // guest bash 放行：bash 工具会从 ToolContext 解析租户身份、切换 OS 用户，并检查内联及脚本内的文件/Git/Gitea 操作；映射或降权失败时拒绝执行。
       if (input.tool === 'bash') return { effect: 'allow', rule: 'builtin.guest.jailed-bash', explicit: false };
       if (input.tool.startsWith('memory_')) return { effect: 'deny', rule: 'builtin.guest.no-memory-management', explicit: false };
       if (input.tool.startsWith('mcp_') || input.tool.startsWith('plugin_')) return { effect: 'deny', rule: 'builtin.guest.no-extensions', explicit: false };

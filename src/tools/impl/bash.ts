@@ -1,29 +1,31 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import type { ToolSpec } from '../registry.js';
-import { expandHome } from '../../config/config.js';
+import { expandHome, loadConfig } from '../../config/config.js';
 import { resolveInWorkspace } from '../../util/paths.js';
 import { osUserForGuest, giteaTokenFor } from '../../gateway/tenant-os.js';
+import { assertGuestPathNotSensitive, containsSensitivePathReference, redactCredentialText } from '../../security/sensitive-paths.js';
 
 const execFileAsync = promisify(execFile);
 
 type BashExecution = { stdout: string; stderr: string };
 type BashExecutor = (file: string, args: string[], options: {
-  cwd: string; signal?: AbortSignal; timeout: number; maxBuffer: number;
+  cwd: string; signal?: AbortSignal; timeout: number; maxBuffer: number; env?: NodeJS.ProcessEnv;
 }) => Promise<BashExecution>;
 
 export interface BashToolDependencies {
   executeFile?: BashExecutor;
   lookupOsUser?: (username: string) => Promise<string | undefined>;
   lookupGiteaToken?: (username: string) => Promise<string | undefined>;
+  lookupGiteaBaseUrl?: () => Promise<string | undefined>;
   isRoot?: () => boolean;
   warn?: (message: string) => void;
 }
 
 const GUEST_DENIAL = 'guest 只能操作自己的工作目录';
-const SYSTEM_COMMAND = /\b(?:sudo|su|useradd|userdel|passwd|chown|chmod|mount|umount|iptables|systemctl|reboot|shutdown|halt|poweroff|docker|kubectl|crontab)\b/i;
+const SYSTEM_COMMAND = /\b(?:sudo|su|useradd|userdel|passwd|chown|chmod|mount|umount|iptables|systemctl|service|nginx|reboot|shutdown|halt|poweroff|docker|kubectl|crontab)\b/i;
 const FILESYSTEM_COMMAND = /(?:^|[;&|()\n]\s*)(?:cat|ls|rm|cp|mv|touch|mkdir|rmdir|find|grep|rg|sed|awk|head|tail|tee|readlink|stat|tar|zip|unzip|dd|file|du|df|ln|realpath|cd)\b/i;
 
 function commandWords(command: string): string[] {
@@ -47,9 +49,12 @@ export async function constrainGuestBash(command: string, cwd: string, workspace
   if (SYSTEM_COMMAND.test(command) || /\bnohup\b[^\n]*&\s*(?:$|[;])/i.test(command)) {
     return { error: `${GUEST_DENIAL}：禁止系统级命令`, command, cwd };
   }
+  if (containsSensitivePathReference(command)) {
+    return { error: `${GUEST_DENIAL}：禁止读取管理员凭据文件`, command, cwd };
+  }
   const touchesFilesystem = FILESYSTEM_COMMAND.test(command) || /[<>]/.test(command);
   const words = commandWords(command);
-  const embeddedPaths = command.match(/(?:^|[\s'"=:(])((?:~(?:\/|$)|\/)[^\s'";&|()<>]*)/g)?.map((match) => match.trim().replace(/^['"=:(]+/, '')) ?? [];
+  const embeddedPaths = command.match(/(?:^|[\s'"=(])((?:~(?:\/|$)|\/)[^\s'";&|()<>]*)/g)?.map((match) => match.trim().replace(/^['"=(]+/, '')) ?? [];
   for (const rawWord of [...words, ...embeddedPaths]) {
     const word = rawWord.replace(/^["']|["',:]$/g, '');
     if (!word || word.startsWith('-')) continue;
@@ -59,14 +64,52 @@ export async function constrainGuestBash(command: string, cwd: string, workspace
     const explicitlyPathLike = word.startsWith('/') || word.startsWith('~') || word === '..' || word.startsWith('../');
     if (!touchesFilesystem && !explicitlyPathLike) continue;
     const candidate = word.startsWith('~') ? expandHome(word) : resolve(cwd, word);
+    try { assertGuestPathNotSensitive(candidate); }
+    catch { return { error: `${GUEST_DENIAL}：禁止读取管理员凭据文件`, command, cwd }; }
     try { await resolveInWorkspace(candidate, workspaceRoot); }
     catch { return { error: `${GUEST_DENIAL}：路径越界`, command, cwd }; }
   }
   return undefined;
 }
 
+async function guestScriptContents(command: string, cwd: string, workspaceRoot: string): Promise<string[]> {
+  const pending: string[] = [];
+  const patterns = [
+    /(?:^|[;&|(\n]\s*)(?:bash|sh|source)[ \t]+(?:--[ \t]+)?(["']?)([^\s;&|()<>]+)\1/g,
+    /(?:^|[;&|(\n]\s*)\.\s+(["']?)([^\s;&|()<>]+)\1/g,
+    /(?:^|[;&|(\n]\s*)(\.\.?\/[^\s;&|()<>]+)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of command.matchAll(pattern)) pending.push(match[2] ?? match[1]);
+  }
+  const contents: string[] = [];
+  const seen = new Set<string>();
+  while (pending.length) {
+    const raw = pending.shift()!;
+    if (!raw || raw.startsWith('-') || raw.includes('$') || raw.includes('`')) {
+      throw new Error(`${GUEST_DENIAL}：无法安全解析脚本路径`);
+    }
+    const path = await resolveInWorkspace(resolve(cwd, raw), workspaceRoot);
+    assertGuestPathNotSensitive(path);
+    if (seen.has(path)) continue;
+    seen.add(path);
+    let content: string;
+    try { content = await readFile(path, 'utf8'); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`${GUEST_DENIAL}：找不到需要安全检查的脚本 ${raw}`);
+      throw error;
+    }
+    if (content.length > 1024 * 1024) throw new Error(`${GUEST_DENIAL}：脚本过大，无法安全检查`);
+    contents.push(content);
+    for (const pattern of patterns) {
+      for (const match of content.matchAll(pattern)) pending.push(match[2] ?? match[1]);
+    }
+  }
+  return contents;
+}
+
 /** 读取 cwd/.git/config 里 origin remote 的 owner（仓库属主）。无 .git 或无 remote 返回 undefined。 */
-async function readGitConfig(cwd: string): Promise<{ remoteOwner?: string } | undefined> {
+async function readGitConfig(cwd: string): Promise<{ remoteOwner?: string; remoteUrl: string } | undefined> {
   let configText: string;
   try {
     configText = await readFile(resolve(cwd, '.git/config'), 'utf8');
@@ -79,7 +122,7 @@ async function readGitConfig(cwd: string): Promise<{ remoteOwner?: string } | un
   if (!urlLine) return undefined;
   const url = urlLine[1].trim();
   const ownerMatch = url.match(/https?:\/\/(?:[^@/]+@)?[^/]+\/([^/]+)\//);
-  return ownerMatch ? { remoteOwner: decodeURIComponent(ownerMatch[1]) } : undefined;
+  return { remoteUrl: url, ...(ownerMatch ? { remoteOwner: decodeURIComponent(ownerMatch[1]) } : {}) };
 }
 
 /**
@@ -87,7 +130,7 @@ async function readGitConfig(cwd: string): Promise<{ remoteOwner?: string } | un
  * 1. git commit 强制使用当前用户的 Gitea 身份（guestN），覆盖任何用户设的 user.name/user.email；
  * 2. git push/clone/fetch/pull 只允许访问当前用户自己的账号（guestN）或专属组织（guestN-org），
  *    其余 owner（admin、其他 guestN、陌生组织）一律拒绝 —— 防止用非本用户账号提交/部署；
- * 3. push URL 自动注入当前用户自己的 token（从 SQLite gitea_api_token 取，不落盘）。
+ * 3. 远程操作的凭据由当前身份的 SQLite token 通过进程环境注入，不接受模型提供的身份或 token。
  * 返回 { command } 为改写后的安全命令，或 { error } 拒绝执行。
  */
 async function enforceGuestGit(
@@ -96,25 +139,27 @@ async function enforceGuestGit(
   guestOsUser: string,
   cwd: string,
   lookupToken: (username: string) => Promise<string | undefined>,
+  rewrite = true,
 ): Promise<{ command: string } | { error: string }> {
-  // 仅处理包含 git 的 bash 命令；非 git 命令不干预
-  if (!/^[^;&|()]*\bgit\b/.test(command)) return { command };
-
-  const token = await lookupToken(username);
-  if (!token) return { error: `${GUEST_DENIAL}：无法获取 ${username} 的 Gitea token，禁止 git 远程操作` };
+  if (!/\bgit\b/.test(command)) return { command };
+  if (/\b(?:GIT_(?:ASKPASS|CONFIG[^=\s]*|CREDENTIAL[^=\s]*|SSH_COMMAND)|SSH_ASKPASS|HOME)\s*=/i.test(command)
+      || /\bgit\b[^\n;&|]*(?:-c\s+(?:credential\.|http\.[^\s=]*extraheader|url\.)|--config-env=)/i.test(command)
+      || /\bgit\s+(?:config\b[^\n;&|]*(?:user\.(?:name|email)|credential\.|url\.)|credential\b)/i.test(command)) {
+    return { error: `${GUEST_DENIAL}：git 身份和凭据由当前登录用户上下文强制提供，不能自行修改` };
+  }
 
   const guestOrg = `${guestOsUser}-org`;
 
   // 校验远程 URL 的 owner 必须是本用户（guestN 或 guestN-org）
   const validateRemote = (url: string): string | undefined => {
+    if (/^https?:\/\/[^/@]+@/i.test(url)) return 'DENY:CREDENTIALS';
     const match = url.match(/^https?:\/\/(?:[^@/]+@)?([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
-    if (!match) return undefined; // 非标准 URL，交由 git 自行处理（如本地路径）
+    if (!match) return undefined;
     const host = match[1];
     const owner = decodeURIComponent(match[2]);
     const repo = match[3];
     if (owner === guestOsUser || owner === guestOrg) {
-      // 重写为带本用户 token 的 URL（token 不落盘，仅存在命令串）
-      return `http://${guestOsUser}:${token}@${host}/${owner}/${repo}.git`;
+      return `${url.startsWith('https:') ? 'https' : 'http'}://${host}/${owner}/${repo}.git`;
     }
     return `DENY:${owner}`;
   };
@@ -131,21 +176,28 @@ async function enforceGuestGit(
   };
 
   // 校验 push/clone 的 URL 或默认 remote
-  const urlMatch = command.match(/\bgit\s+(?:push|clone|fetch|pull)\b[^|;&\n]*(?:\s+(https?:\/\/\S+))?/);
-  if (urlMatch) {
-    if (urlMatch[1]) {
-      const rewritten = validateRemote(urlMatch[1]);
+  const urlMatch = command.match(/\bgit\s+(?:push|clone|fetch|pull)\b[^|;&\n]*?(https?:\/\/[^\s|;&]+)/);
+  const hasRemoteOperation = /\bgit\s+(?:push|clone|fetch|pull)\b/.test(command);
+  const token = hasRemoteOperation ? await lookupToken(username) : undefined;
+  if (hasRemoteOperation && !token) return { error: `${GUEST_DENIAL}：无法获取 ${username} 的 Gitea token，禁止 git 远程操作` };
+  if (hasRemoteOperation) {
+    if (urlMatch?.[1]) {
+      const original = urlMatch[1].replace(/["']$/, '');
+      const rewritten = validateRemote(original);
       if (!rewritten) return { error: `${GUEST_DENIAL}：无法解析远程仓库地址，禁止 git 远程操作` };
+      if (rewritten === 'DENY:CREDENTIALS') return { error: `${GUEST_DENIAL}：远程地址不能携带账号或 token，凭据由当前登录用户上下文提供` };
       if (rewritten.startsWith('DENY:')) {
         return { error: `${GUEST_DENIAL}：git 远程仓库必须属于你本人（${guestOsUser} 或 ${guestOrg}），不能使用其他账号（${rewritten.slice(5)}）的仓库` };
       }
-      return { command: command.replace(urlMatch[1], rewritten) };
+      return { command: rewrite ? command.replace(original, rewritten) : command };
     }
     // 无显式 URL：走默认 remote origin —— 校验 .git/config 里的 remote 必须指向本人仓库
     const config = await readGitConfig(cwd);
-    if (!config) return { command }; // 无 .git/config（clone 场景还没 config），交给 git 处理
+    if (!config) return { error: `${GUEST_DENIAL}：找不到可验证的 git remote，禁止远程操作` };
+    if (/^https?:\/\/[^/@]+@/i.test(config.remoteUrl)) return { error: `${GUEST_DENIAL}：git remote 不能携带账号或 token，凭据由当前登录用户上下文提供` };
     const owner = config.remoteOwner;
-    if (owner && owner !== guestOsUser && owner !== guestOrg) {
+    if (!owner) return { error: `${GUEST_DENIAL}：无法解析 git remote，禁止远程操作` };
+    if (owner !== guestOsUser && owner !== guestOrg) {
       return { error: `${GUEST_DENIAL}：git 默认 remote 必须属于你本人（${guestOsUser} 或 ${guestOrg}），当前指向其他账号（${owner}）的仓库，禁止远程操作` };
     }
     return { command };
@@ -167,10 +219,69 @@ async function enforceGuestGit(
   return { command: out };
 }
 
+async function enforceGuestCurl(
+  command: string,
+  username: string,
+  guestOsUser: string,
+  lookupToken: (username: string) => Promise<string | undefined>,
+  giteaBaseUrl: string | undefined,
+  rewrite = true,
+): Promise<{ command: string } | { error: string }> {
+  if (!/\bcurl\b/i.test(command)) return { command };
+  let configuredBase: URL | undefined;
+  try { if (giteaBaseUrl) configuredBase = new URL(giteaBaseUrl); } catch { /* invalid config fails closed for credential-bearing curl below */ }
+  const urls = [...command.matchAll(/https?:\/\/[^\s"'<>]+/gi)].map((match) => match[0].replace(/[),;]+$/, ''));
+  const giteaRequest = urls.some((value) => {
+    try {
+      const target = new URL(value);
+      if (configuredBase && target.origin === configuredBase.origin) {
+        const prefix = configuredBase.pathname.replace(/\/$/, '');
+        return !prefix || prefix === '/' || target.pathname === prefix || target.pathname.startsWith(`${prefix}/`);
+      }
+      return /^(?:127\.0\.0\.1|localhost)$/.test(target.hostname) && target.port === '3000';
+    } catch { return false; }
+  });
+  const hasCredentials = /(?:authorization\s*:|private-token\s*:|access_token=|\bcurl\b[^\n;&|]*\s-u\s+|https?:\/\/[^/@\s]+@)/i.test(command);
+  if (!giteaRequest) return hasCredentials
+    ? { error: `${GUEST_DENIAL}：不能向非 Gitea 地址发送模型提供的账号或 token` }
+    : { command };
+  const owners = [...command.matchAll(/\/api\/v1\/(?:repos\/|orgs\/)([^/\s"']+)/gi)].map((match) => decodeURIComponent(match[1]));
+  const guestOrg = `${guestOsUser}-org`;
+  const foreign = owners.find((owner) => owner !== guestOsUser && owner !== guestOrg);
+  if (foreign) return { error: `${GUEST_DENIAL}：Gitea 操作必须属于你本人（${guestOsUser} 或 ${guestOrg}），不能使用其他账号（${foreign}）` };
+  if (!rewrite) return { error: `${GUEST_DENIAL}：脚本中的 Gitea API 调用无法验证身份；请直接调用，由工具注入当前用户身份` };
+  const token = await lookupToken(username);
+  if (!token) return { error: `${GUEST_DENIAL}：无法获取 ${username} 的 Gitea token，禁止 Gitea API 操作` };
+  let out = command
+    .replace(/(authorization\s*:\s*(?:bearer|token)\s+)[^\s"']+/gi, `$1${token}`)
+    .replace(/(access_token=)[^&\s"']+/gi, `$1${token}`)
+    .replace(/(\bcurl\b[^\n;&|]*?\s-u\s+)(?:[^\s:"']+):[^\s"']+/gi, `$1${guestOsUser}:${token}`);
+  if (!hasCredentials) out = out.replace(/\bcurl\b/i, `curl -H 'Authorization: token ${token}'`);
+  return { command: out };
+}
+
+function guestHome(workspaceRoot: string, guestOsUser: string): string {
+  const parent = dirname(workspaceRoot);
+  return workspaceRoot.endsWith(`/${guestOsUser}/projects`) ? parent : `/home/${guestOsUser}`;
+}
+
+function guestEnvironment(guestOsUser: string, home: string, token: string | undefined): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', LANG: process.env.LANG ?? 'C.UTF-8',
+    HOME: home, USER: guestOsUser, LOGNAME: guestOsUser, GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_0: 'user.name', GIT_CONFIG_VALUE_0: guestOsUser,
+    GIT_CONFIG_KEY_1: 'user.email', GIT_CONFIG_VALUE_1: `${guestOsUser}@taiwei.local`,
+    GIT_CONFIG_KEY_2: 'credential.helper',
+    GIT_CONFIG_VALUE_2: token ? `!f() { echo username=${guestOsUser}; echo password=$TAIWEI_GITEA_TOKEN; }; f` : '',
+    ...(token ? { TAIWEI_GITEA_TOKEN: token } : {}),
+  };
+}
+
 export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpec {
   const executeFile = dependencies.executeFile ?? execFileAsync as BashExecutor;
   const lookupOsUser = dependencies.lookupOsUser ?? osUserForGuest;
   const lookupGiteaToken = dependencies.lookupGiteaToken ?? giteaTokenFor;
+  const lookupGiteaBaseUrl = dependencies.lookupGiteaBaseUrl ?? (async () => (await loadConfig()).gitea.baseUrl);
   const isRoot = dependencies.isRoot ?? (() => typeof process.getuid === 'function' && process.getuid() === 0);
   const warn = dependencies.warn ?? console.warn;
   return {
@@ -188,35 +299,56 @@ export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpe
       const configuredCwd = String(context.toolConfig?.defaultCwd ?? '').trim();
       const cwd = configuredCwd ? (configuredCwd.startsWith('~') ? expandHome(configuredCwd) : resolve(context.cwd, configuredCwd)) : context.cwd;
       if (context.role === 'guest') {
+        if (!context.identity) return { error: `${GUEST_DENIAL}：缺少已认证用户身份，禁止执行命令`, command, cwd };
         if (context.workspaceRoot) {
           const denial = await constrainGuestBash(command, cwd, context.workspaceRoot);
           if (denial) return denial;
         }
         let guestOsUser: string | undefined;
-        let lookupFailed = false;
         try { guestOsUser = context.identity ? await lookupOsUser(context.identity) : undefined; }
         catch (error) {
-          lookupFailed = true;
-          warn(`[taiwei] OS account lookup failed for guest ${context.identity ?? '<unknown>'}; bash is using the current process user: ${error instanceof Error ? error.message : String(error)}`);
+          warn(`[taiwei] OS account lookup failed for guest ${context.identity}: ${error instanceof Error ? error.message : String(error)}`);
+          return { error: `${GUEST_DENIAL}：无法解析当前用户的系统账号，禁止执行命令`, command, cwd };
         }
-        if (guestOsUser && isRoot()) {
-          if (context.authorizeCommand && !await context.authorizeCommand(command, cwd)) {
-            return { error: '用户拒绝了该命令的执行', command, cwd };
+        if (!guestOsUser) return { error: `${GUEST_DENIAL}：当前用户没有可用的系统账号，禁止执行命令`, command, cwd };
+        if (!isRoot()) return { error: `${GUEST_DENIAL}：网关无法切换到 ${guestOsUser}，禁止以网关账号执行 guest 命令`, command, cwd };
+        let giteaBaseUrl: string | undefined;
+        try { giteaBaseUrl = await lookupGiteaBaseUrl(); }
+        catch { giteaBaseUrl = undefined; }
+        const scripts = context.workspaceRoot ? await guestScriptContents(command, cwd, context.workspaceRoot) : [];
+        for (const script of scripts) {
+          const normalizedScript = script.replace(/\\\r?\n/g, '');
+          const scriptGit = await enforceGuestGit(normalizedScript, context.identity, guestOsUser, cwd, lookupGiteaToken, false);
+          if ('error' in scriptGit) return { error: scriptGit.error, command, cwd };
+          const scriptCurl = await enforceGuestCurl(normalizedScript, context.identity, guestOsUser, lookupGiteaToken, giteaBaseUrl, false);
+          if ('error' in scriptCurl) return { error: scriptCurl.error, command, cwd };
+          for (const line of script.split('\n')) {
+            if (!line.trim() || line.startsWith('#!')) continue;
+            const denial = await constrainGuestBash(line, cwd, context.workspaceRoot);
+            if (denial) return { ...denial, error: `${denial.error}（脚本内容）` };
+            const git = await enforceGuestGit(line, context.identity, guestOsUser, cwd, lookupGiteaToken, false);
+            if ('error' in git) return { error: git.error, command, cwd };
+            const curl = await enforceGuestCurl(line, context.identity, guestOsUser, lookupGiteaToken, giteaBaseUrl, false);
+            if ('error' in curl) return { error: curl.error, command, cwd };
           }
-          // 强制 git 安全层：commit 用本用户身份，push/clone/fetch/pull 只能访问本用户仓库，自动注入本用户 token
-          if (context.identity) {
-            const enforced = await enforceGuestGit(command, context.identity, guestOsUser, cwd, lookupGiteaToken);
-            if ('error' in enforced) return { error: enforced.error, command, cwd };
-            command = enforced.command;
-          }
-          const result = await executeFile('runuser', ['-u', guestOsUser, '--', '/bin/bash', '-lc', command], {
-            cwd, signal: context.signal, timeout: Number(args.timeout_ms ?? 120_000), maxBuffer: 10 * 1024 * 1024,
-          });
-          return { stdout: result.stdout, stderr: result.stderr };
         }
-        if (!lookupFailed) warn(guestOsUser
-            ? `[taiwei] gateway is not running as root; guest bash for ${guestOsUser} is using the current process user`
-            : `[taiwei] no OS account mapping found for guest ${context.identity ?? '<unknown>'}; bash is using the current process user`);
+        const git = await enforceGuestGit(command, context.identity, guestOsUser, cwd, lookupGiteaToken);
+        if ('error' in git) return { error: git.error, command, cwd };
+        command = git.command;
+        const curl = await enforceGuestCurl(command, context.identity, guestOsUser, lookupGiteaToken, giteaBaseUrl);
+        if ('error' in curl) return { error: curl.error, command, cwd };
+        command = curl.command;
+        if (context.authorizeCommand && !await context.authorizeCommand(command, cwd)) {
+          return { error: '用户拒绝了该命令的执行', command, cwd };
+        }
+        const token = /\b(?:git\s+(?:push|clone|fetch|pull)|curl\b)/i.test(`${command}\n${scripts.join('\n')}`)
+          ? await lookupGiteaToken(context.identity)
+          : undefined;
+        const result = await executeFile('runuser', ['-u', guestOsUser, '--', '/bin/bash', '-lc', command], {
+          cwd, signal: context.signal, timeout: Number(args.timeout_ms ?? 120_000), maxBuffer: 10 * 1024 * 1024,
+          env: guestEnvironment(guestOsUser, guestHome(context.workspaceRoot ?? cwd, guestOsUser), token),
+        });
+        return { stdout: redactCredentialText(result.stdout), stderr: redactCredentialText(result.stderr) };
       } else if (configuredCwd) {
         try { await resolveInWorkspace(cwd, context.workspaceRoot ?? context.cwd); }
         catch { console.warn(`[taiwei] bash defaultCwd is outside the workspace (${cwd}); command execution is not jailed`); }
