@@ -15,6 +15,7 @@ const elements = {
   appShell: $('#app-shell'),
   logout: $('#logout'),
   guestLogout: $('#guest-logout'),
+  guestGitea: $('#guest-gitea'),
   userMenu: $('#user-menu'),
   userTrigger: $('#user-trigger'),
   userPopover: $('#user-popover'),
@@ -599,7 +600,6 @@ async function openCron() {
 }
 
 function openDeployments() {
-  if (state.role !== 'admin') return;
   window.open('http://14.103.23.160/gitea/', '_blank', 'noopener,noreferrer');
 }
 
@@ -2226,6 +2226,7 @@ elements.memoryClose.addEventListener('click', () => elements.memoryModal.close(
 elements.cronOpen.addEventListener('click', openCron);
 elements.cronClose.addEventListener('click', () => elements.cronModal.close());
 elements.deploymentsOpen.addEventListener('click', openDeployments);
+elements.guestGitea.addEventListener('click', openDeployments);
 for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal, elements.cronModal]) {
   modal.addEventListener('click', (event) => { if (event.target === modal) modal.close(); });
 }

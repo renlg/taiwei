@@ -33,7 +33,7 @@ import type { PluginLoader } from '../plugins/loader.js';
 import type { ChatMessage, ContentBlock } from '../llm/client.js';
 import { uploadToOss } from './oss.js';
 import { TenantAccountService, TenantAccountStore } from './tenants.js';
-import { tenantWorkspaceForGuest } from './tenant-os.js';
+import { tenantWorkspaceForGuest, osUserForGuest } from './tenant-os.js';
 
 export interface GatewayHistoryIndex {
   upsertSession(meta: HistorySessionMeta): Promise<void>;
@@ -87,7 +87,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '41';
+const STATIC_ASSET_VERSION = '42';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -190,6 +190,7 @@ function guestRouteAllowed(method: string, pathname: string): boolean {
   if ((method === 'GET' || method === 'POST') && pathname === '/api/model') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/agents') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/agent') return true;
+  if (method === 'GET' && pathname === '/api/auth/gitea-user') return true;
   return (method === 'GET' || method === 'DELETE') && /^\/api\/sessions\/[^/]+$/.test(pathname);
 }
 
@@ -771,6 +772,22 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           workspace: resolveWorkspaceDir(config),
           ...(authenticatedUsername ? { username: authenticatedUsername } : {}),
         });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/auth/gitea-user') {
+        if (!authenticatedToken || !authenticatedUsername) {
+          json(response, 401, { error: 'unauthorized' });
+          return;
+        }
+        let giteaUsername: string;
+        if (authenticatedRole === 'admin') {
+          giteaUsername = 'admin';
+        } else {
+          const osUser = await osUserForGuest(authenticatedUsername);
+          if (!osUser) throw new HttpError(403, 'no gitea account provisioned');
+          giteaUsername = osUser;
+        }
+        json(response, 200, { giteaUsername }, { 'x-gitea-user': giteaUsername });
         return;
       }
       if (method === 'GET' && pathname === '/api/tenant-accounts') {
