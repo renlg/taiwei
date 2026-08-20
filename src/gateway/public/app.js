@@ -151,6 +151,7 @@ const elements = {
   hookTest: $('#hook-test'),
   hookTestResult: $('#hook-test-result'),
   auditSettings: $('.audit-settings'), auditToggle: $('#audit-toggle'), auditStatus: $('#audit-status'), auditFilter: $('#audit-filter'), auditList: $('#audit-list'),
+  tenantAccountsSettings: $('.tenant-accounts-settings'), tenantAccountsToggle: $('#tenant-accounts-toggle'), tenantAccountsStatus: $('#tenant-accounts-status'), tenantAccountsList: $('#tenant-accounts-list'),
   sidebarToggle: $('#sidebar-toggle'),
   sidebarClose: $('#sidebar-close'),
   scrim: $('#mobile-scrim'),
@@ -197,6 +198,7 @@ const SECURITY_OPEN_STORAGE_KEY = 'taiwei-settings-security-open';
 const HOOKS_OPEN_STORAGE_KEY = 'taiwei-settings-hooks-open';
 const CUSTOM_PROMPT_OPEN_STORAGE_KEY = 'taiwei-settings-customprompt-open';
 const AUDIT_OPEN_STORAGE_KEY = 'taiwei-settings-audit-open';
+const TENANT_ACCOUNTS_OPEN_STORAGE_KEY = 'taiwei-settings-tenantaccounts-open';
 const LAST_MODEL_STORAGE_PREFIX = 'taiwei-last-model:';
 
 function lastModelStorageKey() {
@@ -514,6 +516,35 @@ async function loadAudit() {
   elements.auditList.textContent = shown.map((entry) => JSON.stringify(entry)).join('\n') || '暂无审计事件';
 }
 
+function renderTenantAccounts(accounts) {
+  elements.tenantAccountsStatus.textContent = `${accounts.length} 个账号`;
+  elements.tenantAccountsList.replaceChildren();
+  if (!accounts.length) {
+    const row = document.createElement('tr'); row.innerHTML = '<td colspan="7">暂无租户账号</td>'; elements.tenantAccountsList.append(row); return;
+  }
+  for (const account of accounts) {
+    const row = document.createElement('tr');
+    const values = [account.username, account.accountName, account.giteaUsername, account.giteaOrgName, account.status === 'deleted' ? '已删除' : (account.error ? '异常' : '正常'), new Date(account.createdAt).toLocaleString()];
+    for (const value of values) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
+    row.title = account.error || '';
+    const action = document.createElement('td');
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'small-button danger-button'; remove.textContent = account.status === 'deleted' ? '已删除' : '删除'; remove.disabled = account.status === 'deleted';
+    remove.addEventListener('click', async () => {
+      const ok = await confirmDialog({ title: '删除用户账号', desc: '将禁用 Gitea 账号并锁定系统账号；不会删除用户代码、主目录或仓库。', object: `${account.username} (${account.accountName})`, okText: '删除', danger: true });
+      if (!ok) return;
+      remove.disabled = true;
+      try { await requestJson(`/api/tenant-accounts/${encodeURIComponent(account.username)}`, { method: 'DELETE' }); await loadTenantAccounts(); showToast(`已删除 ${account.accountName}`); }
+      catch (error) { elements.settingsError.textContent = error.message; remove.disabled = false; }
+    });
+    action.append(remove); row.append(action); elements.tenantAccountsList.append(row);
+  }
+}
+
+async function loadTenantAccounts() {
+  const { accounts } = await requestJson('/api/tenant-accounts');
+  renderTenantAccounts(accounts || []);
+}
+
 async function openSettings() {
   elements.settingsError.textContent = '';
   try {
@@ -523,7 +554,9 @@ async function openSettings() {
     setSettingsCollapseOpen(elements.securitySettings, elements.securityToggle, SECURITY_OPEN_STORAGE_KEY, localStorage.getItem(SECURITY_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.hooksSettings, elements.hooksToggle, HOOKS_OPEN_STORAGE_KEY, localStorage.getItem(HOOKS_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.auditSettings, elements.auditToggle, AUDIT_OPEN_STORAGE_KEY, localStorage.getItem(AUDIT_OPEN_STORAGE_KEY) === 'true');
+    setSettingsCollapseOpen(elements.tenantAccountsSettings, elements.tenantAccountsToggle, TENANT_ACCOUNTS_OPEN_STORAGE_KEY, localStorage.getItem(TENANT_ACCOUNTS_OPEN_STORAGE_KEY) === 'true');
     if (elements.auditToggle.getAttribute('aria-expanded') === 'true') await loadAudit();
+    if (elements.tenantAccountsToggle.getAttribute('aria-expanded') === 'true') await loadTenantAccounts();
     elements.settingsModal.showModal();
     elements.workspaceToggle.focus();
   } catch (error) { showToast(error.message); }
@@ -2429,6 +2462,13 @@ elements.auditToggle.addEventListener('click', async () => {
   const open = elements.auditToggle.getAttribute('aria-expanded') !== 'true';
   setSettingsCollapseOpen(elements.auditSettings, elements.auditToggle, AUDIT_OPEN_STORAGE_KEY, open, true);
   if (open) await loadAudit().catch((error) => { elements.auditList.textContent = error.message; });
+});
+elements.tenantAccountsToggle.addEventListener('click', async () => {
+  const open = elements.tenantAccountsToggle.getAttribute('aria-expanded') !== 'true';
+  setSettingsCollapseOpen(elements.tenantAccountsSettings, elements.tenantAccountsToggle, TENANT_ACCOUNTS_OPEN_STORAGE_KEY, open, true);
+  if (open) {
+    try { await loadTenantAccounts(); } catch (error) { elements.settingsError.textContent = error.message; }
+  }
 });
 elements.auditFilter.addEventListener('input', () => { void loadAudit(); });
 elements.workspaceInput.addEventListener('input', updateWorkspaceStatus);

@@ -4,7 +4,7 @@
 
 ## Install and initialize
 
-Requires Node.js 20 or newer.
+Requires Node.js 22 or newer (the tenant and history stores use `node:sqlite`).
 
 ```bash
 npm install
@@ -71,6 +71,10 @@ Edit `~/.taiwei/config.json`, or set environment variables:
     "clientId": "taiwei",
     "clientSecret": "taiwei-secret-2026",
     "redirectUri": ""
+  },
+  "gitea": {
+    "baseUrl": "",
+    "adminToken": ""
   },
   "share": {
     "enabled": false,
@@ -303,6 +307,8 @@ Ordinary users authenticate through ai-connect OAuth2; taiwei no longer stores o
 ```
 
 When `redirectUri` is empty, taiwei computes `http://<request-host>/api/oauth/callback`; set it explicitly, or use `OAUTH_TAIWEI_REDIRECT`, when taiwei is reached through a proxy, HTTPS, or a different public hostname. `OAUTH_TAIWEI_SECRET` is the recommended way to provide a non-default client secret. In the login screen choose **普通用户登录 → 通过 ai-connect 登录**. The browser registers a ten-minute OAuth state, redirects to ai-connect, and returns to taiwei, which exchanges the authorization code, reads the ai-connect username, and creates a durable seven-day sliding guest session.
+
+On the first successful OAuth callback, taiwei also reserves a sequential tenant account (`guest1`, `guest2`, …), creates the matching OS user, and provisions a Gitea user, API token, and organization. Configure the production Gitea API root and an administrator token with `gitea.baseUrl` (for example `http://127.0.0.1:3000/api/v1`) and `gitea.adminToken`. When Gitea is unconfigured or a provisioning step fails, login still succeeds and the failure appears under **设置 → 用户账号** for an administrator; incomplete steps are retried on the next login. Passwords are persisted only as salted scrypt hashes. Deleting an account from that panel locks the OS login and preserves its home directory and repositories.
 
 To exercise the complete flow against the real relay at `http://101.37.19.62` from the same machine as the browser:
 

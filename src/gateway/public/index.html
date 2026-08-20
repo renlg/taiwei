@@ -251,6 +251,20 @@
           <pre class="hook-test-result audit-list" id="audit-list">展开以加载最近事件</pre>
         </div></div>
       </section>
+      <section class="settings-collapse tenant-accounts-settings admin-only">
+        <button class="settings-collapse-toggle" id="tenant-accounts-toggle" type="button" aria-expanded="false" aria-controls="tenant-accounts-content">
+          <span class="settings-collapse-title"><span class="settings-collapse-chevron" aria-hidden="true">▸</span><span class="settings-collapse-heading">用户账号</span></span>
+          <small class="settings-collapse-status" id="tenant-accounts-status">未加载</small>
+        </button>
+        <div class="settings-collapse-content" id="tenant-accounts-content"><div class="settings-collapse-content-inner">
+          <div class="tenant-accounts-table-wrap">
+            <table class="tenant-accounts-table">
+              <thead><tr><th>taiwei用户名</th><th>账号</th><th>Gitea账号</th><th>Gitea组织</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+              <tbody id="tenant-accounts-list"><tr><td colspan="7">展开以加载用户账号</td></tr></tbody>
+            </table>
+          </div>
+        </div></div>
+      </section>
       <div class="modal-error" id="settings-error" role="alert"></div>
       <footer><button class="secondary-button" id="settings-reset" type="button">重置安全默认值</button><button class="primary-button" id="settings-save" type="submit">保存设置</button></footer>
     </form>

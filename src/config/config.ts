@@ -70,6 +70,10 @@ export interface TaiweiConfig {
     clientSecret: string;
     redirectUri: string;
   };
+  gitea: {
+    baseUrl: string;
+    adminToken: string;
+  };
   share: { enabled: boolean; token: string; createdAt: string };
   workspace: {
     dir: string;
@@ -136,6 +140,10 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
     clientId: 'taiwei',
     clientSecret: 'taiwei-secret-2026',
     redirectUri: '',
+  },
+  gitea: {
+    baseUrl: '',
+    adminToken: '',
   },
   share: { enabled: false, token: '', createdAt: '' },
   workspace: {
@@ -217,6 +225,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     oss: { ...DEFAULT_CONFIG.oss, ...storedConfig.oss },
     auth: { ...DEFAULT_CONFIG.auth, ...storedConfig.auth },
     oauth: { ...DEFAULT_CONFIG.oauth, ...storedConfig.oauth },
+    gitea: { ...DEFAULT_CONFIG.gitea, ...storedConfig.gitea },
     share: { ...DEFAULT_CONFIG.share, ...storedConfig.share },
     workspace: { ...DEFAULT_CONFIG.workspace, ...storedConfig.workspace },
     security: {
@@ -307,6 +316,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       oss: { ...DEFAULT_CONFIG.oss, ...storedConfig.oss },
       auth: { ...DEFAULT_CONFIG.auth, ...storedConfig.auth },
       oauth: { ...DEFAULT_CONFIG.oauth, ...storedConfig.oauth },
+      gitea: { ...DEFAULT_CONFIG.gitea, ...storedConfig.gitea },
       share: { ...DEFAULT_CONFIG.share, ...storedConfig.share },
       workspace: { ...DEFAULT_CONFIG.workspace, ...storedConfig.workspace },
       security: {
@@ -331,6 +341,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       oss: { ...DEFAULT_CONFIG.oss },
       auth: { ...DEFAULT_CONFIG.auth },
       oauth: { ...DEFAULT_CONFIG.oauth },
+      gitea: { ...DEFAULT_CONFIG.gitea },
       share: { ...DEFAULT_CONFIG.share },
       workspace: { ...DEFAULT_CONFIG.workspace },
       security: { ...DEFAULT_CONFIG.security, patterns: [], approvedPatterns: [] },

@@ -49,6 +49,7 @@ export class PolicyEngine {
       }
     }
     if (input.role === 'guest') {
+      if (input.tool.startsWith('watchdog_')) return { effect: 'deny', rule: 'builtin.guest.no-watchdog-management', explicit: false };
       if (input.tool.startsWith('task_')) return { effect: 'deny', rule: 'builtin.guest.no-task-management', explicit: false };
       if (input.tool === 'delegate_task') return { effect: 'deny', rule: 'builtin.guest.no-delegation', explicit: false };
       if (input.tool === 'bash') return { effect: 'deny', rule: 'builtin.guest.no-bash', explicit: false };

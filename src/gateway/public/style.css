@@ -183,6 +183,11 @@ body.guest-mode .admin-only { display: none !important; }
 .hook-test-result { min-height: 0; max-height: 150px; margin: 8px 0 0; padding: 0; overflow: auto; color: var(--faint); background: transparent; font: 10.5px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
 .hook-test-result:empty { display: none; }
 .settings-explainer { margin: 0 0 12px; color: var(--muted); font-size: 11px; }
+.tenant-accounts-table-wrap { overflow-x: auto; }
+.tenant-accounts-table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 11px; }
+.tenant-accounts-table th, .tenant-accounts-table td { padding: 9px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.tenant-accounts-table th { color: var(--muted); font-weight: 700; }
+.tenant-accounts-table td:first-child { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
 
 .management-card { width: min(900px, calc(100vw - 28px)); min-height: min(610px, calc(100dvh - 32px)); display: flex; flex-direction: column; overflow: hidden; }
 .management-error { min-height: 18px; margin: -8px 0 8px; color: var(--danger); font-size: 11px; }

@@ -33,6 +33,7 @@ import type { PluginLoader } from '../plugins/loader.js';
 import type { ChatMessage, ContentBlock } from '../llm/client.js';
 import { cleanupDeployment, DEPLOYMENT_NAME_PATTERN, DeploymentStore, OWNER_HASH_PATTERN, validateDeploymentInput, type DeploymentRepository } from './deployments.js';
 import { uploadToOss } from './oss.js';
+import { TenantAccountService, TenantAccountStore } from './tenants.js';
 
 export interface GatewayHistoryIndex {
   upsertSession(meta: HistorySessionMeta): Promise<void>;
@@ -81,10 +82,11 @@ export interface GatewayServerOptions {
   pluginLoader?: Pick<PluginLoader, 'list' | 'setEnabled'>;
   folderStoreFactory?: (identity: { role: 'admin' | 'guest'; guestId?: string; username?: string; config: TaiweiConfig }) => FolderStore;
   deployments?: DeploymentRepository | false;
+  tenantAccounts?: TenantAccountService | false;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '39';
+const STATIC_ASSET_VERSION = '40';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -508,6 +510,9 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const mcpConfigPath = resolve(options.mcpConfigPath ?? taiweiPaths.mcp);
   const memoryStore = options.memoryStore ?? new MemoryStore();
   const deployments: DeploymentRepository | false = options.deployments ?? (options.sessions ? false : new DeploymentStore(taiweiPaths.historyDb));
+  const tenantAccounts: TenantAccountService | false = options.tenantAccounts ?? new TenantAccountService(
+    () => configState.load(), new TenantAccountStore(taiweiPaths.historyDb),
+  );
   let mcpInitialized = false;
   const buildKnowledgeIndex = options.buildKnowledgeIndex ?? (async () => buildIndex(createEmbedder(await configState.load())));
   const searchKnowledge = options.searchKnowledge ?? (async (query: string, limit: number) => retrieve(query, limit, createEmbedder(await configState.load())));
@@ -517,6 +522,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   }
   const log = options.log ?? console.log;
   if (deployments) void deployments.initialize().catch((error) => log(`[taiwei] deployment database unavailable: ${error instanceof Error ? error.message : String(error)}`));
+  if (tenantAccounts) void tenantAccounts.store.initialize().catch((error) => log(`[taiwei] tenant account database unavailable: ${error instanceof Error ? error.message : String(error)}`));
   const oauthStates = new Map<string, number>();
   const modelState: GatewayModelState = options.modelState ?? { getCurrentModel, resolveModels: resolveModelCatalog, setCurrentModel };
   const contextWindowFor = options.contextWindow ?? (async (model: string) => resolveContextWindow(await loadConfig(), model));
@@ -629,6 +635,10 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const userinfo = await userinfoResponse.json().catch(() => undefined) as { username?: unknown } | undefined;
         const username = typeof userinfo?.username === 'string' ? userinfo.username.trim() : '';
         if (!username) throw new HttpError(502, 'oauth userinfo failed');
+        if (tenantAccounts) {
+          try { await tenantAccounts.ensureTenantAccount(username); }
+          catch (error) { log(`[taiwei] tenant provisioning failed for ${username}: ${error instanceof Error ? error.message : String(error)}`); }
+        }
         const token = await authSessions.create(username, 'guest');
         const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录成功</title></head><body><p>登录成功，正在进入 taiwei…</p><script>localStorage.setItem('taiwei-token',${safeInlineJson(token)});localStorage.setItem('taiwei-role','guest');localStorage.setItem('taiwei-username',${safeInlineJson(username)});sessionStorage.removeItem('taiwei-oauth-state');sessionStorage.removeItem('taiwei-oauth-state-expires');window.location.replace('/');</script></body></html>`;
         response.writeHead(200, {
@@ -750,6 +760,23 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           workspace: resolveWorkspaceDir(config),
           ...(authenticatedUsername ? { username: authenticatedUsername } : {}),
         });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/tenant-accounts') {
+        if (!tenantAccounts) throw new HttpError(503, 'Tenant account database is unavailable');
+        json(response, 200, { accounts: await tenantAccounts.store.listAccounts() });
+        return;
+      }
+      const tenantAccountRoute = pathname.match(/^\/api\/tenant-accounts\/([^/]+)$/);
+      if (method === 'DELETE' && tenantAccountRoute) {
+        if (!tenantAccounts) throw new HttpError(503, 'Tenant account database is unavailable');
+        let username: string;
+        try { username = decodeURIComponent(tenantAccountRoute[1]).trim(); }
+        catch { throw new HttpError(400, 'Invalid tenant username encoding'); }
+        if (!username) throw new HttpError(400, 'Tenant username is required');
+        if (!await tenantAccounts.store.getByUsername(username)) throw new HttpError(404, `Tenant account not found: ${username}`);
+        await tenantAccounts.deleteTenantAccount(username);
+        json(response, 200, { ok: true });
         return;
       }
       if (method === 'GET' && pathname === '/api/deployments') {
@@ -1528,7 +1555,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       else { sendSse(response, 'error', { message: (error as Error).message }); response.end(); }
     }
   });
-  server.once('close', () => { if (deployments) deployments.close?.(); });
+  server.once('close', () => { if (deployments) deployments.close?.(); if (tenantAccounts) tenantAccounts.store.close?.(); });
   return server;
 }
 

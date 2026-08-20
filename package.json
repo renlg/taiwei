@@ -18,7 +18,7 @@
     "start": "node bin/taiwei"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.2",
