@@ -34,6 +34,7 @@ import type { ChatMessage, ContentBlock } from '../llm/client.js';
 import { cleanupDeployment, DEPLOYMENT_NAME_PATTERN, DeploymentStore, OWNER_HASH_PATTERN, validateDeploymentInput, type DeploymentRepository } from './deployments.js';
 import { uploadToOss } from './oss.js';
 import { TenantAccountService, TenantAccountStore } from './tenants.js';
+import { tenantWorkspaceForGuest } from './tenant-os.js';
 
 export interface GatewayHistoryIndex {
   upsertSession(meta: HistorySessionMeta): Promise<void>;
@@ -83,6 +84,8 @@ export interface GatewayServerOptions {
   folderStoreFactory?: (identity: { role: 'admin' | 'guest'; guestId?: string; username?: string; config: TaiweiConfig }) => FolderStore;
   deployments?: DeploymentRepository | false;
   tenantAccounts?: TenantAccountService | false;
+  /** Test/deployment override; production tenant homes default to /home. */
+  tenantHomeRoot?: string;
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
@@ -513,6 +516,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const tenantAccounts: TenantAccountService | false = options.tenantAccounts ?? new TenantAccountService(
     () => configState.load(), new TenantAccountStore(taiweiPaths.historyDb),
   );
+  const guestWorkspaceCache = new Map<string, Promise<string>>();
   let mcpInitialized = false;
   const buildKnowledgeIndex = options.buildKnowledgeIndex ?? (async () => buildIndex(createEmbedder(await configState.load())));
   const searchKnowledge = options.searchKnowledge ?? (async (query: string, limit: number) => retrieve(query, limit, createEmbedder(await configState.load())));
@@ -722,17 +726,28 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         ? new SessionStore(join(taiweiPaths.guests, guestId, 'sessions'))
         : sessions;
       const folderIdentity = { role: authenticatedRole, ...(guestId ? { guestId } : {}), ...(authenticatedUsername ? { username: authenticatedUsername } : {}), config: accessConfig };
+      const legacyGuestWorkspace = guestId ? join(taiweiPaths.guests, guestId, 'workspace') : undefined;
+      const guestFoldersFile = guestId ? join(taiweiPaths.guests, guestId, 'folders.json') : undefined;
+      const guestWorkspace = guestId && authenticatedToken && authenticatedUsername && tenantAccounts && legacyGuestWorkspace
+        ? await (guestWorkspaceCache.get(authenticatedUsername) ?? (() => {
+            const pending = tenantWorkspaceForGuest(authenticatedUsername, legacyGuestWorkspace, tenantAccounts.store, {
+              homeRoot: options.tenantHomeRoot, foldersFile: guestFoldersFile, warn: log,
+            });
+            guestWorkspaceCache.set(authenticatedUsername, pending);
+            return pending;
+          })())
+        : legacyGuestWorkspace;
       const adminWorkspace = resolveWorkspaceDir(accessConfig);
       const adminDefault = workspaceFolderMetadata(adminWorkspace);
       const activeFolders = options.folderStoreFactory?.(folderIdentity) ?? (guestId
         ? new FolderStore({
-            file: join(taiweiPaths.guests, guestId, 'folders.json'),
+            file: guestFoldersFile!,
             owner: 'guest',
-            rootPath: join(taiweiPaths.guests, guestId, 'workspace'),
+            rootPath: guestWorkspace!,
             defaultId: 'guest-default',
             defaultName: guestFolderName(authenticatedUsername ?? '访客'),
             defaultDirName: guestFolderName(authenticatedUsername ?? '访客'),
-            defaultPath: () => join(taiweiPaths.guests, guestId, 'workspace'),
+            defaultPath: () => guestWorkspace!,
           })
         : new FolderStore({
             file: taiweiPaths.folders,
@@ -1398,7 +1413,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const config = await configState.load();
         const sessionFolder = session.folderId ? await activeFolders.get(session.folderId) : undefined;
         if (session.folderId && !sessionFolder) throw new HttpError(404, 'Session folder not found');
-        // Guest 的工作目录固定为专属根（guests/<guestId>/workspace），UI 文件夹只做会话分类，不改变写权限边界；
+        // Guest 的工作目录固定为租户根（/home/<guestN>/projects），UI 文件夹只做会话分类，不改变写权限边界；
         // admin 的工作目录跟随会话所在文件夹。
         const workspace = guestId
           ? (await activeFolders.defaultFolder()).path

@@ -4,8 +4,21 @@ import { resolve } from 'node:path';
 import type { ToolSpec } from '../registry.js';
 import { expandHome } from '../../config/config.js';
 import { resolveInWorkspace } from '../../util/paths.js';
+import { osUserForGuest } from '../../gateway/tenant-os.js';
 
 const execFileAsync = promisify(execFile);
+
+type BashExecution = { stdout: string; stderr: string };
+type BashExecutor = (file: string, args: string[], options: {
+  cwd: string; signal?: AbortSignal; timeout: number; maxBuffer: number;
+}) => Promise<BashExecution>;
+
+export interface BashToolDependencies {
+  executeFile?: BashExecutor;
+  lookupOsUser?: (username: string) => Promise<string | undefined>;
+  isRoot?: () => boolean;
+  warn?: (message: string) => void;
+}
 
 const GUEST_DENIAL = 'guest 只能操作自己的工作目录';
 const SYSTEM_COMMAND = /\b(?:sudo|su|useradd|userdel|passwd|chown|chmod|mount|umount|iptables|systemctl|reboot|shutdown|halt|poweroff|docker|kubectl|crontab)\b/i;
@@ -50,36 +63,65 @@ export async function constrainGuestBash(command: string, cwd: string, workspace
   return undefined;
 }
 
-export const bashTool: ToolSpec = {
-  name: 'bash',
-  description: 'Run a shell command in the current working directory.',
-  parameters: {
-    type: 'object', properties: { command: { type: 'string' }, timeout_ms: { type: 'number' } },
-    required: ['command'], additionalProperties: false,
-  },
-  configSchema: {
-    defaultCwd: { type: 'string', default: '', label: '默认工作目录', description: '留空时使用当前工作区。', placeholder: '~/workspace/project' },
-  },
-  async execute(args, context) {
-    const command = String(args.command);
-    const configuredCwd = String(context.toolConfig?.defaultCwd ?? '').trim();
-    const cwd = configuredCwd ? (configuredCwd.startsWith('~') ? expandHome(configuredCwd) : resolve(context.cwd, configuredCwd)) : context.cwd;
-    if (context.role === 'guest' && context.workspaceRoot) {
-      const denial = await constrainGuestBash(command, cwd, context.workspaceRoot);
-      if (denial) return denial;
-    } else if (configuredCwd) {
-      try { await resolveInWorkspace(cwd, context.workspaceRoot ?? context.cwd); }
-      catch { console.warn(`[taiwei] bash defaultCwd is outside the workspace (${cwd}); command execution is not jailed`); }
-    }
-    if (context.authorizeCommand && !await context.authorizeCommand(command, cwd)) {
-      return { error: '用户拒绝了该命令的执行', command, cwd };
-    }
-    const result = await execFileAsync(process.env.SHELL || '/bin/sh', ['-lc', String(args.command)], {
-      cwd,
-      signal: context.signal,
-      timeout: Number(args.timeout_ms ?? 120_000),
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    return { stdout: result.stdout, stderr: result.stderr };
-  },
-};
+export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpec {
+  const executeFile = dependencies.executeFile ?? execFileAsync as BashExecutor;
+  const lookupOsUser = dependencies.lookupOsUser ?? osUserForGuest;
+  const isRoot = dependencies.isRoot ?? (() => typeof process.getuid === 'function' && process.getuid() === 0);
+  const warn = dependencies.warn ?? console.warn;
+  return {
+    name: 'bash',
+    description: 'Run a shell command in the current working directory.',
+    parameters: {
+      type: 'object', properties: { command: { type: 'string' }, timeout_ms: { type: 'number' } },
+      required: ['command'], additionalProperties: false,
+    },
+    configSchema: {
+      defaultCwd: { type: 'string', default: '', label: '默认工作目录', description: '留空时使用当前工作区。', placeholder: '~/workspace/project' },
+    },
+    async execute(args, context) {
+      const command = String(args.command);
+      const configuredCwd = String(context.toolConfig?.defaultCwd ?? '').trim();
+      const cwd = configuredCwd ? (configuredCwd.startsWith('~') ? expandHome(configuredCwd) : resolve(context.cwd, configuredCwd)) : context.cwd;
+      if (context.role === 'guest') {
+        if (context.workspaceRoot) {
+          const denial = await constrainGuestBash(command, cwd, context.workspaceRoot);
+          if (denial) return denial;
+        }
+        let guestOsUser: string | undefined;
+        let lookupFailed = false;
+        try { guestOsUser = context.identity ? await lookupOsUser(context.identity) : undefined; }
+        catch (error) {
+          lookupFailed = true;
+          warn(`[taiwei] OS account lookup failed for guest ${context.identity ?? '<unknown>'}; bash is using the current process user: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        if (guestOsUser && isRoot()) {
+          if (context.authorizeCommand && !await context.authorizeCommand(command, cwd)) {
+            return { error: '用户拒绝了该命令的执行', command, cwd };
+          }
+          const result = await executeFile('runuser', ['-u', guestOsUser, '--', '/bin/bash', '-lc', command], {
+            cwd, signal: context.signal, timeout: Number(args.timeout_ms ?? 120_000), maxBuffer: 10 * 1024 * 1024,
+          });
+          return { stdout: result.stdout, stderr: result.stderr };
+        }
+        if (!lookupFailed) warn(guestOsUser
+            ? `[taiwei] gateway is not running as root; guest bash for ${guestOsUser} is using the current process user`
+            : `[taiwei] no OS account mapping found for guest ${context.identity ?? '<unknown>'}; bash is using the current process user`);
+      } else if (configuredCwd) {
+        try { await resolveInWorkspace(cwd, context.workspaceRoot ?? context.cwd); }
+        catch { console.warn(`[taiwei] bash defaultCwd is outside the workspace (${cwd}); command execution is not jailed`); }
+      }
+      if (context.authorizeCommand && !await context.authorizeCommand(command, cwd)) {
+        return { error: '用户拒绝了该命令的执行', command, cwd };
+      }
+      const result = await executeFile(process.env.SHELL || '/bin/sh', ['-lc', String(args.command)], {
+        cwd,
+        signal: context.signal,
+        timeout: Number(args.timeout_ms ?? 120_000),
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      return { stdout: result.stdout, stderr: result.stderr };
+    },
+  };
+}
+
+export const bashTool: ToolSpec = createBashTool();
