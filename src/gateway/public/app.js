@@ -230,9 +230,53 @@ function containsMedia(result) {
   if (result === undefined || result === null) return false;
   const text = String(result);
   return /!\[[^\]]*\]\(https?:\/\/[^)\s]+\)/i.test(text)
+    || /!\[[^\]]*\]\(data:image\//i.test(text)
     || /<img\b/i.test(text)
     || /\.(?:mp4|webm|mov)(?:\?[^\s<]*)?$/i.test(text)
     || /https?:\/\/[^\s<>"']+\.(?:mp4|webm|mov)(?:\?[^\s<>"']*)?(?=[\s<>"')]|$)/i.test(text);
+}
+
+const MEDIA_GENERATION_TOOLS = new Set(['generate_image', 'generate_video']);
+
+function isVideoMediaUrl(url) {
+  return /\.(?:mp4|webm|mov)(?:\?[^\s<]*)?$/i.test(url)
+    || /\/video\//i.test(url)
+    || /^https?:\/\/(?:video[.-]|[^/]*[.-]video[.-])/i.test(url);
+}
+
+function mediaUrlsFromResult(result) {
+  const source = String(result ?? '');
+  const urls = [];
+  const add = (url) => { if (url && !urls.includes(url)) urls.push(url); };
+  for (const match of source.matchAll(/!\[[^\]]*\]\((data:image\/[^;)\s]+;base64,[^)\s]+|https?:\/\/[^)\s]+)\)/gi)) add(match[1]);
+  for (const match of source.matchAll(/\[[^\]]+\]\((https?:\/\/[^)\s]+)\)/gi)) {
+    if (isVideoMediaUrl(match[1])) add(match[1]);
+  }
+  for (const match of source.matchAll(/https?:\/\/[^\s<>"']+\.(?:mp4|webm|mov)(?:\?[^\s<>"']*)?/gi)) add(match[0]);
+  return urls;
+}
+
+function removeMediaReferences(source, urls) {
+  if (!urls.length) return String(source ?? '');
+  const generated = new Set(urls);
+  let output = String(source ?? '')
+    .replace(/!\[([^\]]*)\]\((data:image\/[^;)\s]+;base64,[^)\s]+|https?:\/\/[^)\s]+)\)/gi, (markdown, _label, url) => generated.has(url) ? '' : markdown)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi, (markdown, _label, url) => generated.has(url) ? '' : markdown);
+  for (const url of urls) output = output.split(url).join('');
+  return output.replace(/^[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function generatedMediaUrls(toolCalls = []) {
+  const urls = [];
+  for (const call of toolCalls) {
+    if (!MEDIA_GENERATION_TOOLS.has(call.name) || call.result === undefined) continue;
+    for (const url of mediaUrlsFromResult(call.result)) if (!urls.includes(url)) urls.push(url);
+  }
+  return urls;
+}
+
+function renderAssistantMarkdown(source, toolCalls = []) {
+  return renderMarkdown(removeMediaReferences(source, generatedMediaUrls(toolCalls)));
 }
 
 function inlineMarkdown(value) {
@@ -242,19 +286,16 @@ function inlineMarkdown(value) {
     media.push(html);
     return `\u0000MEDIA${media.length - 1}\u0000`;
   };
-  const isVideoUrl = (url) => /\.(?:mp4|webm|mov)(?:\?[^\s<]*)?$/i.test(url)
-    || /\/video\//i.test(url)
-    || /^https?:\/\/(?:video[.-]|[^/]*[.-]video[.-])/i.test(url);
   let output = value.replace(/`([^`\n]+)`/g, (_, content) => {
     code.push(`<code>${content}</code>`);
     return `\u0000INLINE${code.length - 1}\u0000`;
   });
   output = output
-    .replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, (_, alt, url) => keepMedia(`<img src="${url}" alt="${alt}" loading="lazy" style="max-width:100%;border-radius:8px;">`))
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, (_, label, url) => isVideoUrl(url)
+    .replace(/!\[([^\]]*)\]\((data:image\/[^;)\s]+;base64,[^)\s]+|https?:\/\/[^)\s]+)\)/g, (_, alt, url) => keepMedia(`<img src="${url}" alt="${alt}" loading="lazy" style="max-width:100%;border-radius:8px;">`))
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, (_, label, url) => isVideoMediaUrl(url)
       ? keepMedia(`<video src="${url}" controls style="max-width:100%;border-radius:8px;" aria-label="${label}"></video>`)
       : keepMedia(`<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`))
-    .replace(/(^|[^\w"'>])(https?:\/\/[^\s<]+)/g, (_, prefix, url) => prefix + (isVideoUrl(url)
+    .replace(/(^|[^\w"'>])(https?:\/\/[^\s<]+)/g, (_, prefix, url) => prefix + (isVideoMediaUrl(url)
       ? keepMedia(`<video src="${url}" controls style="max-width:100%;border-radius:8px;"></video>`)
       : keepMedia(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`)))
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -298,7 +339,7 @@ function renderMarkdown(source) {
     }
     closeList();
     const trimmedLine = line.trim();
-    if (/^!\[[^\]]*\]\(https?:\/\/[^)\s]+\)$/.test(trimmedLine)) {
+    if (/^!\[[^\]]*\]\((?:data:image\/[^;)\s]+;base64,[^)\s]+|https?:\/\/[^)\s]+)\)$/.test(trimmedLine)) {
       imageLines.push(trimmedLine);
       continue;
     }
@@ -1370,7 +1411,7 @@ function renderTools(container, calls = []) {
     label.textContent = `🔧 ${call.name} ${preview.length > 70 ? `${preview.slice(0, 70)}…` : preview}`;
     const detail = document.createElement('div');
     detail.className = 'tool-detail';
-    renderToolDetail(detail, call.args, call.result);
+    renderToolDetail(detail, call.args, call.result, call.name);
     if (call.result !== undefined && containsMedia(call.result)) details.open = true;
     summary.append(dot, label);
     details.append(summary, detail);
@@ -1380,7 +1421,7 @@ function renderTools(container, calls = []) {
   return list;
 }
 
-function renderToolDetail(detail, args, result) {
+function renderToolDetail(detail, args, result, toolName = '') {
   const argsBlock = document.createElement('pre');
   argsBlock.className = 'tool-args';
   argsBlock.textContent = JSON.stringify(args || {}, null, 2);
@@ -1397,7 +1438,22 @@ function renderToolDetail(detail, args, result) {
   label.textContent = '结果';
   const output = document.createElement('div');
   output.className = 'tool-result';
-  output.innerHTML = renderMarkdown(String(result));
+  const mediaUrls = MEDIA_GENERATION_TOOLS.has(toolName) ? mediaUrlsFromResult(result) : [];
+  output.innerHTML = renderMarkdown(removeMediaReferences(result, mediaUrls));
+  if (mediaUrls.length) {
+    const gallery = document.createElement('div');
+    gallery.className = `media-grid ${mediaUrls.length <= 4 ? `media-grid-${mediaUrls.length}` : 'media-grid-many'}`;
+    for (const url of mediaUrls) {
+      const media = document.createElement(isVideoMediaUrl(url) ? 'video' : 'img');
+      media.src = url;
+      media.style.maxWidth = '100%';
+      media.style.borderRadius = '8px';
+      if (media.tagName === 'VIDEO') media.controls = true;
+      else { media.alt = '生成的图片'; media.loading = 'lazy'; }
+      gallery.append(media);
+    }
+    output.append(gallery);
+  }
   detail.append(label, output);
 }
 
@@ -1442,7 +1498,7 @@ function addMessage(message, options = {}) {
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   if (message.role === 'assistant') {
-    bubble.innerHTML = renderMarkdown(message.content || '');
+    bubble.innerHTML = renderAssistantMarkdown(message.content || '', message.toolCalls);
   } else if (message.attachments?.length) {
     bubble.append(renderMessageAttachments(message.attachments));
     const textDiv = document.createElement('div');
@@ -1482,7 +1538,7 @@ function addMessage(message, options = {}) {
 
 function updateAssistant(view, content, streaming = true) {
   view.message.content = content;
-  view.bubble.innerHTML = renderMarkdown(content);
+  view.bubble.innerHTML = renderAssistantMarkdown(content, view.message.toolCalls);
   if (streaming) {
     const caret = document.createElement('span');
     caret.className = 'streaming-caret';
@@ -2073,7 +2129,7 @@ async function submit(message, files = []) {
           if (target) {
             target.call.result = item.data.result;
             target.details.classList.add('done');
-            renderToolDetail(target.details.querySelector('.tool-detail'), target.call.args, item.data.result);
+            renderToolDetail(target.details.querySelector('.tool-detail'), target.call.args, item.data.result, target.call.name);
             if (containsMedia(item.data.result)) target.details.open = true;
           }
         } else if (item.event === 'confirm') {
