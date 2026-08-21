@@ -79,7 +79,7 @@ export const imageGenTool: ToolSpec = {
     type: 'object',
     properties: {
       prompt: { type: 'string', description: '要生成的图片内容描述。' },
-      model: { type: 'string', enum: ['agnes-image-2.1-flash', 'image-free'], default: 'agnes-image-2.1-flash' },
+      model: { type: 'string', enum: ['image-free'], default: 'image-free' },
       size: { type: 'string', default: '1024x1024' },
       n: { type: 'integer', description: '生成图片数量（最多 4 张），多张会依次生成。', default: 1, minimum: 1, maximum: 4 },
       quality: { type: 'string', enum: ['standard', 'hd'], description: '图片质量，hd 更清晰。', default: 'standard' },
@@ -101,7 +101,7 @@ export const imageGenTool: ToolSpec = {
       for (let index = 0; index < count; index += 1) {
         const requestPrompt = count > 1 && !referenceImage ? `${prompt}, variation ${index + 1}` : prompt;
         const payload: Record<string, unknown> = {
-          model: argumentString(args.model, 'agnes-image-2.1-flash'),
+          model: argumentString(args.model, 'image-free'),
           prompt: requestPrompt,
           n: 1,
           size: argumentString(args.size, '1024x1024'),
@@ -227,7 +227,7 @@ export const videoGenTool: ToolSpec = {
     type: 'object',
     properties: {
       prompt: { type: 'string', description: '要生成的视频内容描述。' },
-      model: { type: 'string', enum: ['agnes-video-v2.0', 'free-video'], default: 'agnes-video-v2.0' },
+      model: { type: 'string', enum: ['video-free'], default: 'video-free' },
       duration: { type: 'number', description: '视频时长（秒），会限制在 1 到 15 秒。', default: 10, minimum: 1, maximum: 15 },
       size: { type: 'string', description: '480p、720p、1080p、4k 或 WxH。', default: '720p' },
       quality: { type: 'string', enum: ['low', 'medium', 'high'], description: '视频质量别名：low→480p、medium→720p、high→1080p；同时提供 size 时以 size 为准。', default: 'medium' },
@@ -247,7 +247,7 @@ export const videoGenTool: ToolSpec = {
       const imageError = validateReferenceImage(referenceImage);
       if (imageError) return `视频生成失败: ${imageError}`;
       const body = await postMedia('/videos', {
-        model: argumentString(args.model, 'agnes-video-v2.0'),
+        model: argumentString(args.model, 'video-free'),
         prompt,
         duration: clampDuration(args.duration === undefined ? 10 : args.duration),
         size: requestedSize || qualitySizes[quality] || '720p',
