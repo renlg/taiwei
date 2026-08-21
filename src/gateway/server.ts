@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { ChatBridge } from './chat.js';
 import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
 import { LoginLockStore, type LoginLock } from './login-locks.js';
-import { SessionStore, type SessionAttachment, type SessionMessage, type SessionToolCall, type SessionUsage } from './sessions.js';
+import { SessionStore, type SessionAttachment, type SessionIdentity, type SessionMessage, type SessionToolCall, type SessionUsage } from './sessions.js';
 import { FolderStore, guestFolderName, workspaceFolderMetadata } from './folders.js';
 import { openSse, sendSse } from './sse.js';
 import { getCurrentModel, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
@@ -569,6 +569,25 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const tenantAccounts: TenantAccountService | false = options.tenantAccounts ?? new TenantAccountService(
     () => configState.load(), new TenantAccountStore(taiweiPaths.historyDb),
   );
+  const sessionIdentity = async (role: 'admin' | 'guest', username: string): Promise<SessionIdentity> => {
+    if (role === 'admin') return { role, username: 'admin' };
+    const identity: SessionIdentity = { role, username };
+    if (!tenantAccounts) return identity;
+    try {
+      const account = await tenantAccounts.store.getByUsername(username);
+      if (!account) return identity;
+      return {
+        ...identity,
+        accountName: account.accountName,
+        osUsername: account.osUsername,
+        giteaUsername: account.giteaUsername,
+        giteaOrgName: account.giteaOrgName,
+      };
+    } catch (error) {
+      log(`[taiwei] tenant identity snapshot unavailable for ${username}: ${error instanceof Error ? error.message : String(error)}`);
+      return identity;
+    }
+  };
   const guestWorkspaceCache = new Map<string, Promise<string>>();
   let mcpInitialized = false;
   const buildKnowledgeIndex = options.buildKnowledgeIndex ?? (async () => buildIndex(createEmbedder(await configState.load())));
@@ -789,6 +808,11 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       const activeSessions = guestId
         ? new SessionStore(join(taiweiPaths.guests, guestId, 'sessions'))
         : sessions;
+      const requestIdentityUsername = authenticatedRole === 'admin'
+        ? 'admin'
+        : authenticatedToken
+          ? authenticatedUsername ?? guestId ?? 'guest'
+          : guestId ?? authenticatedUsername ?? 'guest';
       const folderIdentity = { role: authenticatedRole, ...(guestId ? { guestId } : {}), ...(authenticatedUsername ? { username: authenticatedUsername } : {}), config: accessConfig };
       const legacyGuestWorkspace = guestId ? join(taiweiPaths.guests, guestId, 'workspace') : undefined;
       const guestFoldersFile = guestId ? join(taiweiPaths.guests, guestId, 'folders.json') : undefined;
@@ -1351,10 +1375,18 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         } else if (body.provider !== undefined) throw new HttpError(400, 'provider requires model');
         const existing = await activeSessions.findBlankSession(folder.id);
         if (existing) {
+          if (!existing.identity || existing.identity.role !== authenticatedRole || existing.identity.username !== requestIdentityUsername) {
+            existing.identity = await sessionIdentity(authenticatedRole, requestIdentityUsername);
+            existing.updatedAt = new Date().toISOString();
+            await activeSessions.save(existing);
+          }
           json(response, 200, existing);
           return;
         }
-        json(response, 201, await activeSessions.create('build', folder.id, model, provider));
+        json(response, 201, await activeSessions.create(
+          'build', folder.id, model, provider,
+          await sessionIdentity(authenticatedRole, requestIdentityUsername),
+        ));
         return;
       }
       if (method === 'GET' && pathname === '/api/folders') {
@@ -1470,11 +1502,21 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         }
         const session = typeof body.sessionId === 'string'
           ? await activeSessions.get(body.sessionId)
-          : await activeSessions.create('build', (await activeFolders.defaultFolder()).id);
+          : await activeSessions.create(
+              'build', (await activeFolders.defaultFolder()).id, undefined, undefined,
+              await sessionIdentity(authenticatedRole, requestIdentityUsername),
+            );
         if (!session) {
           json(response, 404, { error: 'Session not found' });
           return;
         }
+        if (session.identity
+          && (session.identity.role !== authenticatedRole || session.identity.username !== requestIdentityUsername)) {
+          json(response, 403, { error: 'forbidden' });
+          return;
+        }
+        const chatRole = session.identity?.role ?? authenticatedRole;
+        const chatIdentity = session.identity?.username ?? authenticatedUsername ?? authenticatedRole;
         const message = body.message.trim();
         const config = await configState.load();
         const sessionFolder = session.folderId ? await activeFolders.get(session.folderId) : undefined;
@@ -1609,7 +1651,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             sendSse(response, 'confirm', request);
             return confirmations.wait(request);
           },
-        }, history, session.id, turnMemory, session.agentId ?? 'build', authenticatedRole, authenticatedUsername ?? authenticatedRole, runtimeSessionId, session.providerId, session.currentModel, workspace, userContent);
+        }, history, session.id, turnMemory, session.agentId ?? 'build', chatRole, chatIdentity, runtimeSessionId, session.providerId, session.currentModel, workspace, userContent);
         if (pendingSaveTimer) { clearTimeout(pendingSaveTimer); pendingSaveTimer = undefined; }
         pendingTurns.delete(runtimeSessionId);
         stopRequested.delete(runtimeSessionId);

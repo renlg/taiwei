@@ -35,6 +35,15 @@ export interface SessionUsage {
   compressed?: boolean;
 }
 
+export interface SessionIdentity {
+  role: 'admin' | 'guest';
+  username: string;
+  accountName?: string;
+  osUsername?: string;
+  giteaUsername?: string;
+  giteaOrgName?: string;
+}
+
 export interface GatewaySession {
   id: string;
   title: string;
@@ -48,6 +57,7 @@ export interface GatewaySession {
   providerId?: string;
   currentModel?: string;
   folderId?: string;
+  identity?: SessionIdentity;
 }
 
 export interface SessionSummary {
@@ -67,11 +77,12 @@ export class SessionStore {
 
   async initialize(): Promise<void> { await mkdir(this.directory, { recursive: true }); }
 
-  async create(agentId = 'build', folderId?: string, currentModel?: string, providerId?: string): Promise<GatewaySession> {
+  async create(agentId = 'build', folderId?: string, currentModel?: string, providerId?: string, identity?: SessionIdentity): Promise<GatewaySession> {
     const now = new Date().toISOString();
     const session: GatewaySession = {
       id: randomUUID(), title: '新会话', createdAt: now, updatedAt: now, messages: [], agentId,
       ...(folderId ? { folderId } : {}), ...(currentModel ? { currentModel } : {}), ...(providerId ? { providerId } : {}),
+      ...(identity ? { identity } : {}),
     };
     await this.save(session);
     return session;
