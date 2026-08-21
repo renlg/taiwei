@@ -53,6 +53,7 @@ export interface GatewaySession {
 export interface SessionSummary {
   id: string;
   title: string;
+  createdAt: string;
   updatedAt: string;
   messageCount: number;
   folderId?: string;
@@ -93,13 +94,14 @@ export class SessionStore {
         return {
           id: session.id,
           title: session.title,
+          createdAt: session.createdAt,
           updatedAt: session.updatedAt,
           messageCount: session.messages.length,
           ...(session.folderId ? { folderId: session.folderId } : {}),
           ...(running ? { running: true } : {}),
         };
       })
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   async findBlankSession(folderId: string): Promise<GatewaySession | undefined> {
