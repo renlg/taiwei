@@ -2,7 +2,7 @@ import type { AgentContext } from './context.js';
 import { resolveCompressThreshold, resolveContextWindow, type TaiweiConfig } from '../config/config.js';
 import { messageText, streamChat, type ChatMessage, type ContentBlock, type TokenUsage } from '../llm/client.js';
 import { toOpenAITool } from '../llm/tools.js';
-import type { ToolRegistry } from '../tools/registry.js';
+import type { TenantIdentity, ToolRegistry } from '../tools/registry.js';
 import type { ConfirmationHandler } from '../security/commands.js';
 import type { HookRunner } from '../hooks/runner.js';
 import { MemoryStore } from '../memory/store.js';
@@ -30,6 +30,7 @@ export interface RunTurnOptions {
   delegationDepth?: number;
   role?: 'admin' | 'guest';
   identity?: string;
+  tenantIdentity?: TenantIdentity;
   workspaceRoot?: string;
   runId?: string;
   policy?: PolicyEngine;
@@ -284,6 +285,7 @@ export async function runAgentTurn(
         delegationDepth: options.delegationDepth ?? 0,
         role: options.role,
         identity: options.identity,
+        tenantIdentity: options.tenantIdentity,
         workspaceRoot: options.workspaceRoot ?? cwd,
         runId,
         policy: options.policy,

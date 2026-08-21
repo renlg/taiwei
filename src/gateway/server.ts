@@ -1651,7 +1651,12 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             sendSse(response, 'confirm', request);
             return confirmations.wait(request);
           },
-        }, history, session.id, turnMemory, session.agentId ?? 'build', chatRole, chatIdentity, runtimeSessionId, session.providerId, session.currentModel, workspace, userContent);
+        }, history, session.id, turnMemory, session.agentId ?? 'build', chatRole, chatIdentity, runtimeSessionId, session.providerId, session.currentModel, workspace, userContent,
+        session.identity ? {
+          osUsername: session.identity.osUsername,
+          giteaUsername: session.identity.giteaUsername,
+          giteaOrgName: session.identity.giteaOrgName,
+        } : undefined);
         if (pendingSaveTimer) { clearTimeout(pendingSaveTimer); pendingSaveTimer = undefined; }
         pendingTurns.delete(runtimeSessionId);
         stopRequested.delete(runtimeSessionId);

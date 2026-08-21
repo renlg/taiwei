@@ -21,6 +21,12 @@ export interface ToolConfigField {
 
 export type ToolConfigSchema = Record<string, ToolConfigField>;
 
+export interface TenantIdentity {
+  osUsername?: string;
+  giteaUsername?: string;
+  giteaOrgName?: string;
+}
+
 export interface ToolContext {
   signal?: AbortSignal;
   cwd: string;
@@ -35,6 +41,8 @@ export interface ToolContext {
   delegationDepth?: number;
   role?: 'admin' | 'guest';
   identity?: string;
+  /** 会话落盘的用户账号快照（来自 session.identity，不含密钥）；工具应以此为准，不实时查库。 */
+  tenantIdentity?: TenantIdentity;
   workspaceRoot?: string;
   runId?: string;
   policy?: PolicyEngine;

@@ -23,7 +23,7 @@ import { searchTool } from './tools/impl/search.js';
 import { createLoadSkillTool } from './tools/impl/skill.js';
 import { writeTool } from './tools/impl/write.js';
 import { editTool } from './tools/impl/edit.js';
-import { ToolRegistry } from './tools/registry.js';
+import { ToolRegistry, type TenantIdentity } from './tools/registry.js';
 import { CommandSecurity, type ConfirmationHandler } from './security/commands.js';
 import { HookRunner } from './hooks/runner.js';
 import { historyTools } from './tools/impl/history.js';
@@ -76,7 +76,7 @@ export class TaiweiApp {
     if (options.scheduler !== false) { await this.scheduler.start(); console.log(`[taiwei] Scheduler started (${(await this.cronJobs.list()).filter((job) => job.enabled).length} enabled jobs)`); }
   }
 
-  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string; providerId?: string; model?: string; workspaceRoot?: string; userContent?: ContentBlock[] } = {}): Promise<string> {
+  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string; tenantIdentity?: TenantIdentity; providerId?: string; model?: string; workspaceRoot?: string; userContent?: ContentBlock[] } = {}): Promise<string> {
     const runtimeSessionId = options.runtimeSessionId ?? options.sessionId ?? 'local';
     return this.runtime.run(runtimeSessionId, async (runtimeSignal) => {
       const localSignal = options.sessionId ? undefined : this.interrupt.beginTurn();
@@ -107,7 +107,7 @@ export class TaiweiApp {
           sessionId: options.sessionId,
           agentProfile: profile,
           delegationDepth: options.delegationDepth,
-          role: options.role ?? 'admin', identity: options.identity ?? options.role ?? 'admin',
+          role: options.role ?? 'admin', identity: options.identity ?? options.role ?? 'admin', tenantIdentity: options.tenantIdentity,
           workspaceRoot: cwd, policy: new PolicyEngine(this.config.policy),
           userContent: options.userContent,
         });

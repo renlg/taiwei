@@ -308,44 +308,55 @@ export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpe
           if (denial) return denial;
         }
         let guestOsUser: string | undefined;
-        try { guestOsUser = context.identity ? await lookupOsUser(context.identity) : undefined; }
-        catch (error) {
-          warn(`[taiwei] OS account lookup failed for guest ${context.identity}: ${error instanceof Error ? error.message : String(error)}`);
-          return { error: `${GUEST_DENIAL}：无法解析当前用户的系统账号，禁止执行命令`, command, cwd };
+        if (context.tenantIdentity !== undefined) {
+          guestOsUser = context.tenantIdentity.osUsername?.trim() || undefined;
+          if (!guestOsUser) return { error: `${GUEST_DENIAL}：无法解析当前用户的系统账号，禁止执行命令`, command, cwd };
+        } else {
+          try { guestOsUser = await lookupOsUser(context.identity); }
+          catch (error) {
+            warn(`[taiwei] OS account lookup failed for guest ${context.identity}: ${error instanceof Error ? error.message : String(error)}`);
+            return { error: `${GUEST_DENIAL}：无法解析当前用户的系统账号，禁止执行命令`, command, cwd };
+          }
         }
         if (!guestOsUser) return { error: `${GUEST_DENIAL}：当前用户没有可用的系统账号，禁止执行命令`, command, cwd };
         if (!isRoot()) return { error: `${GUEST_DENIAL}：网关无法切换到 ${guestOsUser}，禁止以网关账号执行 guest 命令`, command, cwd };
+        const giteaIdentity = context.tenantIdentity !== undefined
+          ? context.tenantIdentity.giteaUsername?.trim()
+          : context.identity;
+        const lookupSessionGiteaToken = async (_username: string): Promise<string | undefined> => (
+          giteaIdentity ? lookupGiteaToken(giteaIdentity) : undefined
+        );
         let giteaBaseUrl: string | undefined;
         try { giteaBaseUrl = await lookupGiteaBaseUrl(); }
         catch { giteaBaseUrl = undefined; }
         const scripts = context.workspaceRoot ? await guestScriptContents(command, cwd, context.workspaceRoot) : [];
         for (const script of scripts) {
           const normalizedScript = script.replace(/\\\r?\n/g, '');
-          const scriptGit = await enforceGuestGit(normalizedScript, context.identity, guestOsUser, cwd, lookupGiteaToken, false);
+          const scriptGit = await enforceGuestGit(normalizedScript, giteaIdentity ?? context.identity, guestOsUser, cwd, lookupSessionGiteaToken, false);
           if ('error' in scriptGit) return { error: scriptGit.error, command, cwd };
-          const scriptCurl = await enforceGuestCurl(normalizedScript, context.identity, guestOsUser, lookupGiteaToken, giteaBaseUrl, false);
+          const scriptCurl = await enforceGuestCurl(normalizedScript, giteaIdentity ?? context.identity, guestOsUser, lookupSessionGiteaToken, giteaBaseUrl, false);
           if ('error' in scriptCurl) return { error: scriptCurl.error, command, cwd };
           for (const line of script.split('\n')) {
             if (!line.trim() || line.startsWith('#!')) continue;
             const denial = await constrainGuestBash(line, cwd, context.workspaceRoot);
             if (denial) return { ...denial, error: `${denial.error}（脚本内容）` };
-            const git = await enforceGuestGit(line, context.identity, guestOsUser, cwd, lookupGiteaToken, false);
+            const git = await enforceGuestGit(line, giteaIdentity ?? context.identity, guestOsUser, cwd, lookupSessionGiteaToken, false);
             if ('error' in git) return { error: git.error, command, cwd };
-            const curl = await enforceGuestCurl(line, context.identity, guestOsUser, lookupGiteaToken, giteaBaseUrl, false);
+            const curl = await enforceGuestCurl(line, giteaIdentity ?? context.identity, guestOsUser, lookupSessionGiteaToken, giteaBaseUrl, false);
             if ('error' in curl) return { error: curl.error, command, cwd };
           }
         }
-        const git = await enforceGuestGit(command, context.identity, guestOsUser, cwd, lookupGiteaToken);
+        const git = await enforceGuestGit(command, giteaIdentity ?? context.identity, guestOsUser, cwd, lookupSessionGiteaToken);
         if ('error' in git) return { error: git.error, command, cwd };
         command = git.command;
-        const curl = await enforceGuestCurl(command, context.identity, guestOsUser, lookupGiteaToken, giteaBaseUrl);
+        const curl = await enforceGuestCurl(command, giteaIdentity ?? context.identity, guestOsUser, lookupSessionGiteaToken, giteaBaseUrl);
         if ('error' in curl) return { error: curl.error, command, cwd };
         command = curl.command;
         if (context.authorizeCommand && !await context.authorizeCommand(command, cwd)) {
           return { error: '用户拒绝了该命令的执行', command, cwd };
         }
         const token = /\b(?:git\s+(?:push|clone|fetch|pull)|curl\b)/i.test(`${command}\n${scripts.join('\n')}`)
-          ? await lookupGiteaToken(context.identity)
+          ? await lookupSessionGiteaToken(giteaIdentity ?? context.identity)
           : undefined;
         const result = await executeFile('runuser', ['-u', guestOsUser, '--preserve-environment', '--', '/bin/bash', '-lc', command], {
           cwd, signal: context.signal, timeout: Number(args.timeout_ms ?? 120_000), maxBuffer: 10 * 1024 * 1024,
