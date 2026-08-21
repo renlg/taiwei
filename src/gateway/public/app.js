@@ -2057,6 +2057,14 @@ function cancelCurrentStream() {
   setStatus('idle', '就绪');
 }
 
+function isCurrentSession(sessionId) {
+  return state.current?.id === sessionId;
+}
+
+function ownsCurrentStream(sessionId, controller) {
+  return isCurrentSession(sessionId) && state.controller === controller;
+}
+
 async function loadSession(id) {
   const version = ++state.loadVersion;
   try {
@@ -2084,7 +2092,8 @@ async function loadSession(id) {
 
 async function reconnectPending(sessionId, pendingMessage) {
   if (state.controller) return;
-  state.controller = new AbortController();
+  const controller = new AbortController();
+  state.controller = controller;
   setStreaming(true);
   setStatus('streaming', '重新连接中');
   const messageRows = elements.messages.querySelectorAll('.message-row');
@@ -2106,12 +2115,14 @@ async function reconnectPending(sessionId, pendingMessage) {
   if (answerView) updateAssistant(answerView, lastContent);
   try {
     for (;;) {
-      if (state.controller.signal.aborted) break;
+      if (controller.signal.aborted || !ownsCurrentStream(sessionId, controller)) break;
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      if (state.controller.signal.aborted) break;
+      if (controller.signal.aborted || !ownsCurrentStream(sessionId, controller)) break;
       const pending = await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}/pending`);
+      if (!ownsCurrentStream(sessionId, controller)) break;
       if (!pending.running) {
         const fresh = await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
+        if (!ownsCurrentStream(sessionId, controller)) break;
         state.current = fresh;
         renderConversation(fresh);
         state.usage = fresh.usage ?? state.usage;
@@ -2129,19 +2140,23 @@ async function reconnectPending(sessionId, pendingMessage) {
       }
     }
   } catch (error) {
-    if (error.name !== 'AbortError') showToast(`重连失败：${error.message}`);
+    if (error.name !== 'AbortError' && ownsCurrentStream(sessionId, controller)) showToast(`重连失败：${error.message}`);
   } finally {
     try {
       const fresh = await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
-      state.current = fresh;
-      renderConversation(fresh);
-      state.usage = fresh.usage ?? state.usage;
-      renderUsage();
+      if (ownsCurrentStream(sessionId, controller)) {
+        state.current = fresh;
+        renderConversation(fresh);
+        state.usage = fresh.usage ?? state.usage;
+        renderUsage();
+      }
     } catch {}
-    state.controller = null;
-    setStreaming(false);
-    setStatus('idle', '就绪');
-    elements.input.focus();
+    if (state.controller === controller) {
+      state.controller = null;
+      setStreaming(false);
+      setStatus('idle', '就绪');
+      elements.input.focus();
+    }
   }
 }
 
@@ -2197,6 +2212,7 @@ function parseEvent(block) {
 async function submit(message, files = []) {
   if (state.controller) return;
   if (!state.current && !await createSession()) return;
+  const sessionId = state.current.id;
   const userAttachments = files.filter((f) => f.path || f.url).map((f) => ({
     name: f.name,
     url: f.url || f.path,
@@ -2221,7 +2237,8 @@ async function submit(message, files = []) {
     }
     compressionView = null;
   };
-  state.controller = new AbortController();
+  const controller = new AbortController();
+  state.controller = controller;
   setStreaming(true);
   try {
     const response = await authenticatedFetch('/api/chat', {
@@ -2229,14 +2246,14 @@ async function submit(message, files = []) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         message,
-        sessionId: state.current.id,
+        sessionId,
         files: files.map(({ name, path, url, size, type, content, contentTruncated }) => ({
           name, path, ...(url ? { url } : {}), size, type,
           ...(content !== undefined ? { content } : {}),
           ...(contentTruncated !== undefined ? { contentTruncated } : {}),
         })),
       }),
-      signal: state.controller.signal,
+      signal: controller.signal,
     });
     if (!response.ok || !response.body) {
       let detail = `请求失败 (${response.status})`;
@@ -2255,6 +2272,7 @@ async function submit(message, files = []) {
       for (const block of blocks) {
         const item = parseEvent(block);
         if (!item) continue;
+        if (!ownsCurrentStream(sessionId, controller)) continue;
         if (item.event === 'token') {
           clearPendingCompression();
           const text = item.data.text || '';
@@ -2321,12 +2339,12 @@ async function submit(message, files = []) {
           const finalAnswer = item.data.text || answer;
           if (!answer && finalAnswer) segmentText = finalAnswer;
           answer = finalAnswer;
-          if (item.data.sessionId) state.current.id = item.data.sessionId;
           finalizeAssistant(answerView, segmentText);
         } else if (item.event === 'error') serverError = item.data.message || '未知错误';
       }
       if (done) break;
     }
+    if (!ownsCurrentStream(sessionId, controller)) return;
     if (serverError) {
       if (!segmentText && !answerView.stack.querySelector('.tool-list')) answerView.row.remove();
       else finalizeAssistant(answerView, segmentText);
@@ -2337,6 +2355,7 @@ async function submit(message, files = []) {
       setStatus('idle', '就绪');
     }
   } catch (error) {
+    if (!ownsCurrentStream(sessionId, controller)) return;
     if (error.name === 'AbortError') {
       finalizeAssistant(answerView, segmentText);
       const stopped = document.createElement('div');
@@ -2351,14 +2370,17 @@ async function submit(message, files = []) {
       setStatus('error', '连接失败');
     }
   } finally {
-    state.controller = null;
-    setStreaming(false);
-    elements.input.focus();
+    if (state.controller === controller) {
+      state.controller = null;
+      setStreaming(false);
+      elements.input.focus();
+    }
     setTimeout(async () => {
       try {
         await refreshSessions();
-        if (state.current) {
-          const fresh = await requestJson(`/api/sessions/${encodeURIComponent(state.current.id)}`);
+        if (isCurrentSession(sessionId)) {
+          const fresh = await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
+          if (!isCurrentSession(sessionId)) return;
           state.current = fresh;
           elements.title.textContent = fresh.title;
           state.usage = fresh.usage ?? state.usage;
