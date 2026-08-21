@@ -87,8 +87,30 @@ export class SessionStore {
       }));
     return sessions
       .filter((session): session is GatewaySession => Boolean(session))
-      .map(({ id, title, updatedAt, messages, folderId }) => ({ id, title, updatedAt, messageCount: messages.length, ...(folderId ? { folderId } : {}) }))
+      .map((session) => {
+        const last = session.messages.at(-1);
+        const running = last?.role === 'assistant' && last.status === 'pending';
+        return {
+          id: session.id,
+          title: session.title,
+          updatedAt: session.updatedAt,
+          messageCount: session.messages.length,
+          ...(session.folderId ? { folderId: session.folderId } : {}),
+          ...(running ? { running: true } : {}),
+        };
+      })
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async findBlankSession(folderId: string): Promise<GatewaySession | undefined> {
+    const summaries = await this.list();
+    for (const summary of summaries) {
+      if (summary.folderId !== folderId) continue;
+      if (summary.title !== '新会话') continue;
+      if (summary.messageCount !== 0) continue;
+      return this.get(summary.id);
+    }
+    return undefined;
   }
 
   async get(id: string): Promise<GatewaySession | undefined> {

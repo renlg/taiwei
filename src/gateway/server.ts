@@ -88,7 +88,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '48';
+const STATIC_ASSET_VERSION = '51';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -1349,6 +1349,11 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           const known = selectedProvider ? selectedProvider.models.some((item) => item.id === model) : listed.models.includes(model);
           if (!known && listed.source !== 'fallback') throw new HttpError(400, `Unknown model: ${model}`);
         } else if (body.provider !== undefined) throw new HttpError(400, 'provider requires model');
+        const existing = await activeSessions.findBlankSession(folder.id);
+        if (existing) {
+          json(response, 200, existing);
+          return;
+        }
         json(response, 201, await activeSessions.create('build', folder.id, model, provider));
         return;
       }
