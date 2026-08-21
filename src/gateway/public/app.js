@@ -1275,7 +1275,27 @@ async function rejectPendingConfirmations() {
 
 async function copyText(text, button) {
   try {
-    await navigator.clipboard.writeText(text);
+    let copied = false;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      } catch {}
+    }
+    if (!copied) {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      try {
+        textarea.select();
+        copied = document.execCommand('copy');
+      } finally {
+        textarea.remove();
+      }
+      if (!copied) throw new Error('Copy command failed');
+    }
     if (button) { const previous = button.textContent; button.textContent = '已复制'; setTimeout(() => { button.textContent = previous; }, 1200); }
     showToast('已复制到剪贴板');
   } catch { showToast('复制失败，请手动选择'); }
