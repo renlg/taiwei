@@ -9,7 +9,11 @@ export class ProviderHttpError extends Error {
 }
 
 export function retryableProviderError(error: unknown): boolean {
-  if (error instanceof ProviderHttpError) return error.status === 429 || error.status >= 500;
+  if (error instanceof ProviderHttpError) {
+    if (error.status === 429 || error.status >= 500) return true;
+    if (error.status === 400 && /temporarily unavailable|temporarily overloaded|upstream.*(unavailable|error)|service.*unavailable|please try again later/i.test(error.message)) return true;
+    return false;
+  }
   if (error instanceof DOMException && error.name === 'AbortError') return false;
   return error instanceof TypeError || (error instanceof Error && /fetch|network|socket|ECONN|ETIMEDOUT/i.test(error.message));
 }
