@@ -20,7 +20,7 @@ import { ragSearchTool } from './tools/impl/rag.js';
 import { webSearchTool } from './tools/impl/websearch.js';
 import { readTool } from './tools/impl/read.js';
 import { searchTool } from './tools/impl/search.js';
-import { nginxAddProxyTool } from './tools/impl/nginx-add-proxy.js';
+import { createNginxAddProxyTool } from './tools/impl/nginx-add-proxy.js';
 import { createLoadSkillTool } from './tools/impl/skill.js';
 import { writeTool } from './tools/impl/write.js';
 import { editTool } from './tools/impl/edit.js';
@@ -66,6 +66,7 @@ export class TaiweiApp {
     await mkdir(workspace, { recursive: true });
     this.hooks = new HookRunner(this.config.hooks, this.config.hookTimeoutSeconds, workspace);
     this.delegation = new DelegationManager((request) => this.runChild(request), this.config.delegation.maxConcurrent, this.config.delegation.maxDepth);
+    const nginxAddProxyTool = createNginxAddProxyTool({ publicUrl: this.config.publicUrl });
     for (const tool of [bashTool, readTool, writeTool, editTool, searchTool, nginxAddProxyTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills), ...createMemoryTools(this.memory), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
     this.registry.register(createDelegateTool(this.delegation));
     // history.db is a rebuildable index. A missing/unsupported SQLite runtime must never block chat startup.

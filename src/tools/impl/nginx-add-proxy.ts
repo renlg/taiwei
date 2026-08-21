@@ -16,9 +16,11 @@ export interface NginxExecutorResult { stdout: string; stderr: string; exitCode:
 
 export interface NginxAddProxyDependencies {
   probeService?: (host: string, port: number, signal?: AbortSignal) => Promise<boolean>;
+  probePublicIp?: () => Promise<string | undefined>;
   readLocations?: () => Promise<string>;
   execute?: (file: string, args: string[], options: { shell: false; signal?: AbortSignal }) => Promise<NginxExecutorResult>;
   serverIp?: () => string | undefined;
+  publicUrl?: string;
   now?: () => Date;
   audit?: typeof appendAudit;
 }
@@ -78,6 +80,16 @@ function defaultServerIp(): string | undefined {
   return undefined;
 }
 
+async function defaultProbePublicIp(): Promise<string | undefined> {
+  try {
+    const response = await globalThis.fetch('https://api.ipify.org', { signal: AbortSignal.timeout(2_000) });
+    if (!response.ok) return undefined;
+    return (await response.text()).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseInternalAddr(value: unknown): { host: string; port: number } | undefined {
   if (typeof value !== 'string') return undefined;
   const match = /^([^:\s]+):(\d+)$/.exec(value);
@@ -101,6 +113,8 @@ export function createNginxAddProxyTool(dependencies: NginxAddProxyDependencies 
   const readLocations = dependencies.readLocations ?? defaultReadLocations;
   const execute = dependencies.execute ?? defaultExecute;
   const serverIp = dependencies.serverIp ?? defaultServerIp;
+  const probePublicIp = dependencies.probePublicIp ?? defaultProbePublicIp;
+  const configuredPublicUrl = (dependencies.publicUrl ?? '').trim();
   const now = dependencies.now ?? (() => new Date());
   const audit = dependencies.audit ?? appendAudit;
 
@@ -118,9 +132,9 @@ export function createNginxAddProxyTool(dependencies: NginxAddProxyDependencies 
     },
     async execute(args, context) {
       const internalAddr = args.internalAddr;
-      const path = args.path;
+      const path = typeof args.path === 'string' ? args.path : undefined;
       const parsedAddr = parseInternalAddr(internalAddr);
-      const parsedPath = typeof path === 'string' ? PROXY_PATH.exec(path) : null;
+      const parsedPath = path ? PROXY_PATH.exec(path) : null;
       const actor = context.identity ?? context.role ?? 'admin';
       const role = context.role ?? 'admin';
       const auditBase = {
@@ -132,7 +146,7 @@ export function createNginxAddProxyTool(dependencies: NginxAddProxyDependencies 
         await audit({ ...auditBase, outcome: ok ? 'success' : 'error', ...details, ...result, ok }).catch(() => {});
         return result;
       };
-      if (!parsedAddr || !parsedPath) return finish(usageError());
+      if (!parsedAddr || !parsedPath || !path) return finish(usageError());
 
       const ownerHash = parsedPath[1]!;
       const name = parsedPath[2]!;
@@ -143,8 +157,14 @@ export function createNginxAddProxyTool(dependencies: NginxAddProxyDependencies 
       }
 
       const locations = await readLocations();
-      const externalIp = serverIp();
-      const url = externalIp ? `http://${externalIp}${path}` : path;
+      let url: string;
+      if (configuredPublicUrl) {
+        url = configuredPublicUrl.replace(/\/+$/, '') + path;
+      } else {
+        const probed = await probePublicIp();
+        const externalIp = probed || serverIp();
+        url = externalIp ? `http://${externalIp}${path}` : path;
+      }
       if (locations.includes(`location ${path} {`)) {
         return finish({ ok: true, message: `反代已存在: ${path},无需重复配置`, alreadyExists: true, url }, details);
       }

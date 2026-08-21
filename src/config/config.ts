@@ -23,6 +23,8 @@ export interface TaiweiConfig {
   compressThreshold?: number;
   memoryFlush: boolean;
   baseUrl: string;
+  /** 对外访问地址，如 http://14.103.23.160，可选；nginx_add_proxy 优先使用。 */
+  publicUrl?: string;
   /** Legacy alias accepted on read. Prefer baseUrl or providers[].baseUrl. */
   apiBaseUrl?: string;
   apiKey: string;
@@ -94,6 +96,7 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   compressThreshold: 0.7,
   memoryFlush: true,
   baseUrl: 'https://api.openai.com/v1',
+  publicUrl: '',
   apiKey: '',
   providers: [],
   defaultProvider: 'default',
@@ -236,6 +239,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     },
     apiKey: stored.apiKey ?? DEFAULT_CONFIG.apiKey,
     baseUrl: legacyBaseUrl ?? DEFAULT_CONFIG.baseUrl,
+    publicUrl: storedConfig.publicUrl ?? DEFAULT_CONFIG.publicUrl,
     model: stored.model ?? DEFAULT_CONFIG.model,
     embedModel: stored.embedModel ?? DEFAULT_CONFIG.embedModel,
   };
@@ -306,6 +310,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       hooks: normalizeHooks(storedConfig.hooks),
       skillsDisabled: normalizeStringList(storedConfig.skillsDisabled),
       tools: normalizeToolSettings(storedConfig.tools),
+      publicUrl: storedConfig.publicUrl ?? DEFAULT_CONFIG.publicUrl,
       delegation: { ...DEFAULT_CONFIG.delegation, ...storedConfig.delegation },
       budget: { ...DEFAULT_CONFIG.budget, ...storedConfig.budget },
       retry: { ...DEFAULT_CONFIG.retry, ...storedConfig.retry },
