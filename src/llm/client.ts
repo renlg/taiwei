@@ -41,6 +41,7 @@ export interface ChatRequest {
   baseUrl: string;
   apiKey: string;
   model: string;
+  maxTokens?: number;
   messages: ChatMessage[];
   tools: OpenAIToolSchema[];
   signal?: AbortSignal;
@@ -84,6 +85,7 @@ async function streamChatOnce(request: ChatRequest, model: string): Promise<Chat
       model,
       messages: request.messages,
       tools: request.tools,
+      ...(request.maxTokens === undefined ? {} : { max_tokens: request.maxTokens }),
       stream: true,
       stream_options: { include_usage: true },
     }),
@@ -161,7 +163,9 @@ export async function openAICompatibleStream(request: ChatRequest): Promise<Chat
 }
 
 export async function streamChat(request: ChatRequest): Promise<ChatResult> {
-  if (!request.provider || request.provider.type === 'openai-compatible') return openAICompatibleStream(request);
+  if (!request.provider || request.provider.type === 'openai-compatible') {
+    return openAICompatibleStream({ ...request, maxTokens: request.maxTokens ?? 8192 });
+  }
   const { providerAdapter } = await import('./providers/index.js');
   return providerAdapter(request.provider.type).stream({
     provider: request.provider, model: request.model, messages: request.messages, tools: request.tools,
