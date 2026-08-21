@@ -194,6 +194,7 @@ export function guestRouteAllowed(method: string, pathname: string): boolean {
   if ((method === 'GET' || method === 'POST') && pathname === '/api/model') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/agents') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/agent') return true;
+  if (method === 'GET' && pathname === '/api/skills') return true;
   if (method === 'GET' && pathname === '/api/auth/gitea-user') return true;
   if (method === 'GET' && /^\/api\/sessions\/[^/]+\/pending$/.test(pathname)) return true;
   return (method === 'GET' || method === 'DELETE') && /^\/api\/sessions\/[^/]+$/.test(pathname);
