@@ -54,6 +54,8 @@ export class PolicyEngine {
       if (input.tool === 'delegate_task') return { effect: 'deny', rule: 'builtin.guest.no-delegation', explicit: false };
       // guest bash 放行：bash 工具会从 ToolContext 解析租户身份、切换 OS 用户，并检查内联及脚本内的文件/Git/Gitea 操作；映射或降权失败时拒绝执行。
       if (input.tool === 'bash') return { effect: 'allow', rule: 'builtin.guest.jailed-bash', explicit: false };
+      // path 是 nginx URL 而不是文件路径；该专用工具自行严格校验并直接执行固定脚本。
+      if (input.tool === 'nginx_add_proxy') return { effect: 'allow', rule: 'builtin.guest.nginx-add-proxy', explicit: false, allowExternalPath: true };
       if (input.tool.startsWith('memory_')) return { effect: 'deny', rule: 'builtin.guest.no-memory-management', explicit: false };
       if (input.tool.startsWith('mcp_') || input.tool.startsWith('plugin_')) return { effect: 'deny', rule: 'builtin.guest.no-extensions', explicit: false };
       if (WRITE_TOOLS.has(input.tool)) return { effect: 'allow', rule: 'builtin.guest.workspace-write', explicit: false };
