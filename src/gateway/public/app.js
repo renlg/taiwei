@@ -1647,13 +1647,22 @@ function renderSessionList() {
     item.tabIndex = 0;
     item.setAttribute('role', 'button');
     item.dataset.sessionId = session.id;
-    item.className = `session-item${state.current?.id === session.id ? ' active' : ''}`;
+    item.className = `session-item${state.current?.id === session.id ? ' active' : ''}${session.running ? ' running' : ''}`;
     item.title = session.title;
     const copy = document.createElement('span');
     copy.className = 'session-copy';
     const title = document.createElement('span');
     title.className = 'session-name';
-    title.textContent = session.title;
+    if (session.running) {
+      const dot = document.createElement('span');
+      dot.className = 'run-dot';
+      dot.setAttribute('aria-label', '运行中');
+      title.append(dot);
+    }
+    const titleText = document.createElement('span');
+    titleText.className = 'session-name-text';
+    titleText.textContent = session.title;
+    title.append(titleText);
     const meta = document.createElement('span');
     meta.className = 'session-meta';
     meta.textContent = `${relativeTime(session.updatedAt)} · ${session.messageCount} 条`;
@@ -1678,9 +1687,18 @@ function renderSessionList() {
       await deleteSession(session.id);
     });
     item.append(copy, remove);
-    item.addEventListener('click', () => { if (!state.controller) loadSession(session.id); });
+    item.addEventListener('click', () => {
+      if (state.current && session.id === state.current.id) return;
+      cancelCurrentStream();
+      loadSession(session.id);
+    });
     item.addEventListener('keydown', (event) => {
-      if ((event.key === 'Enter' || event.key === ' ') && !state.controller) { event.preventDefault(); loadSession(session.id); }
+      if (event.key === 'Enter' || event.key === ' ') {
+        if (state.current && session.id === state.current.id) return;
+        event.preventDefault();
+        cancelCurrentStream();
+        loadSession(session.id);
+      }
     });
     return item;
   };
@@ -2029,6 +2047,14 @@ async function deleteFolder(folder) {
     if (state.current) await loadSession(state.current.id);
     showToast('文件夹已删除，会话已移到默认文件夹');
   } catch (error) { showToast(error.message); }
+}
+
+function cancelCurrentStream() {
+  if (!state.controller) return;
+  state.controller.abort();
+  state.controller = null;
+  setStreaming(false);
+  setStatus('idle', '就绪');
 }
 
 async function loadSession(id) {

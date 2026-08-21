@@ -56,6 +56,7 @@ export interface SessionSummary {
   updatedAt: string;
   messageCount: number;
   folderId?: string;
+  running?: boolean;
 }
 
 const VALID_ID = /^[a-f0-9-]{36}$/i;
