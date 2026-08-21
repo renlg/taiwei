@@ -72,6 +72,47 @@ export interface SessionSummary {
 
 const VALID_ID = /^[a-f0-9-]{36}$/i;
 
+function hasValidToolArguments(value: unknown): value is string {
+  if (typeof value !== 'string' || value.trim() === '') return false;
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function sanitizeContextMessages(messages: ChatMessage[]): ChatMessage[] {
+  const sanitized: ChatMessage[] = [];
+  let removedToolCallIds = new Set<string>();
+
+  for (const message of messages) {
+    if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      removedToolCallIds = new Set<string>();
+      const validCalls = message.tool_calls.filter((call) => {
+        const valid = hasValidToolArguments(call?.function?.arguments);
+        if (!valid && typeof call?.id === 'string') removedToolCallIds.add(call.id);
+        return valid;
+      });
+      if (validCalls.length === 0) continue;
+      sanitized.push(validCalls.length === message.tool_calls.length
+        ? message
+        : { ...message, tool_calls: validCalls });
+      continue;
+    }
+
+    if (message.role === 'tool') {
+      if (!removedToolCallIds.has(message.tool_call_id)) sanitized.push(message);
+      continue;
+    }
+
+    removedToolCallIds = new Set<string>();
+    sanitized.push(message);
+  }
+
+  return sanitized;
+}
+
 export class SessionStore {
   constructor(private readonly directory = getPaths().sessions) {}
 
@@ -170,7 +211,7 @@ export class SessionStore {
 
   toChatHistory(session: GatewaySession): ChatMessage[] {
     return session.contextMessages
-      ? structuredClone(session.contextMessages)
+      ? sanitizeContextMessages(structuredClone(session.contextMessages))
       : session.messages.map((message) => ({ role: message.role, content: message.agentContent ?? message.content }));
   }
 

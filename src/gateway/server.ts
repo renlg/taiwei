@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { ChatBridge } from './chat.js';
 import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
 import { LoginLockStore, type LoginLock } from './login-locks.js';
-import { SessionStore, type SessionAttachment, type SessionIdentity, type SessionMessage, type SessionToolCall, type SessionUsage } from './sessions.js';
+import { sanitizeContextMessages, SessionStore, type SessionAttachment, type SessionIdentity, type SessionMessage, type SessionToolCall, type SessionUsage } from './sessions.js';
 import { FolderStore, guestFolderName, workspaceFolderMetadata } from './folders.js';
 import { openSse, sendSse } from './sse.js';
 import { getCurrentModel, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
@@ -1660,7 +1660,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         if (pendingSaveTimer) { clearTimeout(pendingSaveTimer); pendingSaveTimer = undefined; }
         pendingTurns.delete(runtimeSessionId);
         stopRequested.delete(runtimeSessionId);
-        if (contextMessages) session.contextMessages = contextMessages;
+        if (contextMessages) session.contextMessages = sanitizeContextMessages(contextMessages);
         const content = finalText ?? answer;
         const stopped = turnError?.message === 'Turn cancelled';
         if (finalText !== undefined || content || toolCalls.length || turnError) {
