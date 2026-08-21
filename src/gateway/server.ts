@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { ChatBridge } from './chat.js';
 import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
 import { LoginLockStore, type LoginLock } from './login-locks.js';
-import { SessionStore, type SessionAttachment, type SessionToolCall } from './sessions.js';
+import { SessionStore, type SessionAttachment, type SessionMessage, type SessionToolCall, type SessionUsage } from './sessions.js';
 import { FolderStore, guestFolderName, workspaceFolderMetadata } from './folders.js';
 import { openSse, sendSse } from './sse.js';
 import { getCurrentModel, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
@@ -88,7 +88,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '47';
+const STATIC_ASSET_VERSION = '48';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -195,6 +195,7 @@ export function guestRouteAllowed(method: string, pathname: string): boolean {
   if ((method === 'GET' || method === 'POST') && pathname === '/api/agents') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/agent') return true;
   if (method === 'GET' && pathname === '/api/auth/gitea-user') return true;
+  if (method === 'GET' && /^\/api\/sessions\/[^/]+\/pending$/.test(pathname)) return true;
   return (method === 'GET' || method === 'DELETE') && /^\/api\/sessions\/[^/]+$/.test(pathname);
 }
 
@@ -579,6 +580,18 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   const log = options.log ?? console.log;
   if (tenantAccounts) void tenantAccounts.store.initialize().catch((error) => log(`[taiwei] tenant account database unavailable: ${error instanceof Error ? error.message : String(error)}`));
   const oauthStates = new Map<string, number>();
+  const stopRequested = new Set<string>();
+  interface PendingTurn {
+    turnId: string;
+    sessionId: string;
+    runtimeSessionId: string;
+    startedAt: string;
+    answer: string;
+    toolCalls: SessionToolCall[];
+    usage?: SessionUsage;
+    lastSavedAt: number;
+  }
+  const pendingTurns = new Map<string, PendingTurn>();
   const modelState: GatewayModelState = options.modelState ?? { getCurrentModel, resolveModels: resolveModelCatalog, setCurrentModel };
   const contextWindowFor = options.contextWindow ?? (async (model: string) => resolveContextWindow(await loadConfig(), model));
   const requireMcpBridge = () => {
@@ -1385,10 +1398,26 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         else { response.writeHead(204); response.end(); }
         return;
       }
+      const pendingRoute = pathname.match(/^\/api\/sessions\/([^/]+)\/pending$/);
+      if (pendingRoute && method === 'GET') {
+        const sessionId = decodeURIComponent(pendingRoute[1]);
+        const runtimeSessionId = `${guestId ?? authenticatedUsername ?? authenticatedRole}:${sessionId}`;
+        const pending = pendingTurns.get(runtimeSessionId);
+        if (!pending) { json(response, 200, { running: false }); return; }
+        json(response, 200, {
+          running: true,
+          turnId: pending.turnId,
+          answer: pending.answer,
+          toolCalls: pending.toolCalls,
+          usage: pending.usage,
+        });
+        return;
+      }
       if (method === 'POST' && pathname === '/api/stop') {
         const body = await readJson(request).catch(() => ({})) as { sessionId?: unknown };
         const sessionId = typeof body.sessionId === 'string' ? body.sessionId : '';
         const runtimeSessionId = `${guestId ?? authenticatedUsername ?? authenticatedRole}:${sessionId}`;
+        stopRequested.add(runtimeSessionId);
         json(response, 200, { stopped: sessionId ? options.chat.stop(runtimeSessionId) : false });
         return;
       }
@@ -1502,19 +1531,55 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         let contextMessages: ChatMessage[] | undefined;
         const toolCalls: SessionToolCall[] = [];
         const runtimeSessionId = `${guestId ?? authenticatedUsername ?? authenticatedRole}:${session.id}`;
-        response.once('close', () => { if (!completed) options.chat.stop(runtimeSessionId); });
+        const turnId = randomUUID();
+        const pendingMessage: SessionMessage = {
+          role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'pending',
+        };
+        session.messages.push(pendingMessage);
+        session.updatedAt = new Date().toISOString();
+        await activeSessions.save(session);
+        const pendingTurn: PendingTurn = {
+          turnId, sessionId: session.id, runtimeSessionId,
+          startedAt: new Date().toISOString(), answer: '', toolCalls: [], lastSavedAt: Date.now(),
+        };
+        pendingTurns.set(runtimeSessionId, pendingTurn);
+        let pendingSaveTimer: ReturnType<typeof setTimeout> | undefined;
+        const throttledSave = () => {
+          if (pendingSaveTimer) return;
+          pendingSaveTimer = setTimeout(async () => {
+            pendingSaveTimer = undefined;
+            pendingTurn.lastSavedAt = Date.now();
+            pendingMessage.content = pendingTurn.answer;
+            pendingMessage.toolCalls = pendingTurn.toolCalls.length ? [...pendingTurn.toolCalls] : undefined;
+            session.updatedAt = new Date().toISOString();
+            try { await activeSessions.save(session); } catch {}
+          }, 1000);
+        };
+        response.once('close', () => {
+          if (!completed && !stopRequested.has(runtimeSessionId)) {
+            log(`[taiwei] SSE disconnected for ${session.id} (turn ${turnId}), continuing in background`);
+          } else if (!completed) {
+            options.chat.stop(runtimeSessionId);
+          }
+        });
         await options.chat.run(agentMessage, {
           event: (event) => {
             if (event.type === 'token') {
               answer += event.text;
+              pendingTurn.answer = answer;
               sendSse(response, 'token', { text: event.text });
+              throttledSave();
             } else if (event.type === 'tool') {
               toolCalls.push({ name: event.name, args: event.args });
+              pendingTurn.toolCalls = [...toolCalls];
               sendSse(response, 'tool', { name: event.name, args: event.args });
+              throttledSave();
             } else if (event.type === 'tool_result') {
               const call = [...toolCalls].reverse().find((item) => item.name === event.name && item.result === undefined);
               if (call) call.result = event.result;
+              pendingTurn.toolCalls = [...toolCalls];
               sendSse(response, 'tool_result', { name: event.name, result: event.result });
+              throttledSave();
             } else if (event.type === 'compressing') {
               sendSse(response, 'compressing', {});
             } else if (event.type === 'usage') {
@@ -1526,6 +1591,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
                 model: event.model || activeModel,
                 compressed: event.compressed === true,
               };
+              pendingTurn.usage = session.usage;
               sendSse(response, 'usage', session.usage);
             } else {
               finalText = event.text;
@@ -1539,17 +1605,19 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             return confirmations.wait(request);
           },
         }, history, session.id, turnMemory, session.agentId ?? 'build', authenticatedRole, authenticatedUsername ?? authenticatedRole, runtimeSessionId, session.providerId, session.currentModel, workspace, userContent);
+        if (pendingSaveTimer) { clearTimeout(pendingSaveTimer); pendingSaveTimer = undefined; }
+        pendingTurns.delete(runtimeSessionId);
+        stopRequested.delete(runtimeSessionId);
         if (contextMessages) session.contextMessages = contextMessages;
         const content = finalText ?? answer;
+        const stopped = turnError?.message === 'Turn cancelled';
         if (finalText !== undefined || content || toolCalls.length || turnError) {
-          const stopped = turnError?.message === 'Turn cancelled';
-          session.messages.push({
-            role: 'assistant',
-            content: content || (stopped ? '' : turnError?.message ?? ''),
-            ...(toolCalls.length ? { toolCalls } : {}),
-            ...(turnError ? { status: stopped ? 'stopped' as const : 'error' as const } : {}),
-            timestamp: new Date().toISOString(),
-          });
+          pendingMessage.content = content || (stopped ? '' : turnError?.message ?? '');
+          pendingMessage.toolCalls = toolCalls.length ? toolCalls : undefined;
+          pendingMessage.status = turnError ? (stopped ? 'stopped' as const : 'error' as const) : undefined;
+        } else {
+          const idx = session.messages.indexOf(pendingMessage);
+          if (idx >= 0) session.messages.splice(idx, 1);
         }
         session.updatedAt = new Date().toISOString();
         await activeSessions.save(session);

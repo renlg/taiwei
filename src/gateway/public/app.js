@@ -2049,7 +2049,74 @@ async function loadSession(id) {
     renderSessionList();
     elements.body.classList.remove('sidebar-open');
     setStatus('idle', '就绪');
+    const lastMessage = session.messages[session.messages.length - 1];
+    if (lastMessage && lastMessage.role === 'assistant' && lastMessage.status === 'pending') {
+      reconnectPending(session.id, lastMessage);
+    }
   } catch (error) { showToast(error.message); }
+}
+
+async function reconnectPending(sessionId, pendingMessage) {
+  if (state.controller) return;
+  state.controller = new AbortController();
+  setStreaming(true);
+  setStatus('streaming', '重新连接中');
+  const messageRows = elements.messages.querySelectorAll('.message-row');
+  const pendingRow = messageRows[messageRows.length - 1];
+  let answerView = null;
+  if (pendingRow) {
+    const stack = pendingRow.querySelector('.message-stack');
+    const bubble = pendingRow.querySelector('.bubble');
+    const meta = pendingRow.querySelector('.message-meta');
+    const caret = document.createElement('span');
+    caret.className = 'streaming-caret';
+    bubble.append(caret);
+    answerView = { row: pendingRow, stack, bubble, meta, message: pendingMessage };
+  } else {
+    const view = addMessage(pendingMessage, { streaming: true, forceScroll: true });
+    answerView = view;
+  }
+  let lastContent = pendingMessage.content || '';
+  if (answerView) updateAssistant(answerView, lastContent);
+  try {
+    for (;;) {
+      if (state.controller.signal.aborted) break;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      if (state.controller.signal.aborted) break;
+      const pending = await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}/pending`);
+      if (!pending.running) {
+        const fresh = await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
+        state.current = fresh;
+        renderConversation(fresh);
+        state.usage = fresh.usage ?? state.usage;
+        renderUsage();
+        break;
+      }
+      if (pending.answer && pending.answer !== lastContent) {
+        lastContent = pending.answer;
+        if (answerView) updateAssistant(answerView, lastContent);
+      }
+      if (pending.usage) {
+        state.usage = { ...pending.usage, contextWindow: state.contextWindow, model: state.currentModel };
+        state.current.usage = state.usage;
+        renderUsage();
+      }
+    }
+  } catch (error) {
+    if (error.name !== 'AbortError') showToast(`重连失败：${error.message}`);
+  } finally {
+    try {
+      const fresh = await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
+      state.current = fresh;
+      renderConversation(fresh);
+      state.usage = fresh.usage ?? state.usage;
+      renderUsage();
+    } catch {}
+    state.controller = null;
+    setStreaming(false);
+    setStatus('idle', '就绪');
+    elements.input.focus();
+  }
 }
 
 async function createSession(folderId) {

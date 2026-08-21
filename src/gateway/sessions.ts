@@ -23,7 +23,7 @@ export interface SessionMessage {
   attachments?: SessionAttachment[];
   toolCalls?: SessionToolCall[];
   timestamp: string;
-  status?: 'stopped' | 'error';
+  status?: 'stopped' | 'error' | 'pending';
 }
 
 export interface SessionUsage {
