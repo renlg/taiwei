@@ -165,6 +165,7 @@ const state = {
   expandedFolders: new Set(),
   current: null,
   controller: null,
+  streaming: false,
   followOutput: true,
   loadVersion: 0,
   toastTimer: 0,
@@ -1303,6 +1304,7 @@ function renderUsage(usage = state.usage) {
 }
 
 function setStreaming(streaming) {
+  state.streaming = streaming;
   elements.body.classList.toggle('streaming', streaming);
   elements.input.disabled = streaming;
   elements.attachmentButton.disabled = streaming || state.attachments.length >= 5;
@@ -1380,7 +1382,7 @@ function renderAttachments() {
     remove.className = 'attachment-remove';
     remove.textContent = '×';
     remove.setAttribute('aria-label', `移除 ${attachment.name}`);
-    remove.disabled = Boolean(state.controller);
+    remove.disabled = state.streaming;
     remove.addEventListener('click', () => {
       state.attachments = state.attachments.filter((item) => item.id !== attachment.id);
       releaseAttachment(attachment);
@@ -1412,8 +1414,8 @@ function renderAttachments() {
     }
     elements.attachmentList.append(chip);
   }
-  elements.attachmentButton.disabled = Boolean(state.controller) || state.attachments.length >= 5;
-  elements.send.disabled = Boolean(state.controller) || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
+  elements.attachmentButton.disabled = state.streaming || state.attachments.length >= 5;
+  elements.send.disabled = state.streaming || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
   updateAttachmentTextHint();
 }
 
@@ -1675,7 +1677,7 @@ function renderSessionList() {
     remove.setAttribute('aria-label', `删除 ${session.title}`);
     remove.addEventListener('click', async (event) => {
       event.stopPropagation();
-      if (state.controller) return;
+      if (state.streaming) return;
       const ok = await confirmDialog({
         title: '删除会话',
         desc: '此操作会删除该会话的全部对话记录，且无法撤销。',
@@ -1769,7 +1771,7 @@ function renderSessionList() {
     parent.append(group);
   };
   for (const folder of childrenByParent.get('') || []) appendFolder(folder, elements.sessionList);
-  setStreaming(Boolean(state.controller));
+  setStreaming(state.streaming);
 }
 
 function findFirstVisualSession() {
@@ -2004,7 +2006,7 @@ async function refreshFolders() {
 }
 
 async function createFolder() {
-  if (state.controller) return;
+  if (state.streaming) return;
   const name = await promptDialog({ title: '新建文件夹', desc: '输入新文件夹名称', placeholder: '文件夹名称', okText: '创建' });
   if (name === null || !name.trim()) return;
   try {
@@ -2018,7 +2020,7 @@ async function createFolder() {
 }
 
 async function renameFolder(folder) {
-  if (state.controller || folder.system) return;
+  if (state.streaming || folder.system) return;
   const name = await promptDialog({ title: '重命名文件夹', desc: '输入新的文件夹名称', placeholder: '文件夹名称', initial: folder.name, okText: '保存' });
   if (name === null || !name.trim() || name.trim() === folder.name) return;
   try {
@@ -2031,7 +2033,7 @@ async function renameFolder(folder) {
 }
 
 async function deleteFolder(folder) {
-  if (state.controller || folder.system) return;
+  if (state.streaming || folder.system) return;
   const ok = await confirmDialog({
     title: '删除文件夹',
     desc: '其中的会话会移到默认文件夹，工作目录中的文件会保留。',
@@ -2050,11 +2052,24 @@ async function deleteFolder(folder) {
 }
 
 function cancelCurrentStream() {
-  if (!state.controller) return;
-  state.controller.abort();
+  const controller = state.controller;
+  if (!controller) return;
+  controller.abort();
+  finishStream(controller);
+  setStatus('idle', '就绪');
+}
+
+function beginStream(controller) {
+  state.controller?.abort();
+  state.controller = controller;
+  setStreaming(true);
+}
+
+function finishStream(controller) {
+  if (state.controller !== controller) return false;
   state.controller = null;
   setStreaming(false);
-  setStatus('idle', '就绪');
+  return true;
 }
 
 function isCurrentSession(sessionId) {
@@ -2091,10 +2106,9 @@ async function loadSession(id) {
 }
 
 async function reconnectPending(sessionId, pendingMessage) {
-  if (state.controller) return;
+  if (state.streaming) return;
   const controller = new AbortController();
-  state.controller = controller;
-  setStreaming(true);
+  beginStream(controller);
   setStatus('streaming', '重新连接中');
   const messageRows = elements.messages.querySelectorAll('.message-row');
   const pendingRow = messageRows[messageRows.length - 1];
@@ -2151,9 +2165,7 @@ async function reconnectPending(sessionId, pendingMessage) {
         renderUsage();
       }
     } catch {}
-    if (state.controller === controller) {
-      state.controller = null;
-      setStreaming(false);
+    if (finishStream(controller)) {
       setStatus('idle', '就绪');
       elements.input.focus();
     }
@@ -2161,7 +2173,7 @@ async function reconnectPending(sessionId, pendingMessage) {
 }
 
 async function createSession(folderId) {
-  if (state.controller) return null;
+  if (state.streaming) return null;
   try {
     const session = await requestJson('/api/sessions', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
@@ -2210,7 +2222,7 @@ function parseEvent(block) {
 }
 
 async function submit(message, files = []) {
-  if (state.controller) return;
+  if (state.streaming) return;
   if (!state.current && !await createSession()) return;
   const sessionId = state.current.id;
   const userAttachments = files.filter((f) => f.path || f.url).map((f) => ({
@@ -2238,8 +2250,7 @@ async function submit(message, files = []) {
     compressionView = null;
   };
   const controller = new AbortController();
-  state.controller = controller;
-  setStreaming(true);
+  beginStream(controller);
   try {
     const response = await authenticatedFetch('/api/chat', {
       method: 'POST',
@@ -2370,9 +2381,7 @@ async function submit(message, files = []) {
       setStatus('error', '连接失败');
     }
   } finally {
-    if (state.controller === controller) {
-      state.controller = null;
-      setStreaming(false);
+    if (finishStream(controller)) {
       elements.input.focus();
     }
     setTimeout(async () => {
@@ -2395,14 +2404,14 @@ async function submit(message, files = []) {
 function resizeInput() {
   elements.input.style.height = 'auto';
   elements.input.style.height = `${Math.min(elements.input.scrollHeight, 170)}px`;
-  elements.send.disabled = Boolean(state.controller) || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
+  elements.send.disabled = state.streaming || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
   updateAttachmentTextHint();
 }
 
 elements.composer.addEventListener('submit', (event) => {
   event.preventDefault();
   const message = elements.input.value.trim();
-  if (!message || state.controller || state.attachments.some((file) => file.uploading)) return;
+  if (!message || state.streaming || state.attachments.some((file) => file.uploading)) return;
   const files = state.attachments.filter((file) => file.path);
   state.attachments.forEach(releaseAttachment);
   state.attachments = [];
@@ -2425,7 +2434,7 @@ elements.agentSelector.addEventListener('change', async () => {
 });
 
 elements.attachmentButton.addEventListener('click', () => {
-  if (!state.controller && state.attachments.length < 5) elements.fileInput.click();
+  if (!state.streaming && state.attachments.length < 5) elements.fileInput.click();
 });
 
 elements.fileInput.addEventListener('change', async () => {
@@ -2447,7 +2456,7 @@ elements.input.addEventListener('keydown', (event) => {
 });
 
 elements.stop.addEventListener('click', async () => {
-  if (!state.controller) return;
+  if (!state.streaming || !state.controller) return;
   void rejectPendingConfirmations();
   authenticatedFetch('/api/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: state.current?.id }) }).catch(() => {});
   state.controller.abort();
@@ -2751,7 +2760,7 @@ document.addEventListener('click', (event) => {
     downloadMedia(downloadLink.href, downloadLink.download, downloadLink);
   }
   const chip = event.target.closest('[data-prompt]');
-  if (chip && !state.controller) {
+  if (chip && !state.streaming) {
     elements.input.value = chip.dataset.prompt;
     resizeInput();
     elements.input.focus();
@@ -2845,10 +2854,11 @@ elements.oauthLogin.addEventListener('click', async () => {
 });
 
 async function logout() {
-  if (state.controller) {
+  const controller = state.controller;
+  if (controller) {
     await rejectPendingConfirmations();
-    state.controller.abort();
-    state.controller = null;
+    controller.abort();
+    finishStream(controller);
   }
   try { await authenticatedFetch('/api/logout', { method: 'POST' }); } catch {}
   state.sessions = [];
