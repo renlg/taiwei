@@ -147,11 +147,17 @@ export async function tenantWorkspaceForGuest(
     catch (error) { warn(`[taiwei] could not set workspace ownership for ${osUsername}: ${error instanceof Error ? error.message : String(error)}`); }
   }
   // Skills are managed by the service and exposed to the tenant as read-only scripts.
+  // ⚠️ Admin-only skills (taiwei-编程部署 教 nginx 反代/ownerHash 部署机制) 不暴露给 guest,
+  //    避免 guest 模型读到 admin 视角物理路径后越界探测。
   const skillsSource = '/root/.taiwei/skills';
   const guestSkillsDir = join(home, '.taiwei', 'skills');
+  const ADMIN_ONLY_SKILLS = new Set(['taiwei-编程部署']);
   try {
     await mkdir(guestSkillsDir, { recursive: true });
-    await cp(skillsSource, guestSkillsDir, { recursive: true, force: true });
+    for (const entry of await readdir(skillsSource)) {
+      if (ADMIN_ONLY_SKILLS.has(entry)) continue;
+      await cp(join(skillsSource, entry), join(guestSkillsDir, entry), { recursive: true, force: true });
+    }
     await makeRootOwnedReadOnly(guestSkillsDir);
   } catch (error) {
     warn(`[taiwei] skill sync for ${osUsername} failed: ${error instanceof Error ? error.message : String(error)}`);
