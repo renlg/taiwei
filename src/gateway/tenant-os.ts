@@ -1,4 +1,4 @@
-import { cp, lchown, lstat, mkdir, readFile, readdir, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { chmod, cp, lchown, lstat, mkdir, readFile, readdir, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { TenantAccountStore, type TenantAccountRepository } from './tenants.js';
@@ -66,6 +66,15 @@ async function chownTree(path: string, uid: number, gid: number): Promise<void> 
     for (const entry of await readdir(path)) await chownTree(join(path, entry), uid, gid);
   }
   await lchown(path, uid, gid);
+}
+
+async function makeRootOwnedReadOnly(path: string): Promise<void> {
+  const info = await lstat(path);
+  if (info.isDirectory()) {
+    for (const entry of await readdir(path)) await makeRootOwnedReadOnly(join(path, entry));
+  }
+  if (typeof process.getuid !== 'function' || process.getuid() === 0) await lchown(path, 0, 0);
+  if (!info.isSymbolicLink()) await chmod(path, info.isDirectory() ? 0o555 : 0o444);
 }
 
 async function rebaseFolderFile(file: string | undefined, oldRoot: string, newRoot: string): Promise<void> {
@@ -136,6 +145,16 @@ export async function tenantWorkspaceForGuest(
   if (typeof process.getuid !== 'function' || process.getuid() === 0) {
     try { await chownTree(projects, owner.uid, owner.gid); }
     catch (error) { warn(`[taiwei] could not set workspace ownership for ${osUsername}: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+  // Skills are managed by the service and exposed to the tenant as read-only scripts.
+  const skillsSource = '/root/.taiwei/skills';
+  const guestSkillsDir = join(home, '.taiwei', 'skills');
+  try {
+    await mkdir(guestSkillsDir, { recursive: true });
+    await cp(skillsSource, guestSkillsDir, { recursive: true, force: true });
+    await makeRootOwnedReadOnly(guestSkillsDir);
+  } catch (error) {
+    warn(`[taiwei] skill sync for ${osUsername} failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   return projects;
 }

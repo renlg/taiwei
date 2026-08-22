@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import type { ToolSpec } from '../registry.js';
 import { expandHome, loadConfig } from '../../config/config.js';
@@ -41,7 +41,21 @@ function commandWords(command: string): string[] {
  * and recognizable filesystem paths must stay under the guest workspace, and
  * system-administration commands are rejected outright.
  */
-export async function constrainGuestBash(command: string, cwd: string, workspaceRoot?: string): Promise<{ error: string; command: string; cwd: string } | undefined> {
+function resolveGuestCommandPath(raw: string, cwd: string, guestSkillDir?: string): string {
+  if (guestSkillDir && (raw === '~' || raw.startsWith('~/'))) {
+    const home = dirname(dirname(guestSkillDir));
+    return raw === '~' ? home : resolve(home, raw.slice(2));
+  }
+  return raw.startsWith('~') ? expandHome(raw) : resolve(cwd, raw);
+}
+
+function isGuestSkillPath(candidate: string, guestSkillDir?: string): boolean {
+  if (!guestSkillDir) return false;
+  const skillRel = relative(guestSkillDir, candidate);
+  return !skillRel.startsWith('..') && !isAbsolute(skillRel) && skillRel !== '';
+}
+
+export async function constrainGuestBash(command: string, cwd: string, workspaceRoot?: string, guestSkillDir?: string): Promise<{ error: string; command: string; cwd: string } | undefined> {
   if (!workspaceRoot) return undefined;
   try { await resolveInWorkspace(cwd, workspaceRoot); }
   catch { return { error: GUEST_DENIAL, command, cwd }; }
@@ -63,16 +77,17 @@ export async function constrainGuestBash(command: string, cwd: string, workspace
     }
     const explicitlyPathLike = word.startsWith('/') || word.startsWith('~') || word === '..' || word.startsWith('../');
     if (!touchesFilesystem && !explicitlyPathLike) continue;
-    const candidate = word.startsWith('~') ? expandHome(word) : resolve(cwd, word);
+    const candidate = resolveGuestCommandPath(word, cwd, guestSkillDir);
     try { assertGuestPathNotSensitive(candidate); }
     catch { return { error: `${GUEST_DENIAL}：禁止读取管理员凭据文件`, command, cwd }; }
+    if (isGuestSkillPath(candidate, guestSkillDir)) continue;
     try { await resolveInWorkspace(candidate, workspaceRoot); }
     catch { return { error: `${GUEST_DENIAL}：路径越界`, command, cwd }; }
   }
   return undefined;
 }
 
-async function guestScriptContents(command: string, cwd: string, workspaceRoot: string): Promise<string[]> {
+async function guestScriptContents(command: string, cwd: string, workspaceRoot: string, guestSkillDir?: string): Promise<string[]> {
   const pending: string[] = [];
   const patterns = [
     /(?:^|[;&|(\n]\s*)(?:bash|sh|source)[ \t]+(?:--[ \t]+)?(["']?)([^\s;&|()<>]+)\1/g,
@@ -89,7 +104,10 @@ async function guestScriptContents(command: string, cwd: string, workspaceRoot: 
     if (!raw || raw.startsWith('-') || raw.includes('$') || raw.includes('`')) {
       throw new Error(`${GUEST_DENIAL}：无法安全解析脚本路径`);
     }
-    const path = await resolveInWorkspace(resolve(cwd, raw), workspaceRoot);
+    const candidate = resolveGuestCommandPath(raw, cwd, guestSkillDir);
+    const path = isGuestSkillPath(candidate, guestSkillDir)
+      ? candidate
+      : await resolveInWorkspace(candidate, workspaceRoot);
     assertGuestPathNotSensitive(path);
     if (seen.has(path)) continue;
     seen.add(path);
@@ -303,10 +321,6 @@ export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpe
       const cwd = configuredCwd ? (configuredCwd.startsWith('~') ? expandHome(configuredCwd) : resolve(context.cwd, configuredCwd)) : context.cwd;
       if (context.role === 'guest') {
         if (!context.identity) return { error: `${GUEST_DENIAL}：缺少已认证用户身份，禁止执行命令`, command, cwd };
-        if (context.workspaceRoot) {
-          const denial = await constrainGuestBash(command, cwd, context.workspaceRoot);
-          if (denial) return denial;
-        }
         let guestOsUser: string | undefined;
         if (context.tenantIdentity !== undefined) {
           guestOsUser = context.tenantIdentity.osUsername?.trim() || undefined;
@@ -319,6 +333,11 @@ export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpe
           }
         }
         if (!guestOsUser) return { error: `${GUEST_DENIAL}：当前用户没有可用的系统账号，禁止执行命令`, command, cwd };
+        const guestSkillDir = resolve(guestHome(context.workspaceRoot ?? cwd, guestOsUser), '.taiwei', 'skills');
+        if (context.workspaceRoot) {
+          const denial = await constrainGuestBash(command, cwd, context.workspaceRoot, guestSkillDir);
+          if (denial) return denial;
+        }
         if (!isRoot()) return { error: `${GUEST_DENIAL}：网关无法切换到 ${guestOsUser}，禁止以网关账号执行 guest 命令`, command, cwd };
         const giteaIdentity = context.tenantIdentity !== undefined
           ? context.tenantIdentity.giteaUsername?.trim()
@@ -329,7 +348,7 @@ export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpe
         let giteaBaseUrl: string | undefined;
         try { giteaBaseUrl = await lookupGiteaBaseUrl(); }
         catch { giteaBaseUrl = undefined; }
-        const scripts = context.workspaceRoot ? await guestScriptContents(command, cwd, context.workspaceRoot) : [];
+        const scripts = context.workspaceRoot ? await guestScriptContents(command, cwd, context.workspaceRoot, guestSkillDir) : [];
         for (const script of scripts) {
           const normalizedScript = script.replace(/\\\r?\n/g, '');
           const scriptGit = await enforceGuestGit(normalizedScript, giteaIdentity ?? context.identity, guestOsUser, cwd, lookupSessionGiteaToken, false);
@@ -338,7 +357,7 @@ export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpe
           if ('error' in scriptCurl) return { error: scriptCurl.error, command, cwd };
           for (const line of script.split('\n')) {
             if (!line.trim() || line.startsWith('#!')) continue;
-            const denial = await constrainGuestBash(line, cwd, context.workspaceRoot);
+            const denial = await constrainGuestBash(line, cwd, context.workspaceRoot, guestSkillDir);
             if (denial) return { ...denial, error: `${denial.error}（脚本内容）` };
             const git = await enforceGuestGit(line, giteaIdentity ?? context.identity, guestOsUser, cwd, lookupSessionGiteaToken, false);
             if ('error' in git) return { error: git.error, command, cwd };
