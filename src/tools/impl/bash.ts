@@ -92,7 +92,7 @@ async function guestScriptContents(command: string, cwd: string, workspaceRoot: 
   const pending: PendingScript[] = [];
   const patterns = [
     /(?:^|[;&|(\n]\s*)(?:bash|sh|source)[ \t]+(?:--[ \t]+)?(["']?)([^\s;&|()<>]+)\1/g,
-    /(?:^|[;&|(\n]\s*)\.\s+(["']?)([^\s;&|()<>]+)\1/g,
+    /(?:^|[;&|(\n]\s*)\.\s+(?=["']?(?:\.\.?\/|\/|~))["']?([^\s;&|()<>]+)["']?/g,
     /(?:^|[;&|(\n]\s*)(\.\.?\/[^\s;&|()<>]+)/g,
   ];
   const enqueueScripts = (text: string, referencedBy?: string): void => {
