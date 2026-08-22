@@ -1330,7 +1330,7 @@ function setStreaming(streaming) {
   elements.attachmentButton.disabled = streaming || state.attachments.length >= 5;
   elements.send.disabled = streaming || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
   elements.attachmentList.querySelectorAll('button').forEach((button) => { button.disabled = streaming; });
-  document.querySelectorAll('.folder-action, .folder-toggle, .folder-name').forEach((button) => { button.disabled = streaming; });
+  document.querySelectorAll('.folder-toggle, .folder-name').forEach((button) => { button.disabled = streaming; });
   document.querySelectorAll('.session-item').forEach((item) => item.setAttribute('aria-disabled', String(streaming)));
   if (streaming) setStatus('streaming', '思考中');
 }
@@ -2026,7 +2026,6 @@ async function refreshFolders() {
 }
 
 async function createFolder() {
-  if (state.streaming) return;
   const name = await promptDialog({ title: '新建文件夹', desc: '输入新文件夹名称', placeholder: '文件夹名称', okText: '创建' });
   if (name === null || !name.trim()) return;
   try {
@@ -2193,7 +2192,6 @@ async function reconnectPending(sessionId, pendingMessage) {
 }
 
 async function createSession(folderId) {
-  if (state.streaming) return null;
   try {
     const session = await requestJson('/api/sessions', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
