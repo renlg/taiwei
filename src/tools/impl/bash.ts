@@ -88,23 +88,55 @@ export async function constrainGuestBash(command: string, cwd: string, workspace
 }
 
 async function guestScriptContents(command: string, cwd: string, workspaceRoot: string, guestSkillDir?: string): Promise<string[]> {
-  const pending: string[] = [];
+  type PendingScript = { raw: string; referencedBy?: string };
+  const pending: PendingScript[] = [];
   const patterns = [
     /(?:^|[;&|(\n]\s*)(?:bash|sh|source)[ \t]+(?:--[ \t]+)?(["']?)([^\s;&|()<>]+)\1/g,
     /(?:^|[;&|(\n]\s*)\.\s+(["']?)([^\s;&|()<>]+)\1/g,
     /(?:^|[;&|(\n]\s*)(\.\.?\/[^\s;&|()<>]+)/g,
   ];
-  for (const pattern of patterns) {
-    for (const match of command.matchAll(pattern)) pending.push(match[2] ?? match[1]);
-  }
+  const enqueueScripts = (text: string, referencedBy?: string): void => {
+    for (const pattern of patterns) {
+      for (const match of text.matchAll(pattern)) pending.push({ raw: match[2] ?? match[1], referencedBy });
+    }
+  };
+  const substituteSkillInternalReferences = (raw: string, referencedBy: string): string => {
+    const scriptDir = dirname(referencedBy);
+    const bashSource = String.raw`(?:\$\{BASH_SOURCE\[0\]\}|\$BASH_SOURCE(?:\[0\])?)`;
+    return raw
+      .replace(new RegExp(String.raw`\$\(\s*cd\s+["']?\$\(\s*dirname\s+["']?${bashSource}["']?\s*\)["']?\s*&&\s*pwd\s*\)`, 'g'), () => scriptDir)
+      .replace(new RegExp(String.raw`\$\(\s*dirname\s+["']?${bashSource}["']?\s*\)`, 'g'), () => scriptDir)
+      .replace(new RegExp("`\\s*dirname\\s+[\"']?" + bashSource + "[\"']?\\s*`", 'g'), () => scriptDir)
+      .replace(/\$(?:\{(?:SCRIPT_DIR|DIR|PWD)\}|(?:SCRIPT_DIR|DIR|PWD)\b)/g, () => scriptDir)
+      .replace(new RegExp(bashSource, 'g'), () => referencedBy);
+  };
+  const resolveSkillInternalDynamicPath = (raw: string, referencedBy: string): string => {
+    const scriptDir = dirname(referencedBy);
+    const substituted = substituteSkillInternalReferences(raw, referencedBy);
+    if (substituted.includes('$') || substituted.includes('`')) {
+      throw new Error(`${GUEST_DENIAL}：无法安全解析脚本路径`);
+    }
+    const candidate = resolveGuestCommandPath(substituted, scriptDir, guestSkillDir);
+    if (!isGuestSkillPath(candidate, guestSkillDir)) {
+      throw new Error(`${GUEST_DENIAL}：路径越界（脚本内容）`);
+    }
+    return candidate;
+  };
+  enqueueScripts(command);
   const contents: string[] = [];
   const seen = new Set<string>();
   while (pending.length) {
-    const raw = pending.shift()!;
-    if (!raw || raw.startsWith('-') || raw.includes('$') || raw.includes('`')) {
+    const { raw, referencedBy } = pending.shift()!;
+    if (!raw || raw.startsWith('-')) {
       throw new Error(`${GUEST_DENIAL}：无法安全解析脚本路径`);
     }
-    const candidate = resolveGuestCommandPath(raw, cwd, guestSkillDir);
+    const dynamic = raw.includes('$') || raw.includes('`');
+    if (dynamic && (!referencedBy || !isGuestSkillPath(referencedBy, guestSkillDir))) {
+      throw new Error(`${GUEST_DENIAL}：无法安全解析脚本路径`);
+    }
+    const candidate = dynamic
+      ? resolveSkillInternalDynamicPath(raw, referencedBy!)
+      : resolveGuestCommandPath(raw, cwd, guestSkillDir);
     const path = isGuestSkillPath(candidate, guestSkillDir)
       ? candidate
       : await resolveInWorkspace(candidate, workspaceRoot);
@@ -118,10 +150,8 @@ async function guestScriptContents(command: string, cwd: string, workspaceRoot: 
       throw error;
     }
     if (content.length > 1024 * 1024) throw new Error(`${GUEST_DENIAL}：脚本过大，无法安全检查`);
-    contents.push(content);
-    for (const pattern of patterns) {
-      for (const match of content.matchAll(pattern)) pending.push(match[2] ?? match[1]);
-    }
+    contents.push(isGuestSkillPath(path, guestSkillDir) ? substituteSkillInternalReferences(content, path) : content);
+    enqueueScripts(content, path);
   }
   return contents;
 }
