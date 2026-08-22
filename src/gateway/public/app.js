@@ -1208,8 +1208,12 @@ function enqueueConfirmation(request, answerView) {
   remember.type = 'checkbox';
   const rememberText = document.createElement('span'); rememberText.textContent = '记住选择';
   const rememberMode = document.createElement('select');
-  rememberMode.innerHTML = '<option value="session">本次会话</option><option value="permanent">永久</option>';
-  rememberMode.value = state.settingsRemember === 'permanent' ? 'permanent' : 'session';
+  const isGuest = state.role === 'guest';
+  // guest 用户的「永久记住」会被后端降级为本次会话,因此不展示「永久」选项,避免误导
+  rememberMode.innerHTML = isGuest
+    ? '<option value="session">本次会话</option>'
+    : '<option value="session">本次会话</option><option value="permanent">永久</option>';
+  rememberMode.value = !isGuest && state.settingsRemember === 'permanent' ? 'permanent' : 'session';
   remember.checked = state.settingsRemember !== 'off';
   rememberMode.disabled = !remember.checked;
   remember.addEventListener('change', () => { rememberMode.disabled = !remember.checked; });

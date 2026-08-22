@@ -104,7 +104,10 @@ export class TaiweiApp {
           getModel: options.model ? undefined : getCurrentModel,
           providerId: options.providerId, model: options.model,
           confirmDanger: options.confirmDanger,
-          authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(command, workspace, this.config.security, handler, commandSignal),
+          authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(
+            options.identity ?? options.role ?? 'admin', command, workspace, this.config.security, handler, commandSignal,
+            (options.role ?? 'admin') !== 'guest',
+          ),
           hooks: this.hooks,
           sessionId: options.sessionId,
           agentProfile: profile,
@@ -134,7 +137,9 @@ export class TaiweiApp {
         let tokens = 0;
         const output = await runAgentTurn(job.prompt!, cronContext, this.registry, this.config, {
           signal: AbortSignal.any([signal, runtimeSignal]), cwd, retainConversation: false, getModel: getCurrentModel,
-          authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(command, workspace, this.config.security, handler, commandSignal),
+          authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(
+            'cron:' + job.id, command, workspace, this.config.security, handler, commandSignal, true,
+          ),
           hooks: this.hooks,
           onEvent: (event) => { if (event.type === 'usage') tokens += event.usage.totalTokens; },
           role: 'admin', identity: `cron:${job.id}`, workspaceRoot: cwd, policy: new PolicyEngine(this.config.policy), sessionId: `cron:${job.id}`,
@@ -151,7 +156,10 @@ export class TaiweiApp {
     const output = await runAgentTurn(request.task, context, this.registry, config, {
       signal: request.signal, cwd: request.workspaceRoot, retainConversation: false,
       agentProfile: request.profile, delegationDepth: request.depth + 1, sessionId: request.childSessionId,
-      authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(command, workspace, config.security, handler, commandSignal),
+      authorizeCommand: (command, workspace, handler, commandSignal) => this.security.authorize(
+        request.identity, command, workspace, config.security, handler, commandSignal,
+        (request.role ?? 'admin') !== 'guest',
+      ),
       hooks: this.hooks,
       role: request.role, identity: request.identity, workspaceRoot: request.workspaceRoot, policy: new PolicyEngine(config.policy),
     });

@@ -67,13 +67,15 @@ function abortPromise(signal?: AbortSignal): Promise<never> {
 }
 
 export class CommandSecurity {
-  private readonly sessionApprovals = new Set<string>();
+  /** 按用户隔离的「本次会话记住」集合 */
+  private readonly sessionApprovals = new Map<string, Set<string>>();
 
-  async authorize(command: string, workspace: string, security: TaiweiConfig['security'], handler?: ConfirmationHandler, signal?: AbortSignal): Promise<boolean> {
+  async authorize(userId: string, command: string, workspace: string, security: TaiweiConfig['security'], handler?: ConfirmationHandler, signal?: AbortSignal, canWritePermanent = true): Promise<boolean> {
     if (!security.enabled) return true;
     const match = detectDanger(command, security.patterns);
     if (!match) return true;
-    if (this.sessionApprovals.has(match.pattern) || security.approvedPatterns.includes(match.pattern)) return true;
+    const userKey = userId || 'default';
+    if (this.sessionApprovals.get(userKey)?.has(match.pattern) || security.approvedPatterns.includes(match.pattern)) return true;
     if (!handler) {
       console.error(`[taiwei] Dangerous command rejected because confirmation is unavailable: ${match.reason}`);
       return false;
@@ -91,8 +93,16 @@ export class CommandSecurity {
       ]);
       if (!decision.approve) return false;
       const remember = decision.remember ?? 'off';
-      if (remember === 'session' || remember === 'permanent') this.sessionApprovals.add(match.pattern);
-      if (remember === 'permanent') {
+      // 「本次会话记住」按用户隔离
+      if (remember === 'session' || (remember === 'permanent' && !canWritePermanent)) {
+        let set = this.sessionApprovals.get(userKey);
+        if (!set) { set = new Set(); this.sessionApprovals.set(userKey, set); }
+        set.add(match.pattern);
+      } else if (remember === 'permanent') {
+        // 仅可写永久的调用方(admin/CLI)落全局白名单;guest 的「永久」已在上分支降级为「本次会话」
+        let set = this.sessionApprovals.get(userKey);
+        if (!set) { set = new Set(); this.sessionApprovals.set(userKey, set); }
+        set.add(match.pattern);
         const latest = await loadConfig();
         if (!latest.security.approvedPatterns.includes(match.pattern)) {
           latest.security.approvedPatterns.push(match.pattern);
