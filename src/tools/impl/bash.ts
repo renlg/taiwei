@@ -25,7 +25,7 @@ export interface BashToolDependencies {
 }
 
 const GUEST_DENIAL = 'guest 只能操作自己的工作目录';
-const SYSTEM_COMMAND = /\b(?:sudo|su|useradd|userdel|passwd|chown|chmod|mount|umount|iptables|systemctl|service|nginx|reboot|shutdown|halt|poweroff|docker|kubectl|crontab)\b/i;
+const SYSTEM_COMMAND = /\b(?:sudo|su|useradd|userdel|chown|chmod|mount|umount|iptables|systemctl|service|nginx|reboot|shutdown|halt|poweroff|docker|kubectl|crontab)\b/i;
 const FILESYSTEM_COMMAND = /(?:^|[;&|()\n]\s*)(?:cat|ls|rm|cp|mv|touch|mkdir|rmdir|find|grep|rg|sed|awk|head|tail|tee|readlink|stat|tar|zip|unzip|dd|file|du|df|ln|realpath|cd)\b/i;
 
 function commandWords(command: string): string[] {
@@ -72,6 +72,8 @@ export async function constrainGuestBash(command: string, cwd: string, workspace
   for (const rawWord of [...words, ...embeddedPaths]) {
     const word = rawWord.replace(/^["']|["',:]$/g, '');
     if (!word || word.startsWith('-')) continue;
+    // /dev/null 及标准空设备是无害的 shell 重定向目标，跳过路径边界检查（guest 读写 /dev/null 无副作用）
+    if (/^\/dev\/(?:null|stdin|stdout|stderr|tty|zero|random|urandom)$/.test(word)) continue;
     if (touchesFilesystem && (word.includes('$') || word.includes('`') || /[*?\[\]]/.test(word))) {
       return { error: `${GUEST_DENIAL}：无法安全解析路径`, command, cwd };
     }
