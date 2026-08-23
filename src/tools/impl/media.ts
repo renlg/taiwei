@@ -1,4 +1,4 @@
-import { loadConfig } from '../../config/config.js';
+import { loadConfig, type TaiweiConfig } from '../../config/config.js';
 import type { ToolSpec, ToolContext } from '../registry.js';
 
 interface MediaItem {
@@ -50,6 +50,18 @@ function imageCount(value: unknown): number {
   return Math.min(4, Math.max(1, count));
 }
 
+export function findModelAdminOnly(config: TaiweiConfig, providerId: string | undefined, modelId: string): boolean {
+  const preferred = providerId ? config.providers.find((provider) => provider.id === providerId) : undefined;
+  const preferredModel = preferred?.models?.find((model) => model.id === modelId);
+  if (preferredModel) return preferredModel.adminOnly === true;
+  return config.providers.some((provider) => provider.models?.some((model) => model.id === modelId && model.adminOnly === true));
+}
+
+function mediaProviderId(config: TaiweiConfig, modality: 'image' | 'video', modelId: string): string | undefined {
+  return config.providers.find((provider) => provider.modality === modality
+    && provider.models?.some((model) => model.id === modelId))?.id;
+}
+
 function imageMarkdown(item: MediaItem | undefined, index?: number): string | null {
   const label = index === undefined ? '生成的图片' : `生成的图片 ${index}`;
   if (typeof item?.url === 'string' && item.url.trim()) return `![${label}](${item.url})`;
@@ -92,6 +104,11 @@ export const imageGenTool: ToolSpec = {
     const prompt = argumentString(args.prompt, '');
     if (!prompt) return '图片生成失败: prompt 不能为空';
     try {
+      const model = argumentString(args.model, 'image-free');
+      const config = await loadConfig();
+      if (context.role !== 'admin' && findModelAdminOnly(config, mediaProviderId(config, 'image', model), model)) {
+        return '图片生成失败: 你没有权限使用该模型，仅管理员可用';
+      }
       const count = imageCount(args.n);
       const quality = argumentString(args.quality, 'standard');
       const referenceImage = argumentString(args.image, '');
@@ -101,7 +118,7 @@ export const imageGenTool: ToolSpec = {
       for (let index = 0; index < count; index += 1) {
         const requestPrompt = count > 1 && !referenceImage ? `${prompt}, variation ${index + 1}` : prompt;
         const payload: Record<string, unknown> = {
-          model: argumentString(args.model, 'image-free'),
+          model,
           prompt: requestPrompt,
           n: 1,
           size: argumentString(args.size, '1024x1024'),
@@ -240,6 +257,11 @@ export const videoGenTool: ToolSpec = {
     const prompt = argumentString(args.prompt, '');
     if (!prompt) return '视频生成失败: prompt 不能为空';
     try {
+      const model = argumentString(args.model, 'video-free');
+      const config = await loadConfig();
+      if (context.role !== 'admin' && findModelAdminOnly(config, mediaProviderId(config, 'video', model), model)) {
+        return '视频生成失败: 你没有权限使用该模型，仅管理员可用';
+      }
       const qualitySizes: Record<string, string> = { low: '480p', medium: '720p', high: '1080p' };
       const requestedSize = argumentString(args.size, '');
       const quality = argumentString(args.quality, 'medium');
@@ -247,7 +269,7 @@ export const videoGenTool: ToolSpec = {
       const imageError = validateReferenceImage(referenceImage);
       if (imageError) return `视频生成失败: ${imageError}`;
       const body = await postMedia('/videos', {
-        model: argumentString(args.model, 'video-free'),
+        model,
         prompt,
         duration: clampDuration(args.duration === undefined ? 10 : args.duration),
         size: requestedSize || qualitySizes[quality] || '720p',

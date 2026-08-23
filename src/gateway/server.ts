@@ -88,7 +88,35 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '58';
+const STATIC_ASSET_VERSION = '59';
+
+function modelForSelection(listed: ModelListResult, providerId: string | undefined, modelId: string) {
+  return listed.providers?.find((provider) => provider.id === providerId)?.models.find((model) => model.id === modelId);
+}
+
+function catalogForRole(listed: ModelListResult, role: 'admin' | 'guest'): ModelListResult {
+  if (role === 'admin') return listed;
+  const adminOnlyIds = new Set(listed.providers?.flatMap((provider) => provider.models
+    .filter((model) => model.adminOnly === true).map((model) => model.id)) ?? []);
+  const models = listed.models.filter((model) => !adminOnlyIds.has(model));
+  const providers = listed.providers?.map((provider) => ({
+    ...provider,
+    models: provider.models.filter((model) => model.adminOnly !== true),
+  })).filter((provider) => provider.models.length > 0);
+  if (!listed.providers) return { ...listed, models };
+
+  const currentProvider = providers?.find((provider) => provider.id === listed.currentProvider);
+  if (currentProvider?.models.some((model) => model.id === listed.current)) return { ...listed, models, providers };
+
+  const fallbackProvider = providers?.[0];
+  return {
+    ...listed,
+    models,
+    providers,
+    current: fallbackProvider?.models[0]?.id ?? models[0] ?? '',
+    currentProvider: fallbackProvider?.id,
+  };
+}
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -1273,7 +1301,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'GET' && pathname === '/api/models') {
-        const listed = await modelState.resolveModels();
+        const listed = catalogForRole(await modelState.resolveModels(), authenticatedRole);
         json(response, 200, { models: listed.models, current: listed.current, currentProvider: listed.currentProvider, providers: listed.providers });
         return;
       }
@@ -1383,7 +1411,11 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const listed = await modelState.resolveModels();
         const provider = typeof body.provider === 'string' ? body.provider.trim() : listed.currentProvider;
         const selectedProvider = listed.providers?.find((item) => item.id === provider);
-        const known = selectedProvider ? selectedProvider.models.some((item) => item.id === model) : listed.models.includes(model);
+        const selectedModel = modelForSelection(listed, provider, model);
+        const known = selectedProvider ? Boolean(selectedModel) : listed.models.includes(model);
+        if (authenticatedRole === 'guest' && selectedModel?.adminOnly === true) {
+          throw new HttpError(403, 'Guest cannot select this model');
+        }
         if (!known && listed.source !== 'fallback') {
           json(response, 400, { error: `Unknown model: ${model}`, models: listed.models });
           return;
@@ -1416,7 +1448,11 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           const listed = await modelState.resolveModels();
           provider = typeof body.provider === 'string' ? body.provider.trim() : listed.currentProvider;
           const selectedProvider = listed.providers?.find((item) => item.id === provider);
-          const known = selectedProvider ? selectedProvider.models.some((item) => item.id === model) : listed.models.includes(model);
+          const selectedModel = modelForSelection(listed, provider, model);
+          const known = selectedProvider ? Boolean(selectedModel) : listed.models.includes(model);
+          if (authenticatedRole === 'guest' && selectedModel?.adminOnly === true) {
+            throw new HttpError(403, 'Guest cannot select this model');
+          }
           if (!known && listed.source !== 'fallback') throw new HttpError(400, `Unknown model: ${model}`);
         } else if (body.provider !== undefined) throw new HttpError(400, 'provider requires model');
         const existing = await activeSessions.findBlankSession(folder.id);

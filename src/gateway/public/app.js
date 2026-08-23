@@ -907,6 +907,7 @@ function addProviderModelRow(model = {}) {
     <label><input data-capability="vision" type="checkbox" ${capabilities.vision ? 'checked' : ''}> Vision</label>
     <label><input data-capability="reasoning" type="checkbox" ${capabilities.reasoning ? 'checked' : ''}> Reasoning</label>
     <label><input data-capability="streaming" type="checkbox" ${capabilities.streaming !== false ? 'checked' : ''}> Streaming</label>
+    <label><input data-model-field="adminOnly" type="checkbox" ${model.adminOnly ? 'checked' : ''}> 仅管理员</label>
     <label>上下文 <input data-capability="contextWindow" type="number" min="1" required value="${Number(capabilities.contextWindow) || 256000}"></label>
   </div>`;
   row.querySelector('.provider-model-remove').addEventListener('click', () => { row.remove(); updateProviderDefaultOptions(); });
@@ -986,7 +987,7 @@ function renderManagedProviders(data) {
     for (const model of provider.models || []) {
       const item = document.createElement('span');
       const enabled = Object.entries(model.capabilities || {}).filter(([key, value]) => key !== 'contextWindow' && value).map(([key]) => key).join(', ');
-      item.textContent = `${model.displayName || model.id} (${model.id}) · ${enabled || 'text'} · ${Number(model.capabilities?.contextWindow || 0).toLocaleString()} ctx`;
+      item.textContent = `${model.displayName || model.id} (${model.id}) · ${enabled || 'text'}${model.adminOnly ? ' · 仅管理员' : ''} · ${Number(model.capabilities?.contextWindow || 0).toLocaleString()} ctx`;
       modelList.append(item);
     }
     const actions = document.createElement('div'); actions.className = 'provider-card-actions';
@@ -2117,10 +2118,12 @@ function renderModels() {
   elements.modelOptions.replaceChildren();
   const groups = state.providers.length ? state.providers : [{ id: state.currentProvider, name: 'Default', models: state.models.map((id) => ({ id, displayName: id })) }];
   for (const provider of groups) {
+    const models = provider.models.filter((model) => state.role !== 'guest' || model.adminOnly !== true);
+    if (!models.length) continue;
     const heading = document.createElement('div');
     heading.className = 'model-provider-label'; heading.textContent = provider.name;
     elements.modelOptions.append(heading);
-    for (const model of provider.models) {
+    for (const model of models) {
     const name = model.id;
     const option = document.createElement('button');
     const active = name === state.currentModel && provider.id === state.currentProvider;
@@ -2138,6 +2141,11 @@ function renderModels() {
 
 async function selectModel(name, provider = state.currentProvider) {
   if (state.switchingModel || (name === state.currentModel && provider === state.currentProvider)) { closeModelMenu(); return; }
+  const targetModel = state.providers.find((item) => item.id === provider)?.models.find((model) => model.id === name);
+  if (state.role === 'guest' && targetModel?.adminOnly === true) {
+    elements.modelError.textContent = 'Guest cannot select this model';
+    return;
+  }
   const previous = state.currentModel;
   const previousProvider = state.currentProvider;
   state.switchingModel = true;
@@ -2755,6 +2763,7 @@ elements.providerForm.addEventListener('submit', async (event) => {
   const models = [...elements.providerModelList.querySelectorAll('.provider-model-row')].map((row) => ({
     id: row.querySelector('[data-model-field="id"]').value.trim(),
     displayName: row.querySelector('[data-model-field="displayName"]').value.trim(),
+    adminOnly: row.querySelector('[data-model-field="adminOnly"]').checked,
     capabilities: {
       tools: row.querySelector('[data-capability="tools"]').checked,
       vision: row.querySelector('[data-capability="vision"]').checked,

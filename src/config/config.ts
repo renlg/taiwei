@@ -281,6 +281,7 @@ function normalizeProviders(value: unknown, legacy: Pick<TaiweiConfig, 'baseUrl'
     models: (legacy.models?.length ? legacy.models : [legacy.model]).map((id) => ({
       id, provider: 'default', displayName: id,
       capabilities: { tools: true, vision: false, reasoning: false, streaming: true, contextWindow: legacy.contextWindow ?? 256_000 },
+      adminOnly: undefined,
     })),
   }];
 }

@@ -13,6 +13,7 @@ export interface ModelDef {
   provider: string;
   displayName: string;
   capabilities: ModelCapabilities;
+  adminOnly?: boolean;
   costPerMIn?: number;
   costPerMOut?: number;
 }
@@ -30,7 +31,7 @@ export function normalizeModel(provider: ProviderConfig, value: ModelDef | strin
     displayName: value.displayName || value.id,
     capabilities: { ...DEFAULT_CAPABILITIES, ...value.capabilities },
   };
-  return { id: value, provider: provider.id, displayName: value, capabilities: { ...DEFAULT_CAPABILITIES } };
+  return { id: value, provider: provider.id, displayName: value, capabilities: { ...DEFAULT_CAPABILITIES }, adminOnly: undefined };
 }
 
 export function providerModels(provider: ProviderConfig): ModelDef[] {
