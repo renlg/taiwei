@@ -85,6 +85,13 @@ body.guest-mode .admin-only { display: none !important; }
 .new-chat:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 .sidebar-new { width: 100%; height: 44px; margin-bottom: 12px; flex-shrink: 0; }
 .sidebar-new > span:first-child { color: #fff; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 7px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); font-size: 18px; font-weight: 400; }
+.resource-section { margin-bottom: 22px; flex-shrink: 0; }
+.resource-toggle { width: 100%; min-height: 32px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid transparent; border-radius: 8px; color: var(--faint); background: transparent; cursor: pointer; text-align: left; font-size: 12px; transition: .16s; }
+.resource-toggle:hover, .resource-toggle:focus-visible { color: var(--muted); border-color: var(--border); background: var(--surface-hover); }
+.resource-toggle-icon { width: 16px; flex: none; text-align: center; font-size: 11px; transition: transform .18s; }
+.resource-section.expanded .resource-toggle-icon { transform: rotate(180deg); }
+.resource-section .sidebar-sections { display: none; margin-bottom: 0; }
+.resource-section.expanded .sidebar-sections { display: grid; }
 .sidebar-sections { display: grid; gap: 3px; margin-bottom: 22px; flex-shrink: 0; }
 .sidebar-section-button { width: 100%; min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid transparent; border-radius: 10px; color: var(--muted); background: transparent; cursor: pointer; text-align: left; transition: .16s; }
 .sidebar-section-button:hover, .sidebar-section-button:focus-visible { color: var(--text); border-color: var(--border); background: var(--surface-hover); }
@@ -550,6 +557,8 @@ body.sidebar-collapsed .brand-name, body.sidebar-collapsed .sidebar-label, body.
 body.sidebar-collapsed .sidebar-new { width: 44px; margin-inline: auto; }
 body.sidebar-collapsed .sidebar-new > span:first-child { width: auto; height: auto; background: transparent; font-size: 22px; }
 body.sidebar-collapsed .sidebar-sections { justify-items: center; }
+body.sidebar-collapsed .resource-section .sidebar-sections { justify-items: center; }
+body.sidebar-collapsed .resource-toggle { justify-content: center; padding-inline: 0; }
 body.sidebar-collapsed .sidebar-section-button { width: 40px; justify-content: center; padding-inline: 0; }
 body.sidebar-collapsed .session-item { display: block; width: 40px; height: 40px; margin: 4px auto; padding: 0; }
 body.sidebar-collapsed .session-item::after { content: ''; position: absolute; inset: 12px; border: 2px solid var(--faint); border-radius: 5px; }

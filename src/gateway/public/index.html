@@ -39,16 +39,21 @@
         <a class="brand" href="#" aria-label="taiwei 首页"><img class="brand-mark" src="/logo.png?v={{ASSET_VERSION}}" alt=""><span class="brand-name">taiwei</span></a>
         <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="关闭侧边栏">×</button>
       </div>
-      <nav class="sidebar-sections admin-only" aria-label="资源管理">
-        <button class="sidebar-section-button" id="skills-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">✦</span><span class="sidebar-label">技能</span></button>
-        <button class="sidebar-section-button" id="knowledge-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">▤</span><span class="sidebar-label">知识库</span></button>
-        <button class="sidebar-section-button" id="mcp-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⌘</span><span class="sidebar-label">MCP</span></button>
-        <button class="sidebar-section-button" id="tools-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🔧</span><span class="sidebar-label">工具</span></button>
-        <button class="sidebar-section-button" id="models-admin-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">◉</span><span class="sidebar-label">模型管理</span></button>
-        <button class="sidebar-section-button" id="memory-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">📝</span><span class="sidebar-label">持久记忆</span></button>
-        <button class="sidebar-section-button" id="cron-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⏰</span><span class="sidebar-label">定时任务</span></button>
-        <button class="sidebar-section-button" id="deployments-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🚀</span><span class="sidebar-label">Gitea 部署</span></button>
-      </nav>
+      <div class="resource-section admin-only">
+        <button class="resource-toggle" id="resource-toggle" type="button" aria-expanded="false" aria-controls="resource-sections">
+          <span class="resource-toggle-icon" aria-hidden="true">▾</span><span class="sidebar-label">资源管理</span>
+        </button>
+        <nav class="sidebar-sections" id="resource-sections" aria-label="资源管理">
+          <button class="sidebar-section-button" id="skills-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">✦</span><span class="sidebar-label">技能</span></button>
+          <button class="sidebar-section-button" id="knowledge-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">▤</span><span class="sidebar-label">知识库</span></button>
+          <button class="sidebar-section-button" id="mcp-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⌘</span><span class="sidebar-label">MCP</span></button>
+          <button class="sidebar-section-button" id="tools-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🔧</span><span class="sidebar-label">工具</span></button>
+          <button class="sidebar-section-button" id="models-admin-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">◉</span><span class="sidebar-label">模型管理</span></button>
+          <button class="sidebar-section-button" id="memory-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">📝</span><span class="sidebar-label">持久记忆</span></button>
+          <button class="sidebar-section-button" id="cron-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⏰</span><span class="sidebar-label">定时任务</span></button>
+          <button class="sidebar-section-button" id="deployments-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🚀</span><span class="sidebar-label">Gitea 部署</span></button>
+        </nav>
+      </div>
       <div class="history-heading"><span>历史会话</span><span class="history-actions"><span id="session-count">0</span><button id="folder-add" type="button" title="添加文件夹" aria-label="添加文件夹">＋</button></span></div>
       <nav class="session-list" id="session-list" aria-label="历史会话"></nav>
       <div class="sidebar-footer">

@@ -178,6 +178,8 @@ const elements = {
   tenantAccountsSettings: $('.tenant-accounts-settings'), tenantAccountsToggle: $('#tenant-accounts-toggle'), tenantAccountsStatus: $('#tenant-accounts-status'), tenantAccountsList: $('#tenant-accounts-list'),
   sidebarToggle: $('#sidebar-toggle'),
   sidebarClose: $('#sidebar-close'),
+  resourceToggle: $('#resource-toggle'),
+  resourceSection: $('.resource-section'),
   scrim: $('#mobile-scrim'),
   toast: $('#toast'),
 };
@@ -3036,6 +3038,11 @@ elements.sidebarToggle.addEventListener('click', () => {
 });
 elements.sidebarClose.addEventListener('click', () => elements.body.classList.remove('sidebar-open'));
 elements.scrim.addEventListener('click', () => elements.body.classList.remove('sidebar-open'));
+elements.resourceToggle.addEventListener('click', () => {
+  const expanded = elements.resourceSection.classList.toggle('expanded');
+  elements.resourceToggle.setAttribute('aria-expanded', String(expanded));
+  localStorage.setItem('taiwei-resource-expanded', expanded ? '1' : '0');
+});
 
 elements.loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -3189,8 +3196,12 @@ async function loadChat() {
 async function initialize() {
   const savedTheme = localStorage.getItem('taiwei-theme');
   applyTheme(savedTheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
-  // 侧边栏默认折叠：除非用户此前显式展开过（taiwei-sidebar-collapsed === '0'）
-  if (localStorage.getItem('taiwei-sidebar-collapsed') !== '0') elements.body.classList.add('sidebar-collapsed');
+  if (localStorage.getItem('taiwei-sidebar-collapsed') === '1') elements.body.classList.add('sidebar-collapsed');
+  // 资源管理区块：默认折叠，除非用户显式展开过（localStorage '1'）
+  if (localStorage.getItem('taiwei-resource-expanded') === '1') {
+    elements.resourceSection.classList.add('expanded');
+    elements.resourceToggle.setAttribute('aria-expanded', 'true');
+  }
   resizeInput();
   const shared = new URL(location.href).searchParams.get('share');
   if (shared) {
