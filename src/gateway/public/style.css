@@ -233,6 +233,31 @@ body.guest-mode .admin-only { display: none !important; }
 .knowledge-delete { width: 30px; height: 30px; border: 0; border-radius: 8px; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); cursor: pointer; }
 .knowledge-delete:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); }
 .mcp-card { overflow-y: auto; }
+.models-admin-card { overflow-y: auto; }
+.models-admin-actions { display: flex; gap: 8px; margin-bottom: 10px; }
+.provider-list { display: grid; gap: 9px; overflow: visible; }
+.provider-card { padding: 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
+.provider-card summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
+.provider-card summary::-webkit-details-marker { display: none; }
+.provider-card summary::before { content: '▸'; color: var(--faint); transition: transform .15s; }
+.provider-card[open] summary::before { transform: rotate(90deg); }
+.provider-card-name { flex: 1; min-width: 0; font-size: 13px; }
+.provider-default-badge { padding: 2px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 9px; }
+.provider-meta { margin: 9px 0; color: var(--muted); font: 10.5px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.provider-model-summary { display: grid; gap: 5px; margin: 8px 0; }
+.provider-model-summary span { padding: 6px 8px; border-radius: 7px; color: var(--muted); background: var(--surface); font-size: 10.5px; }
+.provider-card-actions { display: flex; justify-content: flex-end; gap: 5px; }
+.provider-editor { margin-top: 13px; padding: 15px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); }
+.provider-editor footer { justify-content: flex-end; }
+.provider-models-heading { display: flex; align-items: center; justify-content: space-between; margin: 15px 0 8px; }
+.provider-model-list { display: grid; gap: 8px; }
+.provider-model-row { padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); }
+.provider-model-fields { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; }
+.provider-model-fields label { margin: 0; }
+.provider-model-remove { min-height: 40px; color: var(--danger); }
+.provider-capabilities { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 9px; }
+.provider-capabilities label { display: flex; align-items: center; gap: 5px; margin: 0; font-size: 10px; }
+.provider-capabilities input { width: auto; }
 .mcp-actions { display: flex; gap: 8px; margin-bottom: 10px; }
 .mcp-list { display: grid; gap: 9px; overflow: visible; }
 .mcp-server { padding: 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
@@ -573,6 +598,7 @@ body.sidebar-collapsed .sidebar-footer { flex-direction: column; justify-content
   .skills-layout { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 35%) minmax(0, 1fr); }
   .skill-list { padding: 0 0 8px; border-right: 0; border-bottom: 1px solid var(--border); }
   .mcp-form-grid { grid-template-columns: 1fr; }
+  .provider-model-fields { grid-template-columns: 1fr; }
   .tool-config-form { grid-template-columns: 1fr; }
   .welcome { padding-top: 5vh; }
   .prompt-grid { grid-template-columns: 1fr; }

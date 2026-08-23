@@ -113,6 +113,29 @@ const elements = {
   toolsReload: $('#tools-reload'),
   toolsList: $('#tools-list'),
   pluginsList: $('#plugins-list'),
+  modelsAdminOpen: $('#models-admin-open'),
+  modelsAdminModal: $('#models-admin-modal'),
+  modelsAdminClose: $('#models-admin-close'),
+  modelsAdminReload: $('#models-admin-reload'),
+  modelsAdminError: $('#models-admin-error'),
+  providerList: $('#provider-list'),
+  providerAdd: $('#provider-add'),
+  providerForm: $('#provider-form'),
+  providerFormTitle: $('#provider-form-title'),
+  providerFormClose: $('#provider-form-close'),
+  providerFormError: $('#provider-form-error'),
+  providerId: $('#provider-id'),
+  providerType: $('#provider-type'),
+  providerName: $('#provider-name'),
+  providerBaseUrl: $('#provider-base-url'),
+  providerApiKey: $('#provider-api-key'),
+  providerKeyStatus: $('#provider-key-status'),
+  providerDefaultModel: $('#provider-default-model'),
+  providerIsDefault: $('#provider-is-default'),
+  providerModelList: $('#provider-model-list'),
+  providerModelAdd: $('#provider-model-add'),
+  providerCancel: $('#provider-cancel'),
+  providerSave: $('#provider-save'),
   memoryOpen: $('#memory-open'),
   memoryModal: $('#memory-modal'),
   memoryClose: $('#memory-close'),
@@ -191,6 +214,9 @@ const state = {
   editingMcp: null,
   tools: [],
   plugins: [],
+  managedProviders: [],
+  defaultProvider: '',
+  editingProvider: null,
   savedMemory: '',
   memoryFeedbackTimer: 0,
 };
@@ -664,7 +690,7 @@ async function openSettings() {
 }
 
 function closeResourcePanels(except) {
-  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal, elements.cronModal]) {
+  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal]) {
     if (modal !== except && modal.open) modal.close();
   }
 }
@@ -852,6 +878,151 @@ async function openKnowledge() {
   if (!elements.knowledgeModal.open) elements.knowledgeModal.showModal();
   elements.body.classList.remove('sidebar-open');
   await loadKnowledge();
+}
+
+function updateProviderDefaultOptions() {
+  const selected = elements.providerDefaultModel.value;
+  elements.providerDefaultModel.replaceChildren();
+  for (const row of elements.providerModelList.querySelectorAll('.provider-model-row')) {
+    const id = row.querySelector('[data-model-field="id"]').value.trim();
+    if (!id) continue;
+    const option = document.createElement('option'); option.value = id; option.textContent = id;
+    elements.providerDefaultModel.append(option);
+  }
+  if ([...elements.providerDefaultModel.options].some((option) => option.value === selected)) elements.providerDefaultModel.value = selected;
+}
+
+function addProviderModelRow(model = {}) {
+  const capabilities = model.capabilities || {};
+  const row = document.createElement('div'); row.className = 'provider-model-row';
+  row.innerHTML = `<div class="provider-model-fields">
+    <label>模型 ID<input data-model-field="id" required value="${escapeHtml(model.id || '')}" placeholder="gpt-4.1-mini"></label>
+    <label>显示名称<input data-model-field="displayName" required value="${escapeHtml(model.displayName || model.id || '')}" placeholder="GPT-4.1 mini"></label>
+    <button class="small-button provider-model-remove" type="button">删除</button>
+  </div>
+  <div class="provider-capabilities">
+    <label><input data-capability="tools" type="checkbox" ${capabilities.tools !== false ? 'checked' : ''}> Tools</label>
+    <label><input data-capability="vision" type="checkbox" ${capabilities.vision ? 'checked' : ''}> Vision</label>
+    <label><input data-capability="reasoning" type="checkbox" ${capabilities.reasoning ? 'checked' : ''}> Reasoning</label>
+    <label><input data-capability="streaming" type="checkbox" ${capabilities.streaming !== false ? 'checked' : ''}> Streaming</label>
+    <label>上下文 <input data-capability="contextWindow" type="number" min="1" required value="${Number(capabilities.contextWindow) || 256000}"></label>
+  </div>`;
+  row.querySelector('.provider-model-remove').addEventListener('click', () => { row.remove(); updateProviderDefaultOptions(); });
+  row.querySelector('[data-model-field="id"]').addEventListener('input', updateProviderDefaultOptions);
+  elements.providerModelList.append(row);
+  updateProviderDefaultOptions();
+}
+
+function closeProviderForm() {
+  elements.providerForm.hidden = true;
+  elements.providerFormError.textContent = '';
+  state.editingProvider = null;
+}
+
+function openProviderForm(provider) {
+  state.editingProvider = provider || null;
+  elements.providerFormTitle.textContent = provider ? `编辑 ${provider.name}` : '添加提供商';
+  elements.providerFormError.textContent = '';
+  elements.providerId.value = provider?.id || '';
+  elements.providerId.readOnly = Boolean(provider);
+  elements.providerType.value = 'openai-compatible';
+  elements.providerName.value = provider?.name || '';
+  elements.providerBaseUrl.value = provider?.baseUrl || '';
+  elements.providerApiKey.value = provider?.apiKey || '';
+  elements.providerKeyStatus.textContent = provider?.hasKey ? '已配置密钥；输入新值可替换' : '尚未配置密钥';
+  elements.providerIsDefault.checked = provider?.id === state.defaultProvider;
+  elements.providerModelList.replaceChildren();
+  const models = provider?.models?.length ? provider.models : [{ id: '', displayName: '', capabilities: {} }];
+  models.forEach(addProviderModelRow);
+  elements.providerDefaultModel.value = provider?.defaultModel || models[0]?.id || '';
+  elements.providerForm.hidden = false;
+  elements.providerId.focus();
+}
+
+async function refreshModelCatalog() {
+  const models = await requestJson('/api/models');
+  state.providers = models.providers || [];
+  state.models = models.models?.length ? models.models : [];
+  const currentExists = state.providers.some((provider) => provider.id === state.currentProvider
+    && provider.models.some((model) => model.id === state.currentModel));
+  if (!currentExists) {
+    state.currentModel = models.current || state.providers[0]?.models[0]?.id || state.currentModel;
+    state.currentProvider = models.currentProvider || state.providers[0]?.id || state.currentProvider;
+    if (state.current) {
+      const selected = await requestJson('/api/model', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: state.currentModel, provider: state.currentProvider, sessionId: state.current.id }),
+      });
+      state.current.currentModel = selected.current;
+      state.current.providerId = selected.provider;
+      state.contextWindow = selected.contextWindow || state.contextWindow;
+    }
+  }
+  renderModels();
+}
+
+function renderManagedProviders(data) {
+  state.managedProviders = data.providers || [];
+  state.defaultProvider = data.defaultProvider || '';
+  elements.providerList.replaceChildren();
+  if (!state.managedProviders.length) {
+    renderResourceEmpty(elements.providerList, '尚未配置提供商');
+    return;
+  }
+  for (const provider of state.managedProviders) {
+    const card = document.createElement('details'); card.className = 'provider-card';
+    const summary = document.createElement('summary');
+    const name = document.createElement('strong'); name.className = 'provider-card-name'; name.textContent = provider.name;
+    const count = document.createElement('span'); count.className = 'mcp-transport-badge'; count.textContent = `${provider.models?.length || 0} models`;
+    summary.append(name, count);
+    if (provider.id === state.defaultProvider) {
+      const badge = document.createElement('span'); badge.className = 'provider-default-badge'; badge.textContent = '默认'; summary.append(badge);
+    }
+    const meta = document.createElement('div'); meta.className = 'provider-meta';
+    meta.textContent = `${provider.id} · ${provider.type}\n${provider.baseUrl}\nAPI Key: ${provider.apiKey || '未配置'} · 默认模型: ${provider.defaultModel || '—'}`;
+    const modelList = document.createElement('div'); modelList.className = 'provider-model-summary';
+    for (const model of provider.models || []) {
+      const item = document.createElement('span');
+      const enabled = Object.entries(model.capabilities || {}).filter(([key, value]) => key !== 'contextWindow' && value).map(([key]) => key).join(', ');
+      item.textContent = `${model.displayName || model.id} (${model.id}) · ${enabled || 'text'} · ${Number(model.capabilities?.contextWindow || 0).toLocaleString()} ctx`;
+      modelList.append(item);
+    }
+    const actions = document.createElement('div'); actions.className = 'provider-card-actions';
+    const setDefault = document.createElement('button'); setDefault.type = 'button'; setDefault.className = 'mcp-action'; setDefault.textContent = '设为默认'; setDefault.hidden = provider.id === state.defaultProvider;
+    const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'mcp-action'; edit.textContent = '编辑';
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'mcp-action danger'; remove.textContent = '删除';
+    setDefault.addEventListener('click', async () => {
+      try {
+        renderManagedProviders(await requestJson('/api/admin/models', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...provider, defaultProvider: provider.id }) }));
+        await refreshModelCatalog(); showToast(`默认提供商已切换为 ${provider.name}`);
+      } catch (error) { elements.modelsAdminError.textContent = error.message; }
+    });
+    edit.addEventListener('click', () => openProviderForm(provider));
+    remove.addEventListener('click', async () => {
+      const replacement = provider.id === state.defaultProvider ? state.managedProviders.find((item) => item.id !== provider.id) : null;
+      const ok = await confirmDialog({ title: '删除模型提供商', desc: replacement ? `默认提供商将同时切换为 ${replacement.name}。` : '将删除该提供商及其全部模型。', object: `${provider.name} (${provider.id})`, okText: '删除', danger: true });
+      if (!ok) return;
+      const query = new URLSearchParams({ provider: provider.id });
+      if (replacement) query.set('defaultProvider', replacement.id);
+      try { renderManagedProviders(await requestJson(`/api/admin/models?${query}`, { method: 'DELETE' })); closeProviderForm(); await refreshModelCatalog(); showToast(`已删除 ${provider.name}`); }
+      catch (error) { elements.modelsAdminError.textContent = error.message; }
+    });
+    actions.append(setDefault, edit, remove); card.append(summary, meta, modelList, actions); elements.providerList.append(card);
+  }
+}
+
+async function loadManagedProviders(reload = false) {
+  elements.modelsAdminError.textContent = '';
+  renderResourceEmpty(elements.providerList, '加载中…');
+  try { renderManagedProviders(await requestJson(reload ? '/api/admin/models/reload' : '/api/admin/models', reload ? { method: 'POST' } : {})); }
+  catch (error) { elements.modelsAdminError.textContent = error.message; renderResourceEmpty(elements.providerList, '模型配置加载失败'); }
+}
+
+async function openModelsAdmin() {
+  closeResourcePanels(elements.modelsAdminModal);
+  if (!elements.modelsAdminModal.open) elements.modelsAdminModal.showModal();
+  elements.body.classList.remove('sidebar-open');
+  await loadManagedProviders();
 }
 
 function mcpStatusText(server, status) {
@@ -2494,13 +2665,15 @@ elements.mcpOpen.addEventListener('click', openMcp);
 elements.mcpClose.addEventListener('click', () => elements.mcpModal.close());
 elements.toolsOpen.addEventListener('click', openTools);
 elements.toolsClose.addEventListener('click', () => elements.toolsModal.close());
+elements.modelsAdminOpen.addEventListener('click', openModelsAdmin);
+elements.modelsAdminClose.addEventListener('click', () => elements.modelsAdminModal.close());
 elements.memoryOpen.addEventListener('click', openMemory);
 elements.memoryClose.addEventListener('click', () => elements.memoryModal.close());
 elements.cronOpen.addEventListener('click', openCron);
 elements.cronClose.addEventListener('click', () => elements.cronModal.close());
 elements.deploymentsOpen.addEventListener('click', openDeployments);
 elements.guestGitea.addEventListener('click', openDeployments);
-for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.memoryModal, elements.cronModal]) {
+for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal]) {
   modal.addEventListener('click', (event) => { if (event.target === modal) modal.close(); });
 }
 elements.memoryContent.addEventListener('input', updateMemoryControls);
@@ -2562,6 +2735,47 @@ elements.toolsReload.addEventListener('click', async () => {
   await loadTools(true);
   if (!elements.toolsError.textContent) showToast('工具配置已重新应用');
   elements.toolsReload.disabled = false; elements.toolsReload.textContent = '重新应用配置';
+});
+elements.modelsAdminReload.addEventListener('click', async () => {
+  elements.modelsAdminReload.disabled = true; elements.modelsAdminReload.textContent = '重载中…';
+  await loadManagedProviders(true);
+  try { await refreshModelCatalog(); } catch (error) { elements.modelsAdminError.textContent = error.message; }
+  elements.modelsAdminReload.disabled = false; elements.modelsAdminReload.textContent = '从磁盘重载';
+});
+elements.providerAdd.addEventListener('click', () => openProviderForm());
+elements.providerFormClose.addEventListener('click', closeProviderForm);
+elements.providerCancel.addEventListener('click', closeProviderForm);
+elements.providerModelAdd.addEventListener('click', () => addProviderModelRow());
+elements.providerForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  elements.providerFormError.textContent = '';
+  if (!elements.providerForm.reportValidity()) return;
+  const models = [...elements.providerModelList.querySelectorAll('.provider-model-row')].map((row) => ({
+    id: row.querySelector('[data-model-field="id"]').value.trim(),
+    displayName: row.querySelector('[data-model-field="displayName"]').value.trim(),
+    capabilities: {
+      tools: row.querySelector('[data-capability="tools"]').checked,
+      vision: row.querySelector('[data-capability="vision"]').checked,
+      reasoning: row.querySelector('[data-capability="reasoning"]').checked,
+      streaming: row.querySelector('[data-capability="streaming"]').checked,
+      contextWindow: Number(row.querySelector('[data-capability="contextWindow"]').value),
+    },
+  }));
+  if (!models.length) { elements.providerFormError.textContent = '请至少添加一个模型'; return; }
+  const provider = {
+    id: elements.providerId.value.trim(), name: elements.providerName.value.trim(), type: elements.providerType.value,
+    baseUrl: elements.providerBaseUrl.value.trim(), apiKey: elements.providerApiKey.value.trim(),
+    defaultModel: elements.providerDefaultModel.value, models,
+  };
+  elements.providerSave.disabled = true; elements.providerSave.textContent = '保存中…';
+  try {
+    const result = await requestJson('/api/admin/models', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...provider, ...(elements.providerIsDefault.checked ? { defaultProvider: provider.id } : {}) }),
+    });
+    renderManagedProviders(result); closeProviderForm(); await refreshModelCatalog(); showToast(`已保存 ${provider.name}`);
+  } catch (error) { elements.providerFormError.textContent = error.message; }
+  finally { elements.providerSave.disabled = false; elements.providerSave.textContent = '保存提供商'; }
 });
 elements.mcpForm.addEventListener('submit', async (event) => {
   event.preventDefault();

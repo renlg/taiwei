@@ -44,6 +44,7 @@
         <button class="sidebar-section-button" id="knowledge-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">▤</span><span class="sidebar-label">知识库</span></button>
         <button class="sidebar-section-button" id="mcp-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⌘</span><span class="sidebar-label">MCP</span></button>
         <button class="sidebar-section-button" id="tools-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🔧</span><span class="sidebar-label">工具</span></button>
+        <button class="sidebar-section-button" id="models-admin-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">◉</span><span class="sidebar-label">模型管理</span></button>
         <button class="sidebar-section-button" id="memory-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">📝</span><span class="sidebar-label">持久记忆</span></button>
         <button class="sidebar-section-button" id="cron-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⏰</span><span class="sidebar-label">定时任务</span></button>
         <button class="sidebar-section-button" id="deployments-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🚀</span><span class="sidebar-label">Gitea 部署</span></button>
@@ -305,6 +306,36 @@
         <h3>文件</h3>
         <div class="resource-list knowledge-files" id="knowledge-files"></div>
       </section>
+    </div>
+  </dialog>
+  <dialog class="modal management-modal" id="models-admin-modal">
+    <div class="modal-card management-card models-admin-card">
+      <header>
+        <div><h2>模型管理</h2><p>配置模型提供商；API 密钥只会以掩码显示</p></div>
+        <button class="icon-button" id="models-admin-close" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="models-admin-actions">
+        <button class="primary-button" id="provider-add" type="button">添加提供商</button>
+        <button class="secondary-button" id="models-admin-reload" type="button">从磁盘重载</button>
+      </div>
+      <div class="management-error" id="models-admin-error" role="alert"></div>
+      <div class="resource-list provider-list" id="provider-list" aria-label="模型提供商列表"></div>
+      <form class="provider-editor" id="provider-form" hidden>
+        <div class="mcp-editor-heading"><div><h3 id="provider-form-title">添加提供商</h3><p>留空或保留掩码不会覆盖已保存的密钥。</p></div><button class="icon-button" id="provider-form-close" type="button" aria-label="关闭表单">×</button></div>
+        <div class="mcp-form-grid">
+          <label>标识 ID<input id="provider-id" maxlength="64" pattern="[a-z0-9-]{1,64}" autocomplete="off" required placeholder="openai"></label>
+          <label>类型<select id="provider-type"><option value="openai-compatible">openai-compatible</option></select></label>
+          <label>显示名称<input id="provider-name" maxlength="100" autocomplete="off" required placeholder="OpenAI"></label>
+          <label>默认模型<select id="provider-default-model" required></select></label>
+          <label class="mcp-wide">Base URL<input id="provider-base-url" type="url" autocomplete="off" required placeholder="https://api.openai.com/v1"></label>
+          <label class="mcp-wide">API Key<input id="provider-api-key" type="password" autocomplete="new-password" placeholder="留空以保留现有密钥"><small id="provider-key-status"></small></label>
+          <label class="mcp-enabled"><input id="provider-is-default" type="checkbox"> 设为默认提供商</label>
+        </div>
+        <div class="provider-models-heading"><h3>模型</h3><button class="small-button" id="provider-model-add" type="button">+ 添加模型</button></div>
+        <div class="provider-model-list" id="provider-model-list"></div>
+        <div class="mcp-form-error" id="provider-form-error" role="alert"></div>
+        <footer><button class="secondary-button" id="provider-cancel" type="button">取消</button><button class="primary-button" id="provider-save" type="submit">保存提供商</button></footer>
+      </form>
     </div>
   </dialog>
   <dialog class="modal management-modal" id="mcp-modal">

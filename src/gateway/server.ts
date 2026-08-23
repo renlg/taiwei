@@ -9,7 +9,7 @@ import { LoginLockStore, type LoginLock } from './login-locks.js';
 import { sanitizeContextMessages, SessionStore, type SessionAttachment, type SessionIdentity, type SessionMessage, type SessionToolCall, type SessionUsage } from './sessions.js';
 import { FolderStore, guestFolderName, workspaceFolderMetadata } from './folders.js';
 import { openSse, sendSse } from './sse.js';
-import { getCurrentModel, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
+import { applyDefaultProvider, getCurrentModel, managedProvider, publicProvider, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
 import { DEFAULT_CONFIG, expandHome, loadConfig, resolveContextWindow, resolveToolSettings, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
 import { hashPassword, isScryptPassword, verifyPassword } from '../config/password.js';
 import { getPaths } from '../util/paths.js';
@@ -88,7 +88,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '55';
+const STATIC_ASSET_VERSION = '56';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
 const MAX_CUSTOM_PROMPT_LENGTH = 20_000;
@@ -1275,6 +1275,51 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       if (method === 'GET' && pathname === '/api/models') {
         const listed = await modelState.resolveModels();
         json(response, 200, { models: listed.models, current: listed.current, currentProvider: listed.currentProvider, providers: listed.providers });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/admin/models') {
+        const config = await configState.load();
+        json(response, 200, { defaultProvider: config.defaultProvider, providers: config.providers.map(publicProvider) });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/admin/models') {
+        const body = await readJson(request) as Record<string, unknown>;
+        const config = await configState.load();
+        const input = body.provider && typeof body.provider === 'object' ? body.provider : body;
+        const inputId = typeof (input as { id?: unknown }).id === 'string' ? (input as { id: string }).id.trim() : '';
+        const index = config.providers.findIndex((provider) => provider.id === inputId);
+        const provider = managedProvider(input, index >= 0 ? config.providers[index] : undefined);
+        if (index >= 0) config.providers[index] = provider;
+        else config.providers.push(provider);
+        const requestedDefault = typeof body.defaultProvider === 'string' && body.defaultProvider.trim()
+          ? body.defaultProvider.trim() : config.defaultProvider;
+        if (!config.providers.some((item) => item.id === requestedDefault)) throw new HttpError(400, `Unknown default provider: ${requestedDefault}`);
+        if (requestedDefault !== config.defaultProvider) applyDefaultProvider(config, requestedDefault);
+        else if (provider.id === config.defaultProvider) applyDefaultProvider(config, provider.id);
+        await configState.save(config);
+        json(response, index >= 0 ? 200 : 201, { defaultProvider: config.defaultProvider, providers: config.providers.map(publicProvider) });
+        return;
+      }
+      if (method === 'DELETE' && pathname === '/api/admin/models') {
+        const url = new URL(request.url ?? '/', 'http://localhost');
+        const providerId = url.searchParams.get('provider')?.trim();
+        const replacement = url.searchParams.get('defaultProvider')?.trim();
+        if (!providerId) throw new HttpError(400, 'provider is required');
+        const config = await configState.load();
+        if (!config.providers.some((provider) => provider.id === providerId)) throw new HttpError(404, 'Provider not found');
+        if (providerId === config.defaultProvider && !replacement) throw new HttpError(400, 'Cannot delete the defaultProvider without choosing a new defaultProvider');
+        const remaining = config.providers.filter((provider) => provider.id !== providerId);
+        if (!remaining.length) throw new HttpError(400, 'Cannot delete the only provider');
+        config.providers = remaining;
+        if (providerId === config.defaultProvider) applyDefaultProvider(config, replacement!);
+        else if (replacement) applyDefaultProvider(config, replacement);
+        await configState.save(config);
+        json(response, 200, { defaultProvider: config.defaultProvider, providers: config.providers.map(publicProvider) });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/admin/models/reload') {
+        const config = await configState.load();
+        json(response, 200, { defaultProvider: config.defaultProvider, providers: config.providers.map(publicProvider) });
         return;
       }
       if (method === 'GET' && pathname === '/api/agents') {
