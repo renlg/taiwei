@@ -3189,7 +3189,8 @@ async function loadChat() {
 async function initialize() {
   const savedTheme = localStorage.getItem('taiwei-theme');
   applyTheme(savedTheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
-  if (localStorage.getItem('taiwei-sidebar-collapsed') === '1') elements.body.classList.add('sidebar-collapsed');
+  // 侧边栏默认折叠：除非用户此前显式展开过（taiwei-sidebar-collapsed === '0'）
+  if (localStorage.getItem('taiwei-sidebar-collapsed') !== '0') elements.body.classList.add('sidebar-collapsed');
   resizeInput();
   const shared = new URL(location.href).searchParams.get('share');
   if (shared) {
