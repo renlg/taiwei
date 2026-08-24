@@ -88,7 +88,12 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '60';
+const STATIC_ASSET_VERSION = '61';
+
+function contentWithTurnError(content: string, message: string): string {
+  const error = `[错误] ${message || '未知错误'}`;
+  return content ? `${content}\n\n${error}` : error;
+}
 
 function modelForSelection(listed: ModelListResult, providerId: string | undefined, modelId: string) {
   return listed.providers?.find((provider) => provider.id === providerId)?.models.find((model) => model.id === modelId);
@@ -680,6 +685,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
     const started = Date.now();
     const method = request.method ?? 'GET';
     const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+    let persistSseRouteError: ((error: Error) => Promise<void>) | undefined;
     response.once('finish', () => log(`[taiwei] ${method} ${pathname} ${response.statusCode} ${Date.now() - started}ms`));
     try {
       if (method === 'GET' && pathname === '/api/health') {
@@ -1661,9 +1667,34 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const toolCalls: SessionToolCall[] = [];
         const runtimeSessionId = `${guestId ?? authenticatedUsername ?? authenticatedRole}:${session.id}`;
         const turnId = randomUUID();
+        let pendingSaveTimer: ReturnType<typeof setTimeout> | undefined;
+        let routePendingMessage: SessionMessage | undefined;
+        let routePendingTurn: PendingTurn | undefined;
+        persistSseRouteError = async (error) => {
+          if (pendingSaveTimer) { clearTimeout(pendingSaveTimer); pendingSaveTimer = undefined; }
+          pendingTurns.delete(runtimeSessionId);
+          stopRequested.delete(runtimeSessionId);
+          const currentPending = routePendingMessage && session.messages.includes(routePendingMessage)
+            ? routePendingMessage
+            : undefined;
+          if (currentPending) {
+            const partial = routePendingTurn?.answer || currentPending.content;
+            currentPending.content = contentWithTurnError(partial, error.message);
+            currentPending.toolCalls = routePendingTurn?.toolCalls.length ? [...routePendingTurn.toolCalls] : currentPending.toolCalls;
+            currentPending.status = 'error';
+          } else {
+            session.messages.push({
+              role: 'assistant', content: contentWithTurnError('', error.message),
+              timestamp: new Date().toISOString(), status: 'error',
+            });
+          }
+          session.updatedAt = new Date().toISOString();
+          await activeSessions.save(session);
+        };
         const pendingMessage: SessionMessage = {
           role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'pending',
         };
+        routePendingMessage = pendingMessage;
         session.messages.push(pendingMessage);
         session.updatedAt = new Date().toISOString();
         await activeSessions.save(session);
@@ -1671,8 +1702,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           turnId, sessionId: session.id, runtimeSessionId,
           startedAt: new Date().toISOString(), answer: '', toolCalls: [], lastSavedAt: Date.now(),
         };
+        routePendingTurn = pendingTurn;
         pendingTurns.set(runtimeSessionId, pendingTurn);
-        let pendingSaveTimer: ReturnType<typeof setTimeout> | undefined;
         const throttledSave = () => {
           if (pendingSaveTimer) return;
           pendingSaveTimer = setTimeout(async () => {
@@ -1746,7 +1777,9 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const content = finalText ?? answer;
         const stopped = turnError?.message === 'Turn cancelled';
         if (finalText !== undefined || content || toolCalls.length || turnError) {
-          pendingMessage.content = content || (stopped ? '' : turnError?.message ?? '');
+          pendingMessage.content = turnError && !stopped
+            ? contentWithTurnError(content, turnError.message)
+            : content;
           pendingMessage.toolCalls = toolCalls.length ? toolCalls : undefined;
           pendingMessage.status = turnError ? (stopped ? 'stopped' as const : 'error' as const) : undefined;
         } else {
@@ -1755,6 +1788,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         }
         session.updatedAt = new Date().toISOString();
         await activeSessions.save(session);
+        persistSseRouteError = undefined;
         if (historyIndex && !guestId) {
           try {
             await historyIndex.upsertSession({
@@ -1801,7 +1835,17 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       json(response, 404, { error: 'Not found' });
     } catch (error) {
       if (!response.headersSent) json(response, error instanceof HttpError ? error.status : 400, { error: (error as Error).message });
-      else { sendSse(response, 'error', { message: (error as Error).message }); response.end(); }
+      else {
+        const routeError = error instanceof Error ? error : new Error(String(error));
+        if (persistSseRouteError) {
+          try { await persistSseRouteError(routeError); }
+          catch (saveError) {
+            log(`[taiwei] failed to persist SSE route error: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
+          }
+        }
+        sendSse(response, 'error', { message: routeError.message });
+        response.end();
+      }
     }
   });
   server.once('close', () => { if (tenantAccounts) tenantAccounts.store.close?.(); });

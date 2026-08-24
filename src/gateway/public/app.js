@@ -2559,9 +2559,11 @@ async function submit(message, files = []) {
     }
     if (!ownsCurrentStream(sessionId, controller)) return;
     if (serverError) {
-      if (!segmentText && !answerView.stack.querySelector('.tool-list')) answerView.row.remove();
-      else finalizeAssistant(answerView, segmentText);
-      addMessage({ role: 'assistant', content: `发生错误：${serverError}`, status: 'error', timestamp: new Date().toISOString() }, { forceScroll: true });
+      const errorContent = segmentText ? `${segmentText}\n\n[错误] ${serverError}` : `[错误] ${serverError}`;
+      answerView.message.status = 'error';
+      answerView.row.classList.remove('assistant');
+      answerView.row.classList.add('error');
+      finalizeAssistant(answerView, errorContent);
       setStatus('error', '出错了');
     } else {
       finalizeAssistant(answerView, segmentText);
@@ -2579,7 +2581,8 @@ async function submit(message, files = []) {
     } else {
       if (!segmentText && !answerView.stack.querySelector('.tool-list')) answerView.row.remove();
       else finalizeAssistant(answerView, segmentText);
-      addMessage({ role: 'assistant', content: `连接失败：${error.message}`, status: 'error', timestamp: new Date().toISOString() }, { forceScroll: true });
+      const connectionFailure = addMessage({ role: 'assistant', content: `连接失败：${error.message}`, status: 'error', timestamp: new Date().toISOString() }, { forceScroll: true });
+      connectionFailure.row.dataset.transient = 'connection-error';
       setStatus('error', '连接失败');
     }
   } finally {
@@ -2595,6 +2598,8 @@ async function submit(message, files = []) {
           state.current = fresh;
           elements.title.textContent = fresh.title;
           state.usage = fresh.usage ?? state.usage;
+          elements.messages.querySelectorAll('[data-transient="connection-error"]').forEach((row) => row.remove());
+          renderConversation(fresh);
           renderUsage();
           renderSessionList();
         }
