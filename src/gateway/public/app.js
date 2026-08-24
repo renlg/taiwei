@@ -151,6 +151,7 @@ const elements = {
   extendedMemoryList: $('#extended-memory-list'),
   cronOpen: $('#cron-open'), cronModal: $('#cron-modal'), cronClose: $('#cron-close'), cronError: $('#cron-error'), cronList: $('#cron-list'), cronHistory: $('#cron-history'),
   deploymentsOpen: $('#deployments-open'),
+  deploymentsModal: $('#deployments-modal'), deploymentsClose: $('#deployments-close'), deploymentsRefresh: $('#deployments-refresh'), deploymentsDoctor: $('#deployments-doctor'), deploymentsError: $('#deployments-error'), deploymentsResult: $('#deployments-result'), deploymentsList: $('#deployments-list'),
   confirmModal: $('#confirm-modal'), confirmForm: $('#confirm-form'), confirmIcon: $('#confirm-icon'), confirmTitle: $('#confirm-title'), confirmDesc: $('#confirm-desc'), confirmObject: $('#confirm-object'), confirmInput: $('#confirm-input'), confirmOk: $('#confirm-ok'), confirmCancel: $('#confirm-cancel'),
   workspaceInput: $('#workspace-input'),
   workspaceResolved: $('#workspace-resolved'),
@@ -692,7 +693,7 @@ async function openSettings() {
 }
 
 function closeResourcePanels(except) {
-  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal]) {
+  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
     if (modal !== except && modal.open) modal.close();
   }
 }
@@ -727,8 +728,81 @@ async function openCron() {
   try { await loadCron(); } catch (error) { elements.cronError.textContent = error.message; }
 }
 
-function openDeployments() {
-  window.open('http://14.103.23.160/gitea/', '_blank', 'noopener,noreferrer');
+function deploymentCheckText(label, check, valueKey) {
+  const value = check[valueKey];
+  const mark = value === true ? '✓' : value === false ? '✗' : '?';
+  return `${mark} ${label}：${check.message}`;
+}
+
+function renderDeploymentDoctor(results) {
+  if (!results.length) {
+    elements.deploymentsResult.textContent = '暂无部署可对账';
+    elements.deploymentsResult.classList.remove('failed');
+    return;
+  }
+  elements.deploymentsResult.textContent = results.map((result) => [
+    `${result.healthy ? '✓' : '✗'} ${result.deployment.name} (${result.deployment.ownerHash}) · DB 期望 ${result.desired.status}`,
+    deploymentCheckText('进程', result.observed.port, 'listening'),
+    deploymentCheckText('nginx', result.observed.nginx, 'configured'),
+    deploymentCheckText('目录', result.observed.directory, 'exists'),
+  ].join('\n')).join('\n\n');
+  elements.deploymentsResult.classList.toggle('failed', results.some((result) => !result.healthy));
+}
+
+async function loadDeployDoctor(deployment) {
+  elements.deploymentsError.textContent = '';
+  const query = deployment ? `?ownerHash=${encodeURIComponent(deployment.ownerHash)}` : '';
+  try {
+    const results = await requestJson(`/api/deployments/doctor${query}`);
+    renderDeploymentDoctor(deployment ? results.filter((result) => result.deployment.name === deployment.name) : results);
+    await loadDeployments();
+  } catch (error) { elements.deploymentsError.textContent = error.message; }
+}
+
+function renderDeployments(data) {
+  if (!data.length) { renderResourceEmpty(elements.deploymentsList, '暂无部署记录'); return; }
+  elements.deploymentsList.replaceChildren();
+  for (const deployment of data) {
+    const row = document.createElement('article'); row.className = 'deployment-item';
+    const main = document.createElement('div'); main.className = 'deployment-main';
+    const heading = document.createElement('div'); heading.className = 'deployment-heading';
+    const name = document.createElement('strong'); name.textContent = deployment.name;
+    const status = document.createElement('span'); status.className = `deployment-status ${deployment.status}`; status.textContent = deployment.status;
+    heading.append(name, status);
+    const link = document.createElement('a'); link.href = deployment.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = deployment.url;
+    const meta = document.createElement('div'); meta.className = 'deployment-meta'; meta.textContent = `owner ${deployment.ownerHash} · 端口 ${deployment.port} · 更新 ${new Date(deployment.updatedAt).toLocaleString()}`;
+    main.append(heading, link, meta);
+    const actions = document.createElement('div'); actions.className = 'deployment-actions';
+    const doctor = document.createElement('button'); doctor.className = 'small-button'; doctor.type = 'button'; doctor.textContent = '对账';
+    doctor.addEventListener('click', async () => { doctor.disabled = true; try { await loadDeployDoctor(deployment); } finally { doctor.disabled = false; } });
+    const remove = document.createElement('button'); remove.className = 'small-button deployment-cleanup'; remove.type = 'button'; remove.textContent = '删除';
+    remove.addEventListener('click', async () => {
+      const confirmed = await confirmDialog({ title: '清理部署', desc: '将停止记录端口上的进程、删除项目目录并移除 nginx location。', object: `${deployment.name} · ${deployment.ownerHash}`, okText: '确认删除', danger: true });
+      if (!confirmed) return;
+      remove.disabled = true; elements.deploymentsError.textContent = '';
+      try {
+        const result = await requestJson(`/api/deployments/${encodeURIComponent(deployment.name)}?ownerHash=${encodeURIComponent(deployment.ownerHash)}`, { method: 'DELETE' });
+        elements.deploymentsResult.textContent = result.steps.map((step) => `${step.status === 'failed' ? '✗' : '✓'} ${step.step}: ${step.message}`).join('\n');
+        elements.deploymentsResult.classList.toggle('failed', !result.ok);
+        await loadDeployments();
+      } catch (error) { elements.deploymentsError.textContent = error.message; }
+      finally { remove.disabled = false; }
+    });
+    actions.append(doctor, remove); row.append(main, actions); elements.deploymentsList.append(row);
+  }
+}
+
+async function loadDeployments() {
+  elements.deploymentsError.textContent = '';
+  renderResourceEmpty(elements.deploymentsList, '加载中…');
+  try { renderDeployments(await requestJson('/api/deployments')); }
+  catch (error) { elements.deploymentsError.textContent = error.message; renderResourceEmpty(elements.deploymentsList, '部署列表加载失败'); }
+}
+
+async function openDeployments() {
+  closeResourcePanels(elements.deploymentsModal); if (!elements.deploymentsModal.open) elements.deploymentsModal.showModal(); elements.body.classList.remove('sidebar-open');
+  elements.deploymentsResult.textContent = '';
+  await loadDeployments();
 }
 
 function formatBytes(bytes) {
@@ -2687,7 +2761,10 @@ elements.cronOpen.addEventListener('click', openCron);
 elements.cronClose.addEventListener('click', () => elements.cronModal.close());
 elements.deploymentsOpen.addEventListener('click', openDeployments);
 elements.guestGitea.addEventListener('click', openDeployments);
-for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal]) {
+elements.deploymentsClose.addEventListener('click', () => elements.deploymentsModal.close());
+elements.deploymentsRefresh.addEventListener('click', loadDeployments);
+elements.deploymentsDoctor.addEventListener('click', () => loadDeployDoctor());
+for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
   modal.addEventListener('click', (event) => { if (event.target === modal) modal.close(); });
 }
 elements.memoryContent.addEventListener('input', updateMemoryControls);

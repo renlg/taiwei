@@ -51,7 +51,7 @@
           <button class="sidebar-section-button" id="models-admin-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">◉</span><span class="sidebar-label">模型管理</span></button>
           <button class="sidebar-section-button" id="memory-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">📝</span><span class="sidebar-label">持久记忆</span></button>
           <button class="sidebar-section-button" id="cron-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⏰</span><span class="sidebar-label">定时任务</span></button>
-          <button class="sidebar-section-button" id="deployments-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🚀</span><span class="sidebar-label">Gitea 部署</span></button>
+          <button class="sidebar-section-button" id="deployments-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🚀</span><span class="sidebar-label">部署管理</span></button>
         </nav>
       </div>
       <div class="history-heading"><span>历史会话</span><span class="history-actions"><span id="session-count">0</span><button id="folder-add" type="button" title="添加文件夹" aria-label="添加文件夹">＋</button></span></div>
@@ -78,7 +78,7 @@
         </div>
         <div class="topbar-actions">
           <span class="guest-mode-label" id="guest-mode-label" hidden><b>访客</b> 访客模式 · 仅聊天</span>
-          <button class="guest-logout-button guest-only" id="guest-gitea" type="button" title="Gitea 部署">🚀 Gitea</button>
+          <button class="guest-logout-button guest-only" id="guest-gitea" type="button" title="部署管理">🚀 部署</button>
           <button class="guest-logout-button guest-only" id="guest-logout" type="button">退出</button>
           <button class="icon-button admin-only" id="settings-open" type="button" aria-label="设置" title="设置">⚙</button>
           <button class="icon-button" id="theme-toggle" type="button" aria-label="切换主题">☾</button>
@@ -413,6 +413,18 @@
       <header><div><h2>定时任务</h2><p>启停任务、立即运行并查看持久运行记录</p></div><button class="icon-button" id="cron-close" type="button" aria-label="关闭">×</button></header>
       <div class="management-error" id="cron-error" role="alert"></div>
       <div class="cron-layout"><div class="resource-list" id="cron-list"></div><div><h3>运行历史</h3><div class="resource-list" id="cron-history"></div></div></div>
+    </div>
+  </dialog>
+  <dialog class="modal management-modal" id="deployments-modal">
+    <div class="modal-card management-card deployments-card">
+      <header><div><h2>部署管理</h2><p>以部署数据库为准，查看运行状态并对账或清理资源</p></div><button class="icon-button" id="deployments-close" type="button" aria-label="关闭">×</button></header>
+      <div class="deployments-toolbar">
+        <p>对账只读取端口、nginx location 和项目目录，不会修改系统。</p>
+        <div><button class="secondary-button" id="deployments-refresh" type="button">刷新</button><button class="secondary-button" id="deployments-doctor" type="button">对账</button></div>
+      </div>
+      <div class="management-error" id="deployments-error" role="alert"></div>
+      <pre class="deployment-result" id="deployments-result" aria-live="polite"></pre>
+      <div class="resource-list deployment-list" id="deployments-list"></div>
     </div>
   </dialog>
   <dialog class="modal confirm-modal" id="confirm-modal">

@@ -34,6 +34,10 @@ import type { ChatMessage, ContentBlock } from '../llm/client.js';
 import { uploadToOss } from './oss.js';
 import { TenantAccountService, TenantAccountStore } from './tenants.js';
 import { tenantWorkspaceForGuest, osUserForGuest } from './tenant-os.js';
+import {
+  cleanupDeployment, DeploymentStore, inspectDeployment, validateDeploymentInput,
+  type CleanupStep, type DeploymentDoctorResult, type DeploymentRecord, type DeploymentRepository,
+} from './deployments.js';
 
 export interface GatewayHistoryIndex {
   upsertSession(meta: HistorySessionMeta): Promise<void>;
@@ -50,6 +54,9 @@ export interface GatewayServerOptions {
   chat: ChatBridge;
   publicDirectory?: string;
   sessions?: SessionStore;
+  deployments?: DeploymentRepository;
+  deploymentCleanup?: (record: DeploymentRecord, options: { projectsRoot: string; skillsRoot: string; workspaceDirectories: readonly string[] }) => Promise<CleanupStep[]>;
+  deploymentInspect?: (record: DeploymentRecord) => Promise<DeploymentDoctorResult>;
   modelState?: GatewayModelState;
   contextWindow?: (model: string) => number | Promise<number>;
   log?: (message: string) => void;
@@ -88,7 +95,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '61';
+const STATIC_ASSET_VERSION = '62';
 
 function contentWithTurnError(content: string, message: string): string {
   const error = `[错误] ${message || '未知错误'}`;
@@ -229,6 +236,9 @@ export function guestRouteAllowed(method: string, pathname: string): boolean {
   if ((method === 'GET' || method === 'POST') && pathname === '/api/agent') return true;
   if (method === 'GET' && pathname === '/api/skills') return true;
   if (method === 'GET' && pathname === '/api/auth/gitea-user') return true;
+  if ((method === 'GET' || method === 'POST') && pathname === '/api/deployments') return true;
+  if (method === 'GET' && pathname === '/api/deployments/doctor') return true;
+  if (method === 'DELETE' && /^\/api\/deployments\/[^/]+$/.test(pathname)) return true;
   if (method === 'GET' && /^\/api\/sessions\/[^/]+\/pending$/.test(pathname)) return true;
   return (method === 'GET' || method === 'DELETE') && /^\/api\/sessions\/[^/]+$/.test(pathname);
 }
@@ -583,6 +593,7 @@ export async function buildMultimodalContent(files: unknown, uploadsDirectory: s
 export function createGatewayServer(options: GatewayServerOptions): Server {
   const publicDirectory = options.publicDirectory ?? DEFAULT_PUBLIC_DIRECTORY;
   const sessions = options.sessions ?? new SessionStore();
+  const deployments = options.deployments ?? new DeploymentStore();
   const historyIndex: GatewayHistoryIndex | false = options.history ?? (options.sessions ? false : {
     upsertSession: upsertHistorySession,
     appendMessage: appendHistoryMessage,
@@ -631,6 +642,16 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
     throw new Error('Gateway auth is enabled but no password is set. Set auth.password in ~/.taiwei/config.json or TAIWEI_AUTH_PASSWORD.');
   }
   const log = options.log ?? console.log;
+  let deploymentInitializationError: Error | undefined;
+  const deploymentReady = deployments.initialize().catch((error) => {
+    deploymentInitializationError = error instanceof Error ? error : new Error(String(error));
+    log(`[taiwei] deployment database unavailable: ${deploymentInitializationError.message}`);
+  });
+  const requireDeployments = async () => {
+    await deploymentReady;
+    if (deploymentInitializationError) throw new HttpError(503, `Deployment database is unavailable: ${deploymentInitializationError.message}`);
+    return deployments;
+  };
   if (tenantAccounts) void tenantAccounts.store.initialize().catch((error) => log(`[taiwei] tenant account database unavailable: ${error instanceof Error ? error.message : String(error)}`));
   const oauthStates = new Map<string, number>();
   const stopRequested = new Set<string>();
@@ -883,6 +904,12 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             defaultPath: async () => resolveWorkspaceDir(await configState.load()),
           }));
       const turnMemory = guestId ? MemoryStore.forGuest(guestId) : undefined;
+      const deploymentIdentity = async () => {
+        const tenantIdentity = await sessionIdentity(authenticatedRole, requestIdentityUsername);
+        const identity = (tenantIdentity.osUsername ?? requestIdentityUsername).trim();
+        return createHash('sha256').update(identity).digest('hex').slice(0, 8);
+      };
+      const deploymentWorkspaceDirectories = async () => (await activeFolders.list()).map((folder) => folder.path);
       if (method === 'POST' && pathname === '/api/logout') {
         if (authenticatedToken) await authSessions.delete(authenticatedToken);
         json(response, 200, { ok: true }, { 'set-cookie': sessionCookie('', 0) });
@@ -899,6 +926,60 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           workspace: resolveWorkspaceDir(config),
           ...(authenticatedUsername ? { username: authenticatedUsername } : {}),
         });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/deployments') {
+        const repository = await requireDeployments();
+        const requestedOwner = new URL(request.url ?? '/', 'http://localhost').searchParams.get('ownerHash')?.trim();
+        const allowedOwner = authenticatedRole === 'guest' ? await deploymentIdentity() : requestedOwner;
+        if (authenticatedRole === 'guest' && requestedOwner && requestedOwner !== allowedOwner) throw new HttpError(403, '不能查看其他用户的部署');
+        const records = await repository.listDeployments();
+        json(response, 200, allowedOwner ? records.filter((record) => record.ownerHash === allowedOwner) : records);
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/deployments') {
+        const repository = await requireDeployments();
+        const body = await readJson(request);
+        if (authenticatedRole === 'guest') {
+          const submittedOwner = body && typeof body === 'object' && !Array.isArray(body) && typeof (body as { ownerHash?: unknown }).ownerHash === 'string'
+            ? (body as { ownerHash: string }).ownerHash.trim() : '';
+          if (submittedOwner && submittedOwner !== await deploymentIdentity()) throw new HttpError(403, '不能注册或更新其他用户的部署');
+        }
+        const workspaceDirectories = await deploymentWorkspaceDirectories();
+        const input = validateDeploymentInput(body, join(taiweiPaths.home, 'projects'), workspaceDirectories);
+        if (authenticatedRole === 'guest' && input.ownerHash !== await deploymentIdentity()) throw new HttpError(403, '不能注册或更新其他用户的部署');
+        json(response, 200, await repository.upsertDeployment(input));
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/deployments/doctor') {
+        const repository = await requireDeployments();
+        const requestedOwner = new URL(request.url ?? '/', 'http://localhost').searchParams.get('ownerHash')?.trim();
+        const allowedOwner = authenticatedRole === 'guest' ? await deploymentIdentity() : requestedOwner;
+        if (authenticatedRole === 'guest' && requestedOwner && requestedOwner !== allowedOwner) throw new HttpError(403, '不能对账其他用户的部署');
+        const records = (await repository.listDeployments()).filter((record) => !allowedOwner || record.ownerHash === allowedOwner);
+        const inspect = options.deploymentInspect ?? inspectDeployment;
+        json(response, 200, await Promise.all(records.map((record) => inspect(record))));
+        return;
+      }
+      const deploymentDeleteRoute = pathname.match(/^\/api\/deployments\/([^/]+)$/);
+      if (method === 'DELETE' && deploymentDeleteRoute) {
+        const repository = await requireDeployments();
+        let name: string;
+        try { name = decodeURIComponent(deploymentDeleteRoute[1]); }
+        catch { throw new HttpError(400, '部署名称编码无效'); }
+        const ownerHash = new URL(request.url ?? '/', 'http://localhost').searchParams.get('ownerHash')?.trim();
+        if (!ownerHash) throw new HttpError(400, 'ownerHash is required');
+        if (authenticatedRole === 'guest' && ownerHash !== await deploymentIdentity()) throw new HttpError(403, '不能清理其他用户的部署');
+        const record = await repository.getDeployment(name, ownerHash);
+        if (!record) throw new HttpError(404, 'Deployment not found');
+        const workspaceDirectories = await deploymentWorkspaceDirectories();
+        const cleanup = options.deploymentCleanup ?? cleanupDeployment;
+        const steps = await cleanup(record, {
+          projectsRoot: join(taiweiPaths.home, 'projects'), skillsRoot: taiweiPaths.skills, workspaceDirectories,
+        });
+        const ok = steps.every((step) => step.status !== 'failed');
+        if (ok) await repository.markCleaned(record.id);
+        json(response, 200, { ok, steps, deployment: ok ? await repository.getDeployment(name, ownerHash) : record });
         return;
       }
       if (method === 'GET' && pathname === '/api/auth/gitea-user') {
@@ -1850,7 +1931,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       }
     }
   });
-  server.once('close', () => { if (tenantAccounts) tenantAccounts.store.close?.(); });
+  server.once('close', () => { if (tenantAccounts) tenantAccounts.store.close?.(); deployments.close?.(); });
   return server;
 }
 

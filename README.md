@@ -188,7 +188,7 @@ The sidebar panels manage installed skills, knowledge files, MCP servers, tools,
 
 ### Deployment management
 
-The admin-only **部署管理** sidebar panel reads deployment records from the `deployments` table in the existing `~/.taiwei/history.db`. A deployer records a successful deployment with an authenticated `POST /api/deployments` request:
+The **部署管理** panel reads deployment records from the `deployments` table in the existing `~/.taiwei/history.db`. Administrators can manage every owner; guests can list, register, reconcile, and clean only the owner hash derived from their tenant OS identity. A deployer records a successful deployment with an authenticated `POST /api/deployments` request:
 
 ```json
 {
@@ -203,6 +203,8 @@ The admin-only **部署管理** sidebar panel reads deployment records from the 
 ```
 
 `dir` should be the current gateway session's workspace directory—the same directory where the agent writes the project. The API accepts an exact registered workspace folder; older deployers may continue using `~/.taiwei/projects/<ownerHash>/<name>` as a fallback.
+
+`GET /api/deployments` lists records and accepts an optional `ownerHash` filter. `GET /api/deployments/doctor` performs a read-only comparison of the database's desired state with the observed listening port, nginx location, and project directory. `DELETE /api/deployments/:name?ownerHash=...` performs the cleanup described below; the owner hash is required to disambiguate duplicate project names.
 
 The panel's **清理** action stops the process listening on the recorded port, recursively deletes the recorded project directory after verifying that it is either an exact registered workspace or inside the legacy `~/.taiwei/projects/` root, and invokes `~/.taiwei/skills/taiwei-编程部署/scripts/nginx_deploy.py <ownerHash> <name> --remove`. Each step reports its own result and the deployment row is retained with status `cleaned` for audit history. The same operation can be run directly with [`scripts/cleanup_deployment.sh`](scripts/cleanup_deployment.sh):
 
