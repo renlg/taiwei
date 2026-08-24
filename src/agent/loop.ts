@@ -1,6 +1,6 @@
 import type { AgentContext } from './context.js';
 import { resolveCompressThreshold, resolveContextWindow, type TaiweiConfig } from '../config/config.js';
-import { messageText, streamChat, type ChatMessage, type ContentBlock, type TokenUsage } from '../llm/client.js';
+import { messageText, streamChat, type ChatMessage, type ChatResult, type ContentBlock, type TokenUsage } from '../llm/client.js';
 import { toOpenAITool } from '../llm/tools.js';
 import type { TenantIdentity, ToolRegistry } from '../tools/registry.js';
 import type { ConfirmationHandler } from '../security/commands.js';
@@ -14,6 +14,7 @@ import { appendAudit } from '../observability/audit.js';
 import { emitEvent } from '../observability/events.js';
 import { filterToolsForModel, resolveModel } from '../llm/catalog.js';
 import { selectionFor } from '../config/model.js';
+import { ProviderHttpError } from '../llm/retry.js';
 
 export interface RunTurnOptions {
   signal?: AbortSignal;
@@ -43,6 +44,7 @@ export type AgentEvent =
   | { type: 'token'; text: string }
   | { type: 'tool'; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; name: string; result: string }
+  | { type: 'model_iterate'; model: string; feedbackAttempt: number; maxFeedbackIterations: number; error: ModelErrorFeedback }
   | { type: 'compressing' }
   | { type: 'usage'; usage: TokenUsage & { contextWindow: number }; model: string; compressed?: boolean }
   | { type: 'done'; text: string };
@@ -53,6 +55,34 @@ const NO_MEMORY = 'NO_MEMORY';
 const MEMORY_FLUSH_TAIL_CHARS = 800;
 const MEMORY_FLUSH_MAX_CHARS = 60 * 1024;
 const FLUSH_TOOL_RESULT_CHARS = 2_000;
+
+interface ModelErrorFeedback {
+  message: string;
+  status?: number;
+  retryAfterMs?: number;
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true || (error instanceof Error && error.name === 'AbortError');
+}
+
+function modelErrorFeedback(error: unknown): ModelErrorFeedback {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof ProviderHttpError) {
+    return {
+      message,
+      status: error.status,
+      ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
+    };
+  }
+  const candidate = error && typeof error === 'object'
+    ? error as { status?: unknown; statusCode?: unknown; retryAfterMs?: unknown }
+    : {};
+  const status = typeof candidate.status === 'number' ? candidate.status
+    : typeof candidate.statusCode === 'number' ? candidate.statusCode : undefined;
+  const retryAfterMs = typeof candidate.retryAfterMs === 'number' ? candidate.retryAfterMs : undefined;
+  return { message, ...(status === undefined ? {} : { status }), ...(retryAfterMs === undefined ? {} : { retryAfterMs }) };
+}
 
 function compressionBoundary(conversation: ChatMessage[]): number {
   const retainedCount = Math.max(20, Math.ceil(conversation.length / 3));
@@ -163,6 +193,11 @@ export async function runAgentTurn(
   conversation.push({ role: 'user', content: options.userContent?.length ? options.userContent : prompt });
   let fullText = '';
   let compressionAttempted = false;
+  let consecutiveModelFeedbacks = 0;
+  const configuredFeedbackIterations = config.retry.maxFeedbackIterations;
+  const maxFeedbackIterations = Number.isFinite(configuredFeedbackIterations)
+    ? Math.max(0, Math.floor(configuredFeedbackIterations))
+    : 2;
   const maxTurns = options.agentProfile?.maxTurns ?? config.maxTurns;
   try { for (let turn = 0; turn < maxTurns; turn += 1) {
     if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
@@ -200,24 +235,52 @@ export async function runAgentTurn(
       lastMessagePreview,
     });
     if (beforeLLM?.extraContext) systemPrompt = limitTextTokens(`${systemPrompt}\n\n${beforeLLM.extraContext}`, config.budget.systemMax, config.tokenEstimateCharsPerToken);
-    const result = await streamChat({
-      baseUrl: resolved.provider.baseUrl, apiKey: resolved.provider.apiKey ?? '', model,
-      provider: resolved.provider,
-      messages: [{ role: 'system', content: systemPrompt }, ...conversation],
-      tools,
-      signal: options.signal, timeoutMs: config.requestTimeoutMs,
-      fallbackModel: config.fallbackModel,
-      retry: config.retry,
-      onAttempt: (attempt) => {
-        const event = { type: attempt.outcome === 'fallback' ? 'model.fallback' : 'model.attempt', runId, sessionId, agentId: options.agentProfile?.id, model: attempt.model, retryAttempt: attempt.attempt, outcome: attempt.outcome, ...(attempt.delayMs === undefined ? {} : { backoffMs: attempt.delayMs }) } as const;
-        emitEvent(event); void appendAudit(event).catch(() => {});
-      },
-      onText: (text) => {
-        fullText += text;
-        options.onText?.(text);
-        options.onEvent?.({ type: 'token', text });
-      },
-    });
+    let result: ChatResult;
+    try {
+      result = await streamChat({
+        baseUrl: resolved.provider.baseUrl, apiKey: resolved.provider.apiKey ?? '', model,
+        provider: resolved.provider,
+        messages: [{ role: 'system', content: systemPrompt }, ...conversation],
+        tools,
+        signal: options.signal, timeoutMs: config.requestTimeoutMs,
+        fallbackModel: config.fallbackModel,
+        retry: config.retry,
+        onAttempt: (attempt) => {
+          const event = { type: attempt.outcome === 'fallback' ? 'model.fallback' : 'model.attempt', runId, sessionId, agentId: options.agentProfile?.id, model: attempt.model, retryAttempt: attempt.attempt, outcome: attempt.outcome, ...(attempt.delayMs === undefined ? {} : { backoffMs: attempt.delayMs }) } as const;
+          emitEvent(event); void appendAudit(event).catch(() => {});
+        },
+        onText: (text) => {
+          fullText += text;
+          options.onText?.(text);
+          options.onEvent?.({ type: 'token', text });
+        },
+      });
+    } catch (error) {
+      if (isAbortError(error, options.signal) || consecutiveModelFeedbacks >= maxFeedbackIterations) throw error;
+      consecutiveModelFeedbacks += 1;
+      const feedback = modelErrorFeedback(error);
+      const iterateEvent = {
+        type: 'model.iterate', runId, sessionId, agentId: options.agentProfile?.id, model,
+        retryAttempt: consecutiveModelFeedbacks, maxFeedbackIterations, outcome: 'feedback', error: feedback,
+      } as const;
+      emitEvent(iterateEvent); await appendAudit(iterateEvent).catch(() => {});
+      options.onEvent?.({
+        type: 'model_iterate', model, feedbackAttempt: consecutiveModelFeedbacks, maxFeedbackIterations, error: feedback,
+      });
+      conversation.push({
+        role: 'user',
+        content: JSON.stringify({
+          type: 'llm_request_error',
+          model,
+          ...feedback,
+          feedbackAttempt: consecutiveModelFeedbacks,
+          maxFeedbackIterations,
+          instruction: 'The previous upstream LLM request failed after provider retry/fallback handling. Use this feedback to choose the next step or explain the failure to the user.',
+        }),
+      });
+      continue;
+    }
+    consecutiveModelFeedbacks = 0;
     await options.hooks?.run('afterLLM', {
       sessionId: options.sessionId, model, contentPreview: result.content.slice(0, 500),
       ...(result.usage ? { usage: { promptTokens: result.usage.promptTokens, completionTokens: result.usage.completionTokens } } : {}),

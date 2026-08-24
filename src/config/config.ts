@@ -35,7 +35,7 @@ export interface TaiweiConfig {
   fallbackModel?: string;
   tokenEstimateCharsPerToken: number;
   budget: { systemMax: number; historyMax: number; toolsMax: number; outputReserve: number };
-  retry: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number };
+  retry: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number; maxFeedbackIterations: number };
   runtime: { maxConcurrentTurns: number };
   policy: PolicyConfig;
   customPrompt: string;
@@ -104,7 +104,7 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   requestTimeoutMs: 120_000,
   tokenEstimateCharsPerToken: 4,
   budget: { systemMax: 20_000, historyMax: 180_000, toolsMax: 30_000, outputReserve: 16_000 },
-  retry: { maxAttempts: 3, baseDelayMs: 1_000, maxDelayMs: 30_000 },
+  retry: { maxAttempts: 3, baseDelayMs: 1_000, maxDelayMs: 30_000, maxFeedbackIterations: 2 },
   runtime: { maxConcurrentTurns: 4 },
   policy: { rules: [] },
   customPrompt: '',

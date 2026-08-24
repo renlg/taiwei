@@ -1740,6 +1740,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
               pendingTurn.toolCalls = [...toolCalls];
               sendSse(response, 'tool_result', { name: event.name, result: event.result });
               throttledSave();
+            } else if (event.type === 'model_iterate') {
+              sendSse(response, 'model_iterate', event);
             } else if (event.type === 'compressing') {
               sendSse(response, 'compressing', {});
             } else if (event.type === 'usage') {
