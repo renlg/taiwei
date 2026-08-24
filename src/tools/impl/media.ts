@@ -34,8 +34,7 @@ function errorMessage(body: MediaResponse, status: number): string {
 
 async function postMedia(path: string, payload: Record<string, unknown>, context: ToolContext): Promise<MediaResponse> {
   const config = await loadConfig();
-  const timeout = AbortSignal.timeout(60_000);
-  const signal = context.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
+  const signal = context.signal;
   const response = await fetch(`${config.baseUrl.replace(/\/$/, '')}${path}`, {
     method: 'POST',
     headers: {
@@ -288,12 +287,11 @@ function clampDuration(value: unknown): number {
 type VideoTaskResponse = MediaResponse & Record<string, unknown>;
 
 const VIDEO_POLL_INTERVAL_MS = 5_000;
-const VIDEO_POLL_TIMEOUT_MS = 180_000;
+const VIDEO_POLL_TIMEOUT_MS = Number.POSITIVE_INFINITY;
 
 async function getMedia(path: string, context: ToolContext, timeoutMs = 60_000): Promise<VideoTaskResponse> {
   const config = await loadConfig();
-  const timeout = AbortSignal.timeout(Math.max(1, Math.min(60_000, timeoutMs)));
-  const signal = context.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
+  const signal = context.signal;
   const response = await fetch(`${config.baseUrl.replace(/\/$/, '')}${path}`, {
     method: 'GET',
     headers: {
