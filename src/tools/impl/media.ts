@@ -203,7 +203,7 @@ function validateReferenceImage(url: string): string | null {
 
 export const imageGenTool: ToolSpec = {
   name: 'generate_image',
-  description: '生成图片。当用户要求画图/生成图片/设计图/示意图/海报/头像/logo等视觉内容时调用。生成结果会自动在聊天中显示。',
+  description: '生成图片。当用户要求画图/生成图片/设计图/示意图/海报/头像/logo等视觉内容时调用。支持 grok-imagine 系列模型（grok-imagine-image-2.0 等，用 aspect_ratio+resolution 控制尺寸，不用 size）。生成结果会自动在聊天中显示。',
   parameters: {
     type: 'object',
     properties: {
