@@ -3498,6 +3498,7 @@ async function initialize() {
     applyRole('guest');
     const clean = new URL(location.href); clean.searchParams.delete('share'); history.replaceState({}, '', clean);
   }
+  if (state.authToken || state.shareToken) showChat();
   await loadChat();
 }
 
