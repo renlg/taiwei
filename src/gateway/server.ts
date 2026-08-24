@@ -946,7 +946,18 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           if (submittedOwner && submittedOwner !== await deploymentIdentity()) throw new HttpError(403, '不能注册或更新其他用户的部署');
         }
         const workspaceDirectories = await deploymentWorkspaceDirectories();
-        const input = validateDeploymentInput(body, join(taiweiPaths.home, 'projects'), workspaceDirectories);
+        let guestProjectsRoots: string[] = [];
+        if (tenantAccounts) {
+          try {
+            const accounts = await tenantAccounts.store.listAccounts();
+            guestProjectsRoots = accounts
+              .map((account) => join(options.tenantHomeRoot ?? '/home', account.osUsername, 'projects'))
+              .filter((directory) => directory !== join(taiweiPaths.home, 'projects'));
+          } catch (error) {
+            log(`[taiwei] could not enumerate tenant accounts for deployment dir validation: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        const input = validateDeploymentInput(body, join(taiweiPaths.home, 'projects'), workspaceDirectories, guestProjectsRoots);
         if (authenticatedRole === 'guest' && input.ownerHash !== await deploymentIdentity()) throw new HttpError(403, '不能注册或更新其他用户的部署');
         json(response, 200, await repository.upsertDeployment(input));
         return;

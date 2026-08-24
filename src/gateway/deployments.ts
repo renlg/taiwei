@@ -192,6 +192,7 @@ export function validateDeploymentInput(
   value: unknown,
   projectsRoot = join(getPaths().home, 'projects'),
   workspaceDirectories: readonly string[] = [],
+  guestProjectsRoots: readonly string[] = [],
 ): DeploymentInput {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Request body must be an object');
   const body = value as Record<string, unknown>;
@@ -206,8 +207,12 @@ export function validateDeploymentInput(
   const legacyDir = resolve(projectsRoot, ownerHash, name);
   const submittedDir = resolve(body.dir);
   const sessionDir = workspaceDirectories.map((directory) => resolve(directory)).find((directory) => directory === submittedDir);
-  if (!sessionDir && submittedDir !== legacyDir) throw new Error(`dir must be a current session workspace or ${legacyDir}`);
-  const deploymentDir = sessionDir ?? legacyDir;
+  const guestProjectDir = guestProjectsRoots
+    .map((root) => resolve(root))
+    .map((root) => resolve(root, name))
+    .find((directory) => directory === submittedDir);
+  if (!sessionDir && !guestProjectDir && submittedDir !== legacyDir) throw new Error(`dir must be a current session workspace or ${legacyDir}`);
+  const deploymentDir = sessionDir ?? guestProjectDir ?? legacyDir;
   if (typeof body.url !== 'string' || !body.url.trim()) throw new Error('url is required');
   const url = body.url.trim();
   if (url !== expectedPath) {
