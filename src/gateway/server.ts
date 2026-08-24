@@ -88,7 +88,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '59';
+const STATIC_ASSET_VERSION = '60';
 
 function modelForSelection(listed: ModelListResult, providerId: string | undefined, modelId: string) {
   return listed.providers?.find((provider) => provider.id === providerId)?.models.find((model) => model.id === modelId);

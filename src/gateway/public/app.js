@@ -1508,7 +1508,6 @@ function setStreaming(streaming) {
   elements.attachmentButton.disabled = streaming || state.attachments.length >= 5;
   elements.send.disabled = streaming || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
   elements.attachmentList.querySelectorAll('button').forEach((button) => { button.disabled = streaming; });
-  document.querySelectorAll('.folder-toggle, .folder-name').forEach((button) => { button.disabled = streaming; });
   document.querySelectorAll('.session-item').forEach((item) => item.setAttribute('aria-disabled', String(streaming)));
   if (streaming) setStatus('streaming', '思考中');
 }
