@@ -2074,6 +2074,13 @@ function findFirstVisualSession() {
   return walk(null) || state.sessions[0];
 }
 
+/** 页面初始化选会话：优先 URL ?session= 参数，否则回退到第一个可见会话。 */
+function selectInitialSession() {
+  const fromUrl = sessionIdFromUrl();
+  if (fromUrl) return state.sessions.find((session) => session.id === fromUrl) || null;
+  return findFirstVisualSession();
+}
+
 function locateNewestSession() {
   const newest = state.sessions[0];
   if (!newest || !state.folders.length) return;
@@ -2357,12 +2364,28 @@ function ownsCurrentStream(sessionId, controller) {
   return isCurrentSession(sessionId) && state.controller === controller;
 }
 
+/** 把当前会话 id 同步到 URL 的 ?session= 参数（replaceState，不触发刷新/不产生历史记录）。 */
+function syncSessionUrl(sessionId) {
+  const url = new URL(location.href);
+  if (sessionId) url.searchParams.set('session', sessionId);
+  else url.searchParams.delete('session');
+  history.replaceState({}, '', url);
+}
+
+/** 读取 URL 上的会话 id，并校验它存在于当前会话列表。 */
+function sessionIdFromUrl() {
+  const id = new URL(location.href).searchParams.get('session');
+  if (!id) return null;
+  return state.sessions.some((session) => session.id === id) ? id : null;
+}
+
 async function loadSession(id) {
   const version = ++state.loadVersion;
   try {
     const session = await requestJson(`/api/sessions/${encodeURIComponent(id)}`);
     if (version !== state.loadVersion) return;
     state.current = session;
+    syncSessionUrl(session.id);
     state.currentModel = session.currentModel || state.currentModel;
     state.currentProvider = session.providerId || state.currentProvider;
     state.currentAgent = session.agentId || 'build';
@@ -2459,6 +2482,7 @@ async function createSession(folderId) {
     });
     state.expandedFolders.add(session.folderId);
     state.current = session;
+    syncSessionUrl(session.id);
     state.currentModel = session.currentModel || state.currentModel;
     state.currentProvider = session.providerId || state.currentProvider;
     state.currentAgent = session.agentId || 'build';
@@ -2480,8 +2504,8 @@ async function deleteSession(id) {
     const wasCurrent = state.current?.id === id;
     if (wasCurrent) state.current = null;
     await refreshSessions();
-    if (wasCurrent && state.sessions.length) await loadSession(state.sessions[0].id);
-    else if (wasCurrent) renderConversation(null);
+    if (wasCurrent && state.sessions.length) { syncSessionUrl(null); await loadSession(state.sessions[0].id); }
+    else if (wasCurrent) { syncSessionUrl(null); renderConversation(null); }
     showToast('会话已删除');
   } catch (error) { showToast(error.message); }
 }
@@ -3196,6 +3220,7 @@ async function logout() {
   try { await authenticatedFetch('/api/logout', { method: 'POST' }); } catch {}
   state.sessions = [];
   state.current = null;
+  syncSessionUrl(null);
   showLogin();
 }
 
@@ -3234,7 +3259,7 @@ async function loadChat() {
         elements.agentSelector.closest('.agent-switcher').hidden = true;
       }
       renderSessionList();
-      const firstVisual = findFirstVisualSession();
+      const firstVisual = selectInitialSession();
       if (firstVisual) {
         await loadSession(firstVisual.id);
         locateNewestSession();
@@ -3269,7 +3294,7 @@ async function loadChat() {
     elements.userTrigger.hidden = !info.authEnabled;
     renderSessionList();
     await loadSettings();
-    const firstVisual = findFirstVisualSession();
+    const firstVisual = selectInitialSession();
     if (firstVisual) {
       await loadSession(firstVisual.id);
       locateNewestSession();
