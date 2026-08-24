@@ -62,6 +62,20 @@ function mediaProviderId(config: TaiweiConfig, modality: 'image' | 'video', mode
     && provider.models?.some((model) => model.id === modelId))?.id;
 }
 
+async function configuredImageModels(): Promise<string[]> {
+  try {
+    const config = await loadConfig();
+    const models = config.providers
+      .filter((provider) => provider.modality === 'image')
+      .flatMap((provider) => provider.models ?? [])
+      .map((model) => model.id.trim())
+      .filter(Boolean);
+    return models.length ? [...new Set(['image-free', ...models])] : ['image-free'];
+  } catch {
+    return ['image-free'];
+  }
+}
+
 function imageMarkdown(item: MediaItem | undefined, index?: number): string | null {
   const label = index === undefined ? '生成的图片' : `生成的图片 ${index}`;
   if (typeof item?.url === 'string' && item.url.trim()) return `![${label}](${item.url})`;
@@ -91,8 +105,20 @@ export const imageGenTool: ToolSpec = {
     type: 'object',
     properties: {
       prompt: { type: 'string', description: '要生成的图片内容描述。' },
-      model: { type: 'string', enum: ['image-free'], default: 'image-free' },
+      model: { type: 'string', enum: await configuredImageModels(), default: 'image-free' },
       size: { type: 'string', default: '1024x1024' },
+      aspect_ratio: {
+        type: 'string',
+        enum: ['2:1', '20:9', '19.5:9', '16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16', '9:19.5', '9:20', '1:2'],
+        description: '图片宽高比（xAI grok-imagine 专用），默认 1:1。',
+        default: '1:1',
+      },
+      resolution: {
+        type: 'string',
+        enum: ['1k', '2k'],
+        description: '图片分辨率（xAI grok-imagine 专用），1k 标准、2k 高清。默认 1k。',
+        default: '1k',
+      },
       n: { type: 'integer', description: '生成图片数量（最多 4 张），多张会依次生成。', default: 1, minimum: 1, maximum: 4 },
       quality: { type: 'string', enum: ['low', 'medium', 'high'], description: '图片质量：low 较快、medium 均衡、high 更清晰。', default: 'high' },
       image: { type: 'string', description: '参考图 URL（可选）；上游暂不保证支持参考图。' },
@@ -117,11 +143,17 @@ export const imageGenTool: ToolSpec = {
       const images: string[] = [];
       for (let index = 0; index < count; index += 1) {
         const requestPrompt = count > 1 && !referenceImage ? `${prompt}, variation ${index + 1}` : prompt;
+        const grokImagine = model.startsWith('grok-imagine');
         const payload: Record<string, unknown> = {
           model,
           prompt: requestPrompt,
           n: 1,
-          size: argumentString(args.size, '1024x1024'),
+          ...(grokImagine
+            ? {
+                aspect_ratio: argumentString(args.aspect_ratio, '1:1'),
+                resolution: argumentString(args.resolution, '1k'),
+              }
+            : { size: argumentString(args.size, '1024x1024') }),
           quality,
           ...(referenceImage ? { image: referenceImage } : {}),
         };
