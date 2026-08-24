@@ -367,7 +367,10 @@ function generatedMediaUrls(toolCalls = []) {
 }
 
 function renderAssistantMarkdown(source, toolCalls = []) {
-  return renderMarkdown(removeMediaReferences(source, generatedMediaUrls(toolCalls)));
+  const mediaUrls = generatedMediaUrls(toolCalls);
+  return mediaUrls.length
+    ? renderMarkdown(removeMediaReferences(source, mediaUrls))
+    : renderMarkdown(source);
 }
 
 function inlineMarkdown(value) {
@@ -1747,8 +1750,12 @@ function renderTools(container, calls = []) {
     label.textContent = `${toolIcon} ${call.name} ${preview.length > 70 ? `${preview.slice(0, 70)}…` : preview}`;
     const detail = document.createElement('div');
     detail.className = 'tool-detail';
-    renderToolDetail(detail, call.args, call.result, call.name);
-    if (call.result !== undefined && containsMedia(call.result)) details.open = true;
+    const opensWithMedia = isMediaGeneration && call.result !== undefined && containsMedia(call.result);
+    details.open = opensWithMedia;
+    details.addEventListener('toggle', () => {
+      if (details.open) renderToolDetail(detail, call.args, call.result, call.name);
+    });
+    if (opensWithMedia) renderToolDetail(detail, call.args, call.result, call.name);
     summary.append(dot, label);
     details.append(summary, detail);
     list.append(details);
@@ -1758,6 +1765,8 @@ function renderTools(container, calls = []) {
 }
 
 function renderToolDetail(detail, args, result, toolName = '') {
+  if (detail.dataset.rendered === 'true') return;
+  detail.dataset.rendered = 'true';
   const argsBlock = document.createElement('pre');
   argsBlock.className = 'tool-args';
   argsBlock.textContent = JSON.stringify(args || {}, null, 2);
@@ -1775,7 +1784,9 @@ function renderToolDetail(detail, args, result, toolName = '') {
   const output = document.createElement('div');
   output.className = 'tool-result';
   const mediaUrls = MEDIA_GENERATION_TOOLS.has(toolName) ? mediaUrlsFromResult(result) : [];
-  output.innerHTML = renderMarkdown(removeMediaReferences(result, mediaUrls));
+  output.innerHTML = mediaUrls.length
+    ? renderMarkdown(removeMediaReferences(result, mediaUrls))
+    : renderMarkdown(result);
   if (mediaUrls.length) {
     const gallery = document.createElement('div');
     gallery.className = `media-grid ${mediaUrls.length <= 4 ? `media-grid-${mediaUrls.length}` : 'media-grid-many'}`;
@@ -1836,7 +1847,7 @@ function addMessage(message, options = {}) {
   bubble.className = 'bubble';
   if (message.role === 'assistant') {
     bubble.innerHTML = renderAssistantMarkdown(message.content || '', message.toolCalls);
-    decorateMediaDownloads(bubble);
+    if (bubble.querySelector('img, video')) decorateMediaDownloads(bubble);
   } else if (message.attachments?.length) {
     bubble.append(renderMessageAttachments(message.attachments));
     const textDiv = document.createElement('div');
@@ -1869,15 +1880,18 @@ function addMessage(message, options = {}) {
   meta.append(time, copy);
   stack.append(meta);
   row.append(stack);
-  elements.messages.append(row);
-  autoScroll(options.forceScroll);
+  row._taiweiMessage = message;
+  if (!options.detached) {
+    elements.messages.append(row);
+    autoScroll(options.forceScroll);
+  }
   return { row, stack, bubble, meta, message };
 }
 
 function updateAssistant(view, content, streaming = true) {
   view.message.content = content;
   view.bubble.innerHTML = renderAssistantMarkdown(content, view.message.toolCalls);
-  decorateMediaDownloads(view.bubble);
+  if (view.bubble.querySelector('img, video')) decorateMediaDownloads(view.bubble);
   if (streaming) {
     const caret = document.createElement('span');
     caret.className = 'streaming-caret';
@@ -2117,8 +2131,46 @@ function locateNewestSession() {
 
 /** 懒渲染：一次渲染的消息条数（长会话只渲染尾部，更早的滚动/点击加载）。 */
 const LAZY_RENDER_CHUNK = 30;
+/** 初始尾部渲染的文本字节预算，避免多条超长消息同时阻塞主线程。 */
+const LAZY_RENDER_BYTE_BUDGET = 200 * 1024;
 /** 分片渲染：每片渲染的消息数（让出主线程避免卡顿）。 */
 const RENDER_BATCH = 5;
+/** 超过此大小的消息独占一个渲染批次。 */
+const LARGE_MESSAGE_BYTES = 32 * 1024;
+const renderTextEncoder = new TextEncoder();
+
+function messageRenderBytes(message) {
+  let bytes = renderTextEncoder.encode(String(message?.content ?? '')).byteLength;
+  for (const call of message?.toolCalls || []) {
+    bytes += renderTextEncoder.encode(String(call.name || '')).byteLength;
+    try { bytes += renderTextEncoder.encode(JSON.stringify(call.args || {})).byteLength; }
+    catch { bytes += renderTextEncoder.encode(String(call.args || '')).byteLength; }
+    if (call.result !== undefined) bytes += renderTextEncoder.encode(String(call.result)).byteLength;
+  }
+  return bytes;
+}
+
+function selectInitialMessageTail(messages) {
+  let start = messages.length;
+  let bytes = 0;
+  while (start > 0 && messages.length - start < LAZY_RENDER_CHUNK) {
+    const nextBytes = messageRenderBytes(messages[start - 1]);
+    if (start < messages.length && bytes + nextBytes > LAZY_RENDER_BYTE_BUDGET) break;
+    start -= 1;
+    bytes += nextBytes;
+  }
+  return messages.slice(start);
+}
+
+function nextRenderBatch(messages, start) {
+  if (messageRenderBytes(messages[start]) > LARGE_MESSAGE_BYTES) return messages.slice(start, start + 1);
+  let end = start + 1;
+  while (end < messages.length && end - start < RENDER_BATCH) {
+    if (messageRenderBytes(messages[end]) > LARGE_MESSAGE_BYTES) break;
+    end += 1;
+  }
+  return messages.slice(start, end);
+}
 
 function renderConversation(session) {
   elements.messages.replaceChildren();
@@ -2126,21 +2178,23 @@ function renderConversation(session) {
   const messages = session?.messages || [];
   elements.welcome.classList.toggle('hidden', messages.length > 0);
   state.lazySessionId = session?.id || null;
-  state.lazyRendered = 0;
   const renderToken = ++state.renderToken;
-  const tail = messages.slice(-LAZY_RENDER_CHUNK);
+  const tail = selectInitialMessageTail(messages);
   const renderTotal = tail.length;
+  state.lazyRendered = renderTotal;
 
   const progress = document.createElement('div');
   progress.className = 'render-progress';
   progress.setAttribute('role', 'status');
   progress.innerHTML = '<span class="render-spinner"></span><span class="render-progress-text">加载消息…</span>';
 
-  if (messages.length > LAZY_RENDER_CHUNK) {
-    const earlier = document.createElement('button');
+  let earlier = null;
+  if (messages.length > renderTotal) {
+    earlier = document.createElement('button');
     earlier.type = 'button';
     earlier.className = 'load-earlier';
-    earlier.textContent = `加载更早消息（还剩 ${messages.length - LAZY_RENDER_CHUNK} 条）`;
+    earlier.disabled = true;
+    earlier.textContent = `加载更早消息（还剩 ${messages.length - renderTotal} 条）`;
     earlier.addEventListener('click', loadEarlierMessages);
     elements.messages.append(earlier);
   }
@@ -2165,21 +2219,22 @@ function renderConversation(session) {
       if (renderToken !== state.renderToken) return;
       progress.querySelector('.render-progress-text').textContent = `加载消息… ${rendered}/${renderTotal}`;
     };
+    // 先把标题、进度和会话高亮交给浏览器绘制，再开始 Markdown/DOM 重活。
+    await new Promise((resolve) => setTimeout(resolve, 0));
     while (rendered < renderTotal) {
       if (renderToken !== state.renderToken) return; // 已切到别的会话，丢弃本次渲染
-      const batch = tail.slice(rendered, rendered + RENDER_BATCH);
+      const batch = nextRenderBatch(tail, rendered);
       const fragment = document.createDocumentFragment();
-      for (const message of batch) fragment.append(addMessage(message, { forceScroll: false }).row);
+      for (const message of batch) fragment.append(addMessage(message, { detached: true }).row);
       elements.messages.insertBefore(fragment, progress);
       rendered += batch.length;
-      state.lazyRendered = rendered;
       updateProgress();
       // 让出主线程，保证页面可交互、转圈能转
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     if (renderToken !== state.renderToken) return;
     progress.remove();
-    state.lazyRendered = renderTotal;
+    if (earlier) earlier.disabled = false;
     autoScroll(true);
   })();
   return renderDone;
@@ -2195,13 +2250,14 @@ async function loadEarlierMessages() {
   if (nextCount <= 0) return;
   const start = total - loaded - nextCount;
   const chunk = (state.current?.messages ?? []).slice(start, start + nextCount);
-  const scrollAnchor = elements.messages.firstElementChild;
+  const scrollAnchor = elements.messages.querySelector('.message-row');
+  const anchorTop = scrollAnchor?.offsetTop ?? 0;
   const wasFollowing = state.followOutput;
   state.followOutput = false;
   try {
     const fragment = document.createDocumentFragment();
     for (const message of chunk) {
-      fragment.append(addMessage(message, { forceScroll: false }).row);
+      fragment.append(addMessage(message, { detached: true }).row);
     }
     elements.messages.insertBefore(fragment, scrollAnchor);
     state.lazyRendered = loaded + chunk.length;
@@ -2213,7 +2269,7 @@ async function loadEarlierMessages() {
   if (remaining > 0) btn.textContent = `加载更早消息（还剩 ${remaining} 条）`;
   else btn?.remove();
   const container = elements.chat;
-  if (scrollAnchor) container.scrollTop = Math.max(0, container.scrollTop + scrollAnchor.offsetTop);
+  if (scrollAnchor) container.scrollTop = Math.max(0, container.scrollTop + scrollAnchor.offsetTop - anchorTop);
 }
 
 function authenticatedOptions(options = {}) {
@@ -2476,6 +2532,8 @@ async function loadSession(id) {
   try {
     const session = await requestJson(`/api/sessions/${encodeURIComponent(id)}`);
     if (version !== state.loadVersion) return;
+    const modelChanged = state.currentModel !== (session.currentModel || state.currentModel)
+      || state.currentProvider !== (session.providerId || state.currentProvider);
     state.current = session;
     syncSessionUrl(session.id);
     state.currentModel = session.currentModel || state.currentModel;
@@ -2485,11 +2543,13 @@ async function loadSession(id) {
     state.attachments.forEach(releaseAttachment);
     state.attachments = [];
     renderAttachments();
-    await renderConversation(session);
-    renderModels();
+    setStatus('idle', '就绪');
+    const renderDone = renderConversation(session);
+    if (modelChanged) renderModels();
     updateActiveSessionInList();
     elements.body.classList.remove('sidebar-open');
-    setStatus('idle', '就绪');
+    await renderDone;
+    if (version !== state.loadVersion || !isCurrentSession(session.id)) return;
     const lastMessage = session.messages[session.messages.length - 1];
     if (lastMessage && lastMessage.role === 'assistant' && lastMessage.status === 'pending') {
       reconnectPending(session.id, lastMessage);
@@ -2505,20 +2565,25 @@ async function reconnectPending(sessionId, pendingMessage) {
   const messageRows = elements.messages.querySelectorAll('.message-row');
   const pendingRow = messageRows[messageRows.length - 1];
   let answerView = null;
-  if (pendingRow) {
+  if (pendingRow?.dataset.role === 'assistant') {
     const stack = pendingRow.querySelector('.message-stack');
     const bubble = pendingRow.querySelector('.bubble');
     const meta = pendingRow.querySelector('.message-meta');
-    const caret = document.createElement('span');
-    caret.className = 'streaming-caret';
-    bubble.append(caret);
+    if (!bubble.querySelector('.streaming-caret')) {
+      const caret = document.createElement('span');
+      caret.className = 'streaming-caret';
+      bubble.append(caret);
+    }
     answerView = { row: pendingRow, stack, bubble, meta, message: pendingMessage };
   } else {
     const view = addMessage(pendingMessage, { streaming: true, forceScroll: true });
     answerView = view;
   }
   let lastContent = pendingMessage.content || '';
-  if (answerView) updateAssistant(answerView, lastContent);
+  if (answerView && answerView.row._taiweiMessage?.content !== lastContent) {
+    updateAssistant(answerView, lastContent);
+  }
+  let refreshed = false;
   try {
     for (;;) {
       if (controller.signal.aborted || !ownsCurrentStream(sessionId, controller)) break;
@@ -2530,9 +2595,11 @@ async function reconnectPending(sessionId, pendingMessage) {
         const fresh = await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
         if (!ownsCurrentStream(sessionId, controller)) break;
         state.current = fresh;
-        renderConversation(fresh);
+        await renderConversation(fresh);
+        if (!ownsCurrentStream(sessionId, controller)) break;
         state.usage = fresh.usage ?? state.usage;
         renderUsage();
+        refreshed = true;
         break;
       }
       if (pending.answer && pending.answer !== lastContent) {
@@ -2548,15 +2615,21 @@ async function reconnectPending(sessionId, pendingMessage) {
   } catch (error) {
     if (error.name !== 'AbortError' && ownsCurrentStream(sessionId, controller)) showToast(`重连失败：${error.message}`);
   } finally {
-    try {
-      const fresh = await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
-      if (ownsCurrentStream(sessionId, controller)) {
-        state.current = fresh;
-        renderConversation(fresh);
-        state.usage = fresh.usage ?? state.usage;
-        renderUsage();
-      }
-    } catch {}
+    const shouldFallbackRefresh = !refreshed && isCurrentSession(sessionId)
+      && (ownsCurrentStream(sessionId, controller) || (controller.signal.aborted && !state.controller));
+    if (shouldFallbackRefresh) {
+      try {
+        const fresh = await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
+        if (isCurrentSession(sessionId)) {
+          state.current = fresh;
+          await renderConversation(fresh);
+          if (isCurrentSession(sessionId)) {
+            state.usage = fresh.usage ?? state.usage;
+            renderUsage();
+          }
+        }
+      } catch {}
+    }
     if (finishStream(controller)) {
       setStatus('idle', '就绪');
       elements.input.focus();
@@ -2706,8 +2779,12 @@ async function submit(message, files = []) {
           if (target) {
             target.call.result = item.data.result;
             target.details.classList.add('done');
-            renderToolDetail(target.details.querySelector('.tool-detail'), target.call.args, item.data.result, target.call.name);
-            if (containsMedia(item.data.result)) target.details.open = true;
+            const detail = target.details.querySelector('.tool-detail');
+            delete detail.dataset.rendered;
+            if (MEDIA_GENERATION_TOOLS.has(target.call.name) && containsMedia(item.data.result)) {
+              target.details.open = true;
+            }
+            if (target.details.open) renderToolDetail(detail, target.call.args, item.data.result, target.call.name);
           }
         } else if (item.event === 'confirm') {
           if (segmentText || answerView.stack.querySelector('.tool-list')) finalizeAssistant(answerView, segmentText);
