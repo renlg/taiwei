@@ -240,14 +240,17 @@ export const imageGenTool: ToolSpec = {
         return '图片生成失败: 你没有权限使用该模型，仅管理员可用';
       }
       const count = imageCount(args.n);
-      const quality = argumentString(args.quality, 'high');
+      const grokImagine = model.startsWith('grok-imagine');
+      const quality = argumentString(args.quality, grokImagine ? 'low' : 'high');
+      if (grokImagine && !['low', 'medium'].includes(quality)) {
+        return `图片生成失败: grok-imagine 仅支持 quality=low/medium（当前 ${quality}）`;
+      }
       const referenceImage = argumentString(args.image, '');
       const imageError = validateReferenceImage(referenceImage);
       if (imageError) return `图片生成失败: ${imageError}`;
       const images: string[] = [];
       for (let index = 0; index < count; index += 1) {
         const requestPrompt = count > 1 && !referenceImage ? `${prompt}, variation ${index + 1}` : prompt;
-        const grokImagine = model.startsWith('grok-imagine');
         const payload: Record<string, unknown> = {
           ...extraPayload(args, IMAGE_STANDARD_FIELDS),
           model,
