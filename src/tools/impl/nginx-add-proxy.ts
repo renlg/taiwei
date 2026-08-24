@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { get as httpGet } from 'node:http';
 import { createConnection } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
@@ -13,9 +15,11 @@ const RESERVED_PORTS = new Set([8688, 8890, 8899]);
 const PROXY_PATH = /^\/taiwei\/([0-9a-f]{8})\/([a-z0-9][a-z0-9-]*)\/$/;
 
 export interface NginxExecutorResult { stdout: string; stderr: string; exitCode: number; }
+export interface HealthProbeResult { ok: boolean; name?: string; }
 
 export interface NginxAddProxyDependencies {
   probeService?: (host: string, port: number, signal?: AbortSignal) => Promise<boolean>;
+  probeHealth?: (host: string, port: number, signal?: AbortSignal) => Promise<HealthProbeResult>;
   probePublicIp?: () => Promise<string | undefined>;
   readLocations?: () => Promise<string>;
   execute?: (file: string, args: string[], options: { shell: false; signal?: AbortSignal }) => Promise<NginxExecutorResult>;
@@ -23,6 +27,11 @@ export interface NginxAddProxyDependencies {
   publicUrl?: string;
   now?: () => Date;
   audit?: typeof appendAudit;
+}
+
+export function expectedOwnerHash(context: ToolContext): string | undefined {
+  const username = (context.tenantIdentity?.osUsername ?? context.identity)?.trim();
+  return username ? createHash('sha256').update(username).digest('hex').slice(0, 8) : undefined;
 }
 
 function defaultProbeService(host: string, port: number, signal?: AbortSignal): Promise<boolean> {
@@ -44,6 +53,51 @@ function defaultProbeService(host: string, port: number, signal?: AbortSignal): 
       else signal.addEventListener('abort', () => finish(false), { once: true });
     }
   });
+}
+
+function defaultProbeHealth(host: string, port: number, signal?: AbortSignal): Promise<HealthProbeResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: HealthProbeResult) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const request = httpGet({ host, port, path: '/api/health', timeout: 2_000, signal }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (chunk: Buffer | string) => chunks.push(Buffer.from(chunk)));
+      response.once('end', () => {
+        if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) return finish({ ok: false });
+        try {
+          const value = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { ok?: unknown; name?: unknown };
+          finish({ ok: value.ok === true, ...(typeof value.name === 'string' ? { name: value.name } : {}) });
+        } catch {
+          finish({ ok: false });
+        }
+      });
+    });
+    request.once('timeout', () => { request.destroy(); finish({ ok: false }); });
+    request.once('error', () => finish({ ok: false }));
+  });
+}
+
+interface ProxyLocation {
+  path: string;
+  host?: string;
+  port?: number;
+}
+
+function parseProxyLocations(source: string): ProxyLocation[] {
+  const locations: ProxyLocation[] = [];
+  const locationPattern = /location\s+(\S+)\s*\{([\s\S]*?)\}/g;
+  for (const match of source.matchAll(locationPattern)) {
+    const proxy = /proxy_pass\s+http:\/\/([^:/\s]+):(\d+)\/?\s*;/.exec(match[2]!);
+    locations.push({
+      path: match[1]!,
+      ...(proxy ? { host: proxy[1]!, port: Number(proxy[2]) } : {}),
+    });
+  }
+  return locations;
 }
 
 async function defaultReadLocations(): Promise<string> {
@@ -110,6 +164,7 @@ function errorSummary(stderr: string, exitCode: number): string {
 
 export function createNginxAddProxyTool(dependencies: NginxAddProxyDependencies = {}): ToolSpec {
   const probeService = dependencies.probeService ?? defaultProbeService;
+  const probeHealth = dependencies.probeHealth ?? defaultProbeHealth;
   const readLocations = dependencies.readLocations ?? defaultReadLocations;
   const execute = dependencies.execute ?? defaultExecute;
   const serverIp = dependencies.serverIp ?? defaultServerIp;
@@ -152,11 +207,39 @@ export function createNginxAddProxyTool(dependencies: NginxAddProxyDependencies 
       const name = parsedPath[2]!;
       const { host, port } = parsedAddr;
       const details = { ownerHash, name, port };
+      if (role === 'guest') {
+        const expected = expectedOwnerHash(context);
+        if (!expected) return finish({ error: 'ownerHash 校验失败：当前 guest 会话缺少可验证的身份，请重新登录后再执行' }, details);
+        if (ownerHash !== expected) {
+          return finish({ error: `ownerHash 不匹配：path 里的 ${ownerHash} 与你的身份 ${expected} 不符` }, details);
+        }
+      }
       if (!await probeService(host, port, context.signal)) {
         return finish({ error: `服务不存在或未启动: ${internalAddr},请先启动项目再执行` }, details);
       }
+      const health = await probeHealth(host, port, context.signal);
+      if (!health.ok) {
+        return finish({ error: `服务健康检查失败: http://${internalAddr}/api/health 未返回有效的 {"ok":true} JSON，请确认项目已就绪后重试` }, details);
+      }
+      if (health.name !== undefined && health.name !== name) {
+        return finish({ error: `该端口上的服务是 ${health.name}，不是 ${name}，端口疑似被其他项目占用` }, details);
+      }
 
       const locations = await readLocations();
+      const parsedLocations = parseProxyLocations(locations);
+      const existing = parsedLocations.find((location) => location.path === path);
+      if (existing && (existing.host === undefined || existing.port === undefined)) {
+        return finish({ error: `该 path 已存在但无法解析 proxy_pass：${path}；请由 root 检查 nginx 配置，必要时用 nginx_deploy.py --remove 清理旧路由后重试` }, details);
+      }
+      if (existing && existing.port !== port) {
+        return finish({ error: `该 path 已存在且指向端口 ${existing.port}，与请求端口 ${port} 不一致；如需换端口请先移除旧路由（root 用 nginx_deploy.py --remove）或使用 --force 更新` }, details);
+      }
+      const conflict = parsedLocations.find((location) =>
+        location.path !== path && location.host === host && location.port === port,
+      );
+      if (conflict) {
+        return finish({ error: `端口 ${host}:${port} 已被其他项目路由 ${conflict.path} 占用；请为当前项目选择未占用端口后重试` }, details);
+      }
       let url: string;
       if (configuredPublicUrl) {
         url = configuredPublicUrl.replace(/\/+$/, '') + path;
@@ -165,7 +248,7 @@ export function createNginxAddProxyTool(dependencies: NginxAddProxyDependencies 
         const externalIp = probed || serverIp();
         url = externalIp ? `http://${externalIp}${path}` : path;
       }
-      if (locations.includes(`location ${path} {`)) {
+      if (existing) {
         return finish({ ok: true, message: `反代已存在: ${path},无需重复配置`, alreadyExists: true, url }, details);
       }
 
