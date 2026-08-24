@@ -2047,6 +2047,14 @@ function renderSessionList() {
   setStreaming(state.streaming);
 }
 
+/** 切换会话时只更新侧栏 active 高亮，避免整棵重建。 */
+function updateActiveSessionInList() {
+  const currentId = state.current?.id;
+  for (const item of elements.sessionList.querySelectorAll('.session-item')) {
+    item.classList.toggle('active', item.dataset.sessionId === currentId);
+  }
+}
+
 function findFirstVisualSession() {
   if (!state.sessions.length || !state.folders.length) return state.sessions[0] || null;
   const knownIds = new Set(state.folders.map((f) => f.id));
@@ -2443,7 +2451,7 @@ async function loadSession(id) {
     renderAttachments();
     renderConversation(session);
     renderModels();
-    renderSessionList();
+    updateActiveSessionInList();
     elements.body.classList.remove('sidebar-open');
     setStatus('idle', '就绪');
     const lastMessage = session.messages[session.messages.length - 1];
