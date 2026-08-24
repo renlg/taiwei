@@ -194,6 +194,7 @@ const state = {
   streaming: false,
   followOutput: true,
   loadVersion: 0,
+  renderToken: 0,
   lazySessionId: null,
   lazyRendered: 0,
   toastTimer: 0,
@@ -2116,6 +2117,8 @@ function locateNewestSession() {
 
 /** 懒渲染：一次渲染的消息条数（长会话只渲染尾部，更早的滚动/点击加载）。 */
 const LAZY_RENDER_CHUNK = 30;
+/** 分片渲染：每片渲染的消息数（让出主线程避免卡顿）。 */
+const RENDER_BATCH = 5;
 
 function renderConversation(session) {
   elements.messages.replaceChildren();
@@ -2124,6 +2127,15 @@ function renderConversation(session) {
   elements.welcome.classList.toggle('hidden', messages.length > 0);
   state.lazySessionId = session?.id || null;
   state.lazyRendered = 0;
+  const renderToken = ++state.renderToken;
+  const tail = messages.slice(-LAZY_RENDER_CHUNK);
+  const renderTotal = tail.length;
+
+  const progress = document.createElement('div');
+  progress.className = 'render-progress';
+  progress.setAttribute('role', 'status');
+  progress.innerHTML = '<span class="render-spinner"></span><span class="render-progress-text">加载消息…</span>';
+
   if (messages.length > LAZY_RENDER_CHUNK) {
     const earlier = document.createElement('button');
     earlier.type = 'button';
@@ -2132,9 +2144,8 @@ function renderConversation(session) {
     earlier.addEventListener('click', loadEarlierMessages);
     elements.messages.append(earlier);
   }
-  const tail = messages.slice(-LAZY_RENDER_CHUNK);
-  for (const message of tail) addMessage(message);
-  state.lazyRendered = tail.length;
+  elements.messages.append(progress); // 进度条在消息流末尾（渲染中显示在底部）
+
   state.usage = session?.usage
     ? { ...session.usage, contextWindow: state.contextWindow, model: state.currentModel }
     : {
@@ -2146,7 +2157,32 @@ function renderConversation(session) {
     };
   renderUsage();
   state.followOutput = true;
-  autoScroll(true);
+
+  // 异步分片渲染尾部消息，避免一次性渲染超大会话卡死主线程。
+  const renderDone = (async () => {
+    let rendered = 0;
+    const updateProgress = () => {
+      if (renderToken !== state.renderToken) return;
+      progress.querySelector('.render-progress-text').textContent = `加载消息… ${rendered}/${renderTotal}`;
+    };
+    while (rendered < renderTotal) {
+      if (renderToken !== state.renderToken) return; // 已切到别的会话，丢弃本次渲染
+      const batch = tail.slice(rendered, rendered + RENDER_BATCH);
+      const fragment = document.createDocumentFragment();
+      for (const message of batch) fragment.append(addMessage(message, { forceScroll: false }).row);
+      elements.messages.insertBefore(fragment, progress);
+      rendered += batch.length;
+      state.lazyRendered = rendered;
+      updateProgress();
+      // 让出主线程，保证页面可交互、转圈能转
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    if (renderToken !== state.renderToken) return;
+    progress.remove();
+    state.lazyRendered = renderTotal;
+    autoScroll(true);
+  })();
+  return renderDone;
 }
 
 /** 懒加载更早消息：把上一批插到当前 DOM 之前。 */
@@ -2449,7 +2485,7 @@ async function loadSession(id) {
     state.attachments.forEach(releaseAttachment);
     state.attachments = [];
     renderAttachments();
-    renderConversation(session);
+    await renderConversation(session);
     renderModels();
     updateActiveSessionInList();
     elements.body.classList.remove('sidebar-open');

@@ -410,6 +410,9 @@ body.guest-mode .admin-only { display: none !important; }
 .stop-note { margin-top: 10px; color: var(--faint); font-size: 12px; }
 .load-earlier { display: block; margin: 0 auto 22px; padding: 7px 16px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: var(--surface); cursor: pointer; font-size: 12.5px; transition: .15s; }
 .load-earlier:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-hover); }
+.render-progress { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 0 20px; color: var(--muted); font-size: 13px; }
+.render-spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: render-spin .8s linear infinite; }
+@keyframes render-spin { to { transform: rotate(360deg); } }
 
 .message-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .message-attachment-image { max-width: min(280px, 100%); max-height: 220px; border-radius: 10px; object-fit: cover; cursor: pointer; }
