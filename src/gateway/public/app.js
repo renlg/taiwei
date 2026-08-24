@@ -194,6 +194,8 @@ const state = {
   streaming: false,
   followOutput: true,
   loadVersion: 0,
+  lazySessionId: null,
+  lazyRendered: 0,
   toastTimer: 0,
   authToken: localStorage.getItem('taiwei-token') || '',
   shareToken: localStorage.getItem('taiwei_share_token') || '',
@@ -2104,12 +2106,27 @@ function locateNewestSession() {
   });
 }
 
+/** 懒渲染：一次渲染的消息条数（长会话只渲染尾部，更早的滚动/点击加载）。 */
+const LAZY_RENDER_CHUNK = 30;
+
 function renderConversation(session) {
   elements.messages.replaceChildren();
   elements.title.textContent = session?.title || '新会话';
   const messages = session?.messages || [];
   elements.welcome.classList.toggle('hidden', messages.length > 0);
-  for (const message of messages) addMessage(message);
+  state.lazySessionId = session?.id || null;
+  state.lazyRendered = 0;
+  if (messages.length > LAZY_RENDER_CHUNK) {
+    const earlier = document.createElement('button');
+    earlier.type = 'button';
+    earlier.className = 'load-earlier';
+    earlier.textContent = `加载更早消息（还剩 ${messages.length - LAZY_RENDER_CHUNK} 条）`;
+    earlier.addEventListener('click', loadEarlierMessages);
+    elements.messages.append(earlier);
+  }
+  const tail = messages.slice(-LAZY_RENDER_CHUNK);
+  for (const message of tail) addMessage(message);
+  state.lazyRendered = tail.length;
   state.usage = session?.usage
     ? { ...session.usage, contextWindow: state.contextWindow, model: state.currentModel }
     : {
@@ -2122,6 +2139,37 @@ function renderConversation(session) {
   renderUsage();
   state.followOutput = true;
   autoScroll(true);
+}
+
+/** 懒加载更早消息：把上一批插到当前 DOM 之前。 */
+async function loadEarlierMessages() {
+  const sessionId = state.lazySessionId;
+  if (!sessionId || state.lazyRendered <= 0) return;
+  const loaded = state.lazyRendered;
+  const total = state.current?.messages?.length ?? loaded;
+  const nextCount = Math.min(LAZY_RENDER_CHUNK, total - loaded);
+  if (nextCount <= 0) return;
+  const start = total - loaded - nextCount;
+  const chunk = (state.current?.messages ?? []).slice(start, start + nextCount);
+  const scrollAnchor = elements.messages.firstElementChild;
+  const wasFollowing = state.followOutput;
+  state.followOutput = false;
+  try {
+    const fragment = document.createDocumentFragment();
+    for (const message of chunk) {
+      fragment.append(addMessage(message, { forceScroll: false }).row);
+    }
+    elements.messages.insertBefore(fragment, scrollAnchor);
+    state.lazyRendered = loaded + chunk.length;
+  } finally {
+    state.followOutput = wasFollowing;
+  }
+  const btn = elements.messages.querySelector('.load-earlier');
+  const remaining = total - state.lazyRendered;
+  if (remaining > 0) btn.textContent = `加载更早消息（还剩 ${remaining} 条）`;
+  else btn?.remove();
+  const container = elements.chat;
+  if (scrollAnchor) container.scrollTop = Math.max(0, container.scrollTop + scrollAnchor.offsetTop);
 }
 
 function authenticatedOptions(options = {}) {
