@@ -13,6 +13,18 @@ interface MediaResponse {
   message?: unknown;
 }
 
+interface SearchResult {
+  title: string;
+  snippet: string;
+}
+
+class MediaHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'MediaHttpError';
+  }
+}
+
 function errorMessage(body: MediaResponse, status: number): string {
   if (typeof body.error === 'string' && body.error.trim()) return body.error;
   if (body.error && typeof body.error === 'object' && typeof body.error.message === 'string' && body.error.message.trim()) return body.error.message;
@@ -37,7 +49,7 @@ async function postMedia(path: string, payload: Record<string, unknown>, context
   let body: MediaResponse;
   try { body = raw ? JSON.parse(raw) as MediaResponse : {}; }
   catch { body = { message: raw }; }
-  if (!response.ok) throw new Error(errorMessage(body, response.status));
+  if (!response.ok) throw new MediaHttpError(errorMessage(body, response.status), response.status);
   return body;
 }
 
@@ -75,6 +87,98 @@ async function configuredImageModels(): Promise<string[]> {
     return ['image-free'];
   }
 }
+
+async function configuredVideoModels(): Promise<string[]> {
+  try {
+    const config = await loadConfig();
+    const models = config.providers
+      .filter((provider) => provider.modality === 'video')
+      .flatMap((provider) => provider.models ?? [])
+      .map((model) => model.id.trim())
+      .filter(Boolean);
+    return models.length ? [...new Set(['video-free', ...models])] : ['video-free'];
+  } catch {
+    return ['video-free'];
+  }
+}
+
+async function searchSerper(query: string, apiKey: string): Promise<SearchResult[]> {
+  const response = await fetch('https://google.serper.dev/search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
+    body: JSON.stringify({ q: query, num: 3 }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`Serper search failed: HTTP ${response.status}`);
+  const data = await response.json() as { organic?: Array<{ title?: string; snippet?: string }> };
+  return (data.organic ?? []).slice(0, 3).map((item) => ({ title: item.title ?? '', snippet: item.snippet ?? '' }));
+}
+
+async function searchTavily(query: string, apiKey: string): Promise<SearchResult[]> {
+  const response = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ api_key: apiKey, query, max_results: 3 }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`Tavily search failed: HTTP ${response.status}`);
+  const data = await response.json() as { results?: Array<{ title?: string; content?: string }> };
+  return (data.results ?? []).slice(0, 3).map((item) => ({ title: item.title ?? '', snippet: item.content ?? '' }));
+}
+
+function searchKeywords(errorText: string): string {
+  return errorText
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[{}\[\]"'`,:;]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180);
+}
+
+async function searchModelUsage(model: string, errorText: string, context?: ToolContext): Promise<string> {
+  const config = await loadConfig();
+  const webSearchConfig = config.tools?.web_search ?? {};
+  const providerValue = context?.toolConfig?.provider ?? webSearchConfig.provider;
+  const provider = typeof providerValue === 'string' ? providerValue : 'serper';
+  const contextKey = context?.toolConfig?.apiKey;
+  const configuredKey = typeof contextKey === 'string' && contextKey.trim()
+    ? contextKey.trim()
+    : typeof webSearchConfig.apiKey === 'string' ? webSearchConfig.apiKey.trim() : '';
+  const apiKey = configuredKey || process.env.TAIWEI_WEB_SEARCH_API_KEY || '';
+  if (!apiKey) return '';
+  const query = `${model} ${searchKeywords(errorText)} API parameters 用法`;
+  const results = provider === 'tavily'
+    ? await searchTavily(query, apiKey)
+    : await searchSerper(query, apiKey);
+  return results
+    .filter((item) => item.title.trim() || item.snippet.trim())
+    .map((item, index) => `${index + 1}. ${item.title.trim()}\n${item.snippet.trim()}`.trim())
+    .join('\n');
+}
+
+function isUpstream4xx(error: unknown): boolean {
+  if (error instanceof MediaHttpError) return error.status >= 400 && error.status < 500;
+  const message = error instanceof Error ? error.message : String(error);
+  return /上游服务返回 HTTP 4\d\d|(?:^|\D)(?:400|401|402|403|404|405|406|407|408|409|410|411|412|413|414|415|416|417|418|421|422|423|424|425|426|428|429|431|451)(?:\D|$)/.test(message);
+}
+
+async function mediaFailure(prefix: string, model: string, error: unknown, context: ToolContext): Promise<string> {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!isUpstream4xx(error)) return `${prefix}: ${message}`;
+  try {
+    const usage = await searchModelUsage(model, message, context);
+    return usage ? `${prefix}: ${message}\n\n[模型用法参考（自动搜索）]\n${usage}` : `${prefix}: ${message}`;
+  } catch {
+    return `${prefix}: ${message}`;
+  }
+}
+
+function extraPayload(args: Record<string, unknown>, standardFields: ReadonlySet<string>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(args).filter(([key]) => !standardFields.has(key)));
+}
+
+const IMAGE_STANDARD_FIELDS = new Set(['prompt', 'model', 'n', 'size', 'quality', 'aspect_ratio', 'resolution', 'image']);
+const VIDEO_STANDARD_FIELDS = new Set(['prompt', 'model', 'duration', 'size', 'quality', 'image']);
 
 function imageMarkdown(item: MediaItem | undefined, index?: number): string | null {
   const label = index === undefined ? '生成的图片' : `生成的图片 ${index}`;
@@ -124,7 +228,7 @@ export const imageGenTool: ToolSpec = {
       image: { type: 'string', description: '参考图 URL（可选）；上游暂不保证支持参考图。' },
     },
     required: ['prompt'],
-    additionalProperties: false,
+    additionalProperties: true,
   },
   async execute(args, context) {
     const prompt = argumentString(args.prompt, '');
@@ -145,6 +249,7 @@ export const imageGenTool: ToolSpec = {
         const requestPrompt = count > 1 && !referenceImage ? `${prompt}, variation ${index + 1}` : prompt;
         const grokImagine = model.startsWith('grok-imagine');
         const payload: Record<string, unknown> = {
+          ...extraPayload(args, IMAGE_STANDARD_FIELDS),
           model,
           prompt: requestPrompt,
           n: 1,
@@ -167,7 +272,7 @@ export const imageGenTool: ToolSpec = {
         : `图片生成成功：\n${images[0]}`;
     } catch (error) {
       if (context.signal?.aborted) throw error;
-      return `图片生成失败: ${error instanceof Error ? error.message : String(error)}`;
+      return mediaFailure('图片生成失败', argumentString(args.model, 'image-free'), error, context);
     }
   },
 };
@@ -197,7 +302,7 @@ async function getMedia(path: string, context: ToolContext, timeoutMs = 60_000):
   let body: VideoTaskResponse;
   try { body = raw ? JSON.parse(raw) as VideoTaskResponse : {}; }
   catch { body = { message: raw }; }
-  if (!response.ok) throw new Error(errorMessage(body, response.status));
+  if (!response.ok) throw new MediaHttpError(errorMessage(body, response.status), response.status);
   return body;
 }
 
@@ -276,14 +381,14 @@ export const videoGenTool: ToolSpec = {
     type: 'object',
     properties: {
       prompt: { type: 'string', description: '要生成的视频内容描述。' },
-      model: { type: 'string', enum: ['video-free'], default: 'video-free' },
+      model: { type: 'string', enum: await configuredVideoModels(), default: 'video-free' },
       duration: { type: 'number', description: '视频时长（秒），会限制在 1 到 15 秒。', default: 10, minimum: 1, maximum: 15 },
       size: { type: 'string', description: '480p、720p、1080p、4k 或 WxH。', default: '720p' },
       quality: { type: 'string', enum: ['low', 'medium', 'high'], description: '视频质量别名：low→480p、medium→720p、high→1080p；同时提供 size 时以 size 为准。', default: 'medium' },
       image: { type: 'string', description: '参考图/首帧图片 URL（可选）；上游支持可能有限。' },
     },
     required: ['prompt'],
-    additionalProperties: false,
+    additionalProperties: true,
   },
   async execute(args, context) {
     const prompt = argumentString(args.prompt, '');
@@ -301,6 +406,7 @@ export const videoGenTool: ToolSpec = {
       const imageError = validateReferenceImage(referenceImage);
       if (imageError) return `视频生成失败: ${imageError}`;
       const body = await postMedia('/videos', {
+        ...extraPayload(args, VIDEO_STANDARD_FIELDS),
         model,
         prompt,
         duration: clampDuration(args.duration === undefined ? 10 : args.duration),
@@ -331,7 +437,7 @@ export const videoGenTool: ToolSpec = {
       return `视频生成失败: 等待视频生成超时（internal_status=${lastStatus}, error=${compactJson(lastError)}）`;
     } catch (error) {
       if (context.signal?.aborted) throw error;
-      return `视频生成失败: ${error instanceof Error ? error.message : String(error)}`;
+      return mediaFailure('视频生成失败', argumentString(args.model, 'video-free'), error, context);
     }
   },
 };
