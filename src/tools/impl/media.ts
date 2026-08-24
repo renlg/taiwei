@@ -94,7 +94,7 @@ export const imageGenTool: ToolSpec = {
       model: { type: 'string', enum: ['image-free'], default: 'image-free' },
       size: { type: 'string', default: '1024x1024' },
       n: { type: 'integer', description: '生成图片数量（最多 4 张），多张会依次生成。', default: 1, minimum: 1, maximum: 4 },
-      quality: { type: 'string', enum: ['standard', 'hd'], description: '图片质量，hd 更清晰。', default: 'standard' },
+      quality: { type: 'string', enum: ['low', 'medium', 'high'], description: '图片质量：low 较快、medium 均衡、high 更清晰。', default: 'high' },
       image: { type: 'string', description: '参考图 URL（可选）；上游暂不保证支持参考图。' },
     },
     required: ['prompt'],
@@ -110,7 +110,7 @@ export const imageGenTool: ToolSpec = {
         return '图片生成失败: 你没有权限使用该模型，仅管理员可用';
       }
       const count = imageCount(args.n);
-      const quality = argumentString(args.quality, 'standard');
+      const quality = argumentString(args.quality, 'high');
       const referenceImage = argumentString(args.image, '');
       const imageError = validateReferenceImage(referenceImage);
       if (imageError) return `图片生成失败: ${imageError}`;
