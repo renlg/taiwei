@@ -47,6 +47,9 @@ export interface ToolContext {
   runId?: string;
   policy?: PolicyEngine;
   workspaceOnly?: boolean;
+  lsp?: { enabled: boolean; maxDiagnostics: number; autoInject: boolean };
+  beforeFileWrite?: (path: string) => Promise<void> | void;
+  afterFileWrite?: (path: string) => Promise<void> | void;
 }
 
 export interface ToolSpec extends ToolDefinition {

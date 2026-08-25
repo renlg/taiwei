@@ -18,6 +18,7 @@ import { ProviderHttpError } from '../llm/retry.js';
 import { guestIdForUsername } from '../util/paths.js';
 import { parseSkill } from '../skills/loader.js';
 import { UserSkillStore } from '../skills/user-store.js';
+import { DiagnosticFeedbackSession, formatDiagnostic } from '../lsp/diagnostics.js';
 
 export interface RunTurnOptions {
   signal?: AbortSignal;
@@ -239,6 +240,9 @@ export async function runAgentTurn(
     ? Math.max(0, Math.floor(configuredFeedbackIterations))
     : 2;
   const maxTurns = options.agentProfile?.maxTurns ?? config.maxTurns;
+  const diagnostics = options.role !== 'guest' && config.lsp.enabled && config.lsp.autoInject
+    ? new DiagnosticFeedbackSession(options.workspaceRoot ?? options.cwd ?? process.cwd(), config.lsp.maxDiagnostics, options.signal)
+    : undefined;
   try { for (let turn = 0; turn < maxTurns; turn += 1) {
     if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
     const model = options.model ?? (options.getModel ? await options.getModel() : config.model);
@@ -248,7 +252,14 @@ export async function runAgentTurn(
       models: [{ id: model, provider: 'default', displayName: model, capabilities: { tools: true, vision: false, reasoning: false, streaming: true, contextWindow: resolveContextWindow(config, model) } }],
     }], selection);
     let systemPrompt = limitTextTokens(await context.systemPrompt(options.workspaceRoot ?? options.cwd, config.customPrompt), config.budget.systemMax, config.tokenEstimateCharsPerToken);
-    const availableTools = registry.list({ profile: options.agentProfile }).map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters }));
+    const diagnosticInjection = diagnostics?.takeInjection() ?? [];
+    if (diagnosticInjection.length) {
+      const feedback = `Current workspace diagnostics introduced by the file(s) just modified:\n${diagnosticInjection.map(formatDiagnostic).join('\n')}\nPrioritize fixing these new compile errors before continuing.`;
+      systemPrompt = limitTextTokens(`${systemPrompt}\n\n${feedback}`, config.budget.systemMax, config.tokenEstimateCharsPerToken);
+    }
+    const availableTools = registry.list({ profile: options.agentProfile })
+      .filter((tool) => options.role !== 'guest' || tool.name !== 'get_diagnostics')
+      .map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters }));
     const tools = limitToolsTokens(filterToolsForModel(availableTools, resolved.model), config.budget.toolsMax, config.tokenEstimateCharsPerToken);
     const contextWindow = resolved.model.capabilities.contextWindow || resolveContextWindow(config, model);
     let budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
@@ -408,6 +419,15 @@ export async function runAgentTurn(
         workspaceRoot: options.workspaceRoot ?? cwd,
         runId,
         policy: options.policy,
+        lsp: config.lsp,
+        beforeFileWrite: diagnostics ? async () => {
+          try { await diagnostics.beforeWrite(); }
+          catch (error) { if (options.signal?.aborted) throw error; console.debug(`[taiwei] Diagnostic baseline skipped: ${error instanceof Error ? error.message : String(error)}`); }
+        } : undefined,
+        afterFileWrite: diagnostics ? async (path) => {
+          try { await diagnostics.afterWrite(path); }
+          catch (error) { if (options.signal?.aborted) throw error; console.debug(`[taiwei] Diagnostic refresh skipped: ${error instanceof Error ? error.message : String(error)}`); }
+        } : undefined,
       });
       options.onEvent?.({ type: 'tool_result', name: call.function.name, result: output });
       conversation.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: output });

@@ -59,7 +59,9 @@ Rules:
       ? content.replaceAll(oldString, newString)
       : content.replace(oldString, newString);
 
+    await context.beforeFileWrite?.(path);
     await writeFile(path, updated, 'utf8');
+    await context.afterFileWrite?.(path);
 
     return {
       ok: true,

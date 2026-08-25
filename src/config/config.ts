@@ -39,6 +39,7 @@ export interface TaiweiConfig {
   budget: { systemMax: number; historyMax: number; toolsMax: number; outputReserve: number };
   retry: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number; maxFeedbackIterations: number };
   runtime: { maxConcurrentTurns: number };
+  lsp: { enabled: boolean; maxDiagnostics: number; autoInject: boolean };
   policy: PolicyConfig;
   customPrompt: string;
   hookTimeoutSeconds: number;
@@ -109,6 +110,7 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   budget: { systemMax: 20_000, historyMax: 180_000, toolsMax: 30_000, outputReserve: 16_000 },
   retry: { maxAttempts: 3, baseDelayMs: 1_000, maxDelayMs: 30_000, maxFeedbackIterations: 2 },
   runtime: { maxConcurrentTurns: 4 },
+  lsp: { enabled: true, maxDiagnostics: 5, autoInject: true },
   policy: { rules: [] },
   customPrompt: '',
   hookTimeoutSeconds: 10,
@@ -226,6 +228,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     budget: { ...DEFAULT_CONFIG.budget, ...storedConfig.budget },
     retry: { ...DEFAULT_CONFIG.retry, ...storedConfig.retry },
     runtime: { ...DEFAULT_CONFIG.runtime, ...storedConfig.runtime },
+    lsp: { ...DEFAULT_CONFIG.lsp, ...storedConfig.lsp },
     policy: { rules: Array.isArray(storedConfig.policy?.rules) ? storedConfig.policy.rules : [] },
     browser: { ...DEFAULT_CONFIG.browser, ...storedConfig.browser },
     gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },

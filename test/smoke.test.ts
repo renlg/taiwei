@@ -50,6 +50,7 @@ test('config initializes with defaults and honors environment overrides', async 
     assert.equal(config.memoryFlush, true);
     assert.equal(resolveCompressThreshold({ ...config, compressThreshold: 0 }), 0.7);
     assert.equal(config.maxTurns, 50);
+    assert.deepEqual(config.lsp, { enabled: true, maxDiagnostics: 5, autoInject: true });
     assert.equal(config.customPrompt, '');
     assert.equal(config.autoLoadSkills, true);
     assert.deepEqual(config.oss, {

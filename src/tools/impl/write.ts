@@ -17,6 +17,7 @@ export const writeTool: ToolSpec = {
       : resolve(context.cwd, String(args.path));
     const dir = dirname(path);
     await mkdir(dir, { recursive: true });
+    await context.beforeFileWrite?.(path);
 
     const tmpName = `.${Date.now()}-${randomBytes(4).toString('hex')}.tmp`;
     const tmpPath = join(dir, tmpName);
@@ -24,6 +25,7 @@ export const writeTool: ToolSpec = {
     try {
       await writeFile(tmpPath, String(args.content), 'utf8');
       await rename(tmpPath, path);
+      await context.afterFileWrite?.(path);
     } catch (err) {
       await unlink(tmpPath).catch(() => {});
       throw err;
