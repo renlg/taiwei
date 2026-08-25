@@ -34,6 +34,7 @@ export interface RunTurnOptions {
   delegationDepth?: number;
   role?: 'admin' | 'guest';
   identity?: string;
+  guestId?: string;
   tenantIdentity?: TenantIdentity;
   workspaceRoot?: string;
   runId?: string;
@@ -41,6 +42,7 @@ export interface RunTurnOptions {
   providerId?: string;
   model?: string;
   userContent?: ContentBlock[];
+  userSkillStore?: UserSkillStore;
 }
 
 export type AgentEvent =
@@ -226,6 +228,8 @@ export async function runAgentTurn(
   const conversation = options.retainConversation === false ? [] : context.messages;
   if (options.agentProfile) context.profile = options.agentProfile;
   conversation.push({ role: 'user', content: options.userContent?.length ? options.userContent : prompt });
+  // This snapshot shares immutable message objects with conversation. New messages must be
+  // appended to both arrays below so conversation compression cannot discard distillation input.
   const selfLearningConversation = [...conversation];
   let fullText = '';
   let compressionAttempted = false;
@@ -361,17 +365,14 @@ export async function runAgentTurn(
     selfLearningConversation.push(conversation.at(-1)!);
     if (!result.toolCalls.length) {
       const text = fullText || result.content;
-      if (config.skillSelfLearning) {
-        const owner = options.role === 'guest' ? guestIdForUsername(options.identity ?? 'guest') : 'admin';
-        try { await distillUserSkill(selfLearningConversation, config, model, owner, options.signal); }
-        catch (error) {
-          if (isAbortError(error, options.signal)) throw error;
-          console.debug(`[taiwei] Skill self-learning skipped: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
       options.onEvent?.({ type: 'done', text });
       const endEvent = { type: 'turn.end', runId, sessionId, agentId: options.agentProfile?.id, model: result.model ?? model, latencyMs: Date.now() - startedAt, usage: result.usage, outcome: 'success' } as const;
       emitEvent(endEvent); await appendAudit(endEvent).catch(() => {});
+      if (config.skillSelfLearning) {
+        const owner = options.role === 'guest' ? options.guestId ?? guestIdForUsername(options.identity ?? 'guest') : 'admin';
+        void distillUserSkill(selfLearningConversation, config, model, owner, undefined, options.userSkillStore)
+          .catch((error) => console.debug(`[taiwei] Skill self-learning skipped: ${error instanceof Error ? error.message : String(error)}`));
+      }
       return text;
     }
     for (const normalized of normalizedToolCalls) {

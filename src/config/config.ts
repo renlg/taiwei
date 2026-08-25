@@ -97,7 +97,7 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   contextWindow: 256_000,
   compressThreshold: 0.7,
   memoryFlush: true,
-  skillSelfLearning: true,
+  skillSelfLearning: false,
   baseUrl: 'https://api.openai.com/v1',
   publicUrl: '',
   apiKey: '',

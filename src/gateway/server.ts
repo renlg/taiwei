@@ -272,7 +272,7 @@ interface GuestPublicMessage {
   role: 'user' | 'assistant';
   content: string;
   attachments?: GuestPublicAttachment[];
-  toolCalls?: Array<{ name: string; redacted: true }>;
+  toolCalls?: SessionToolCall[];
   timestamp: string;
   status?: 'stopped' | 'error' | 'pending';
 }
@@ -282,7 +282,7 @@ function guestPublicSession(session: GatewaySession): Omit<GatewaySession, 'mess
     role: message.role,
     content: message.content,
     ...(message.attachments?.length ? { attachments: message.attachments.map(({ name, type }) => ({ name, ...(type ? { type } : {}) })) } : {}),
-    ...(message.toolCalls?.length ? { toolCalls: message.toolCalls.map((tool) => ({ name: tool.name, redacted: true as const })) } : {}),
+    ...(message.toolCalls?.length ? { toolCalls: message.toolCalls } : {}),
     timestamp: message.timestamp,
     ...(message.status ? { status: message.status } : {}),
   }));
@@ -1435,7 +1435,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         catch { throw new HttpError(400, 'Invalid user skill path encoding'); }
         if (authenticatedRole === 'guest' && (!guestId || owner !== guestId)) throw new HttpError(403, 'Guests can only delete their own user skills');
         const deleted = await userSkillStore.delete(owner, name);
-        if (!deleted) throw new HttpError(404, `User skill not found: ${owner}/${name}`);
+        if (!deleted) throw new HttpError(404, 'User skill not found');
         json(response, 200, { ok: true, deleted: true });
         return;
       }
@@ -2091,7 +2091,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           osUsername: session.identity.osUsername,
           giteaUsername: session.identity.giteaUsername,
           giteaOrgName: session.identity.giteaOrgName,
-        } : undefined);
+        } : undefined, guestId);
         if (contextMessages) session.contextMessages = sanitizeContextMessages(contextMessages);
         const stopped = turnError?.message === 'Turn cancelled';
         if (pendingFinalization) await pendingFinalization;

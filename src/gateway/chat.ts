@@ -16,14 +16,14 @@ export interface ChatSink {
 }
 
 export interface ChatBridge {
-  run(message: string, sink: ChatSink, history?: ChatMessage[], sessionId?: string, memory?: MemoryStore, agentId?: string, role?: 'admin' | 'guest', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string, userContent?: ContentBlock[], tenantIdentity?: TenantIdentity): Promise<void>;
+  run(message: string, sink: ChatSink, history?: ChatMessage[], sessionId?: string, memory?: MemoryStore, agentId?: string, role?: 'admin' | 'guest', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string, userContent?: ContentBlock[], tenantIdentity?: TenantIdentity, guestId?: string): Promise<void>;
   stop(sessionId?: string): boolean;
 }
 
 export class AgentChatBridge implements ChatBridge {
   constructor(private readonly app: TaiweiApp) {}
 
-  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], sessionId?: string, memory?: MemoryStore, agentId = 'build', role: 'admin' | 'guest' = 'admin', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string, userContent?: ContentBlock[], tenantIdentity?: TenantIdentity): Promise<void> {
+  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], sessionId?: string, memory?: MemoryStore, agentId = 'build', role: 'admin' | 'guest' = 'admin', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string, userContent?: ContentBlock[], tenantIdentity?: TenantIdentity, guestId?: string): Promise<void> {
     const context = new AgentContext(memory ?? this.app.memory, this.app.skills, !memory);
     context.setMessages(history);
     for (const skill of this.app.context.listActiveSkills()) context.activateSkill(skill);
@@ -42,7 +42,7 @@ export class AgentChatBridge implements ChatBridge {
         sessionId,
         skipBeforeMessageHook: true,
         agentId,
-        role, identity: identity ?? role, tenantIdentity, runtimeSessionId, providerId, model, workspaceRoot,
+        role, identity: identity ?? role, guestId, tenantIdentity, runtimeSessionId, providerId, model, workspaceRoot,
         userContent,
       });
     } catch (error) {

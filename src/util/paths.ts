@@ -92,10 +92,6 @@ export function validateUserSkillOwner(owner: string): string {
   return owner;
 }
 
-export function userSkillsFor(owner: string): string {
-  return join(getPaths().userSkills, validateUserSkillOwner(owner));
-}
-
 export function guestMemory(guestId: string): string {
   if (!VALID_GUEST_ID.test(guestId)) throw new Error('Invalid guest id');
   return join(getPaths().guests, guestId, 'memory.md');

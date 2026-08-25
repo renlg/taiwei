@@ -14,6 +14,7 @@ import { McpBridge } from './mcp/bridge.js';
 import { MemoryStore } from './memory/store.js';
 import { PluginLoader } from './plugins/loader.js';
 import { SkillLoader } from './skills/loader.js';
+import { UserSkillStore } from './skills/user-store.js';
 import { bashTool } from './tools/impl/bash.js';
 import { createMemoryTools } from './tools/impl/memory.js';
 import { imageGenTool, videoGenTool } from './tools/impl/media.js';
@@ -46,6 +47,7 @@ export class TaiweiApp {
   readonly registry = new ToolRegistry();
   readonly memory = new MemoryStore();
   readonly skills = new SkillLoader();
+  readonly userSkills = new UserSkillStore();
   readonly context = new AgentContext(this.memory, this.skills);
   readonly interrupt = new InterruptManager();
   readonly turns = new TurnQueue();
@@ -82,7 +84,7 @@ export class TaiweiApp {
     if (options.scheduler !== false) { await this.scheduler.start(); console.log(`[taiwei] Scheduler started (${(await this.cronJobs.list()).filter((job) => job.enabled).length} enabled jobs)`); }
   }
 
-  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string; tenantIdentity?: TenantIdentity; providerId?: string; model?: string; workspaceRoot?: string; userContent?: ContentBlock[] } = {}): Promise<string> {
+  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string; guestId?: string; tenantIdentity?: TenantIdentity; providerId?: string; model?: string; workspaceRoot?: string; userContent?: ContentBlock[] } = {}): Promise<string> {
     const runtimeSessionId = options.runtimeSessionId ?? options.sessionId ?? 'local';
     return this.runtime.run(runtimeSessionId, async (runtimeSignal) => {
       const localSignal = options.sessionId ? undefined : this.interrupt.beginTurn();
@@ -116,9 +118,10 @@ export class TaiweiApp {
           sessionId: options.sessionId,
           agentProfile: profile,
           delegationDepth: options.delegationDepth,
-          role: options.role ?? 'admin', identity: options.identity ?? options.role ?? 'admin', tenantIdentity: options.tenantIdentity,
+          role: options.role ?? 'admin', identity: options.identity ?? options.role ?? 'admin', guestId: options.guestId, tenantIdentity: options.tenantIdentity,
           workspaceRoot: cwd, policy: new PolicyEngine(this.config.policy),
           userContent: options.userContent,
+          userSkillStore: this.userSkills,
         });
       } finally { if (localSignal) this.interrupt.endTurn(); }
     });
