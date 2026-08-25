@@ -240,7 +240,7 @@ export async function runRepl(app: TaiweiApp): Promise<void> {
         if (line.startsWith('/')) await handleCommand(app, line, rl);
         else {
           process.stdout.write(color.dim('assistant> '));
-          await app.run(line, { stream: true, confirmDanger });
+          await app.run(line, { stream: true, confirmDanger, enableDiagnostics: true });
           process.stdout.write('\n');
           try {
             let start = -1;

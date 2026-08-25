@@ -37,6 +37,7 @@ export class AgentChatBridge implements ChatBridge {
       catch { /* RAG is optional and must never block a web chat turn. */ }
       await this.app.run(message, {
         context,
+        enableDiagnostics: true,
         onEvent: (event) => sink.event(event),
         confirmDanger: sink.confirm,
         sessionId,

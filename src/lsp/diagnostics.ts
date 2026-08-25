@@ -1,6 +1,8 @@
-import { access } from 'node:fs/promises';
+import { access, mkdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { getPaths } from '../util/paths.js';
 
 export interface Diagnostic {
   file: string;
@@ -91,9 +93,13 @@ export async function collectDiagnostics(workspaceInput: string, options: { maxD
   const tsc = await findTsc(workspace);
   if (!tsc) return { workspace, diagnostics: [], skipped: 'TypeScript compiler not found', truncated: false };
   try {
-    const output = await run(tsc, ['--noEmit', '--pretty', 'false', '--incremental', 'false'], workspace, options.signal);
+    const cacheDirectory = join(getPaths().home, 'cache', 'lsp');
+    await mkdir(cacheDirectory, { recursive: true });
+    const buildInfo = join(cacheDirectory, `${createHash('sha256').update(workspace).digest('hex')}.tsbuildinfo`);
+    const args = ['--noEmit', '--pretty', 'false', '--incremental', '--tsBuildInfoFile', buildInfo];
+    const output = await run(tsc, args, workspace, options.signal);
     const all = parseTsc(output, workspace);
-    return { workspace, diagnostics: all.slice(0, maxDiagnostics), command: `${tsc} --noEmit --pretty false --incremental false`, truncated: all.length > maxDiagnostics };
+    return { workspace, diagnostics: all.slice(0, maxDiagnostics), command: `${tsc} ${args.join(' ')}`, truncated: all.length > maxDiagnostics };
   } catch (error) {
     if (options.signal?.aborted) throw error;
     return { workspace, diagnostics: [], skipped: `Diagnostic command failed: ${error instanceof Error ? error.message : String(error)}`, truncated: false };
@@ -113,25 +119,39 @@ export class DiagnosticFeedbackSession {
   private baseline = new Set<string>();
   private pending: Diagnostic[] = [];
   private injected = new Set<string>();
+  private changedFiles = new Set<string>();
   private primed = false;
 
-  constructor(private readonly workspace: string, private readonly maxDiagnostics: number, private readonly signal?: AbortSignal) {}
+  constructor(
+    private readonly workspace: string,
+    private readonly maxDiagnostics: number,
+    private readonly signal?: AbortSignal,
+    private readonly collect: typeof collectDiagnostics = collectDiagnostics,
+  ) {}
 
   async beforeWrite(): Promise<void> {
     if (this.primed) return;
-    const result = await collectDiagnostics(this.workspace, { maxDiagnostics: 500, signal: this.signal });
+    const result = await this.collect(this.workspace, { maxDiagnostics: 500, signal: this.signal });
     this.baseline = new Set(result.diagnostics.map(fingerprint));
     this.primed = true;
   }
 
   async afterWrite(pathInput: string): Promise<void> {
     if (!this.primed) await this.beforeWrite();
-    const result = await collectDiagnostics(this.workspace, { maxDiagnostics: 500, signal: this.signal });
     const changed = isAbsolute(pathInput) ? relative(this.workspace, pathInput) : relative(this.workspace, resolve(this.workspace, pathInput));
+    this.changedFiles.add(changed);
+  }
+
+  /** Coalesce all writes since the previous model request into one compiler pass. */
+  async refresh(): Promise<void> {
+    if (!this.changedFiles.size) return;
+    const changedFiles = new Set(this.changedFiles);
+    this.changedFiles.clear();
+    const result = await this.collect(this.workspace, { maxDiagnostics: 500, signal: this.signal });
     const next = new Set(result.diagnostics.map(fingerprint));
     for (const diagnostic of result.diagnostics) {
       const key = fingerprint(diagnostic);
-      if (diagnostic.file === changed && !this.baseline.has(key) && !this.injected.has(key) && !this.pending.some((item) => fingerprint(item) === key)) this.pending.push(diagnostic);
+      if (changedFiles.has(diagnostic.file) && !this.baseline.has(key) && !this.injected.has(key) && !this.pending.some((item) => fingerprint(item) === key)) this.pending.push(diagnostic);
     }
     this.baseline = next;
   }
