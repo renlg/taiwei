@@ -355,6 +355,7 @@ body.guest-mode .admin-only { display: none !important; }
 .title-block { min-width: 0; }
 .title-block h1 { overflow: hidden; max-width: min(46vw, 520px); margin: 0 0 4px; font-size: 15px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-meta { gap: 9px; }
+.topbar-disclaimer { font-size: 11px; color: var(--muted); opacity: .85; padding-left: 9px; border-left: 1px solid var(--border); white-space: nowrap; }
 .status-pill { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10.5px; }
 .status-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
 .status-pill.streaming i { background: var(--accent); animation: pulse 1.1s infinite; }
