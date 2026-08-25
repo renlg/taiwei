@@ -14,6 +14,14 @@ export interface ToolSettings {
   [key: string]: unknown;
 }
 
+export type BashBackend = 'local' | 'docker' | 'ssh';
+
+export interface BashConfig {
+  backend: BashBackend;
+  docker?: { image: string; network?: string; extraArgs?: string[] };
+  ssh?: { host: string; port?: number; user?: string; keyPath?: string; commandPrefix?: string };
+}
+
 export interface TaiweiConfig {
   model: string;
   embedModel: string;
@@ -39,6 +47,7 @@ export interface TaiweiConfig {
   budget: { systemMax: number; historyMax: number; toolsMax: number; outputReserve: number };
   retry: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number; maxFeedbackIterations: number };
   runtime: { maxConcurrentTurns: number };
+  bash: BashConfig;
   lsp: { enabled: boolean; maxDiagnostics: number; autoInject: boolean };
   policy: PolicyConfig;
   customPrompt: string;
@@ -110,6 +119,7 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   budget: { systemMax: 20_000, historyMax: 180_000, toolsMax: 30_000, outputReserve: 16_000 },
   retry: { maxAttempts: 3, baseDelayMs: 1_000, maxDelayMs: 30_000, maxFeedbackIterations: 2 },
   runtime: { maxConcurrentTurns: 4 },
+  bash: { backend: 'local' },
   lsp: { enabled: true, maxDiagnostics: 5, autoInject: true },
   policy: { rules: [] },
   customPrompt: '',
@@ -228,6 +238,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     budget: { ...DEFAULT_CONFIG.budget, ...storedConfig.budget },
     retry: { ...DEFAULT_CONFIG.retry, ...storedConfig.retry },
     runtime: { ...DEFAULT_CONFIG.runtime, ...storedConfig.runtime },
+    bash: mergeBashConfig(storedConfig.bash),
     lsp: { ...DEFAULT_CONFIG.lsp, ...storedConfig.lsp },
     policy: { rules: Array.isArray(storedConfig.policy?.rules) ? storedConfig.policy.rules : [] },
     browser: { ...DEFAULT_CONFIG.browser, ...storedConfig.browser },
@@ -324,6 +335,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       budget: { ...DEFAULT_CONFIG.budget, ...storedConfig.budget },
       retry: { ...DEFAULT_CONFIG.retry, ...storedConfig.retry },
       runtime: { ...DEFAULT_CONFIG.runtime, ...storedConfig.runtime },
+      bash: mergeBashConfig(storedConfig.bash),
       policy: { rules: Array.isArray(storedConfig.policy?.rules) ? storedConfig.policy.rules : [] },
       browser: { ...DEFAULT_CONFIG.browser, ...storedConfig.browser },
       gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },
@@ -350,7 +362,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       ...DEFAULT_CONFIG,
       hooks: normalizeHooks(),
       delegation: { ...DEFAULT_CONFIG.delegation }, browser: { ...DEFAULT_CONFIG.browser },
-      budget: { ...DEFAULT_CONFIG.budget }, retry: { ...DEFAULT_CONFIG.retry }, runtime: { ...DEFAULT_CONFIG.runtime }, policy: { rules: [] },
+      budget: { ...DEFAULT_CONFIG.budget }, retry: { ...DEFAULT_CONFIG.retry }, runtime: { ...DEFAULT_CONFIG.runtime }, bash: { ...DEFAULT_CONFIG.bash }, policy: { rules: [] },
       gateway: { ...DEFAULT_CONFIG.gateway },
       oss: { ...DEFAULT_CONFIG.oss },
       auth: { ...DEFAULT_CONFIG.auth },
@@ -361,6 +373,15 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       security: { ...DEFAULT_CONFIG.security, patterns: [], approvedPatterns: [] },
     };
   }
+}
+
+function mergeBashConfig(value: Partial<BashConfig> | undefined): BashConfig {
+  return {
+    ...DEFAULT_CONFIG.bash,
+    ...value,
+    ...(value?.docker ? { docker: { ...value.docker } } : {}),
+    ...(value?.ssh ? { ssh: { ...value.ssh } } : {}),
+  } as BashConfig;
 }
 
 function normalizeHooks(value?: Partial<HookCommands>): HookCommands {

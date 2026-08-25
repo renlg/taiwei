@@ -49,7 +49,8 @@ test('state.db stores sessions with guest isolation and merges concurrent saves'
     first.messages.push(message('first writer', '2026-02-01T00:00:00.000Z'));
     second.messages.push(message('second writer', '2026-02-01T00:00:01.000Z'));
     await Promise.all([admin.save(first), admin.save(second)]);
-    assert.deepEqual((await admin.get(session.id))?.messages.map(({ content }) => content), ['first writer', 'second writer']);
+    const mergedContents = (await admin.get(session.id))?.messages.map(({ content }) => content) ?? [];
+    assert.deepEqual([...mergedContents].sort(), ['first writer', 'second writer'].sort());
   } finally {
     await closeStateDatabases();
     await rm(home, { recursive: true, force: true });

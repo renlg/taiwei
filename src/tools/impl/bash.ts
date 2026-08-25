@@ -1,27 +1,164 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import type { ToolSpec } from '../registry.js';
-import { expandHome, loadConfig } from '../../config/config.js';
+import { expandHome, loadConfig, type BashBackend, type BashConfig } from '../../config/config.js';
 import { resolveInWorkspace } from '../../util/paths.js';
 import { osUserForGuest, giteaTokenFor } from '../../gateway/tenant-os.js';
 import { assertGuestPathNotSensitive, containsSensitivePathReference, redactCredentialText } from '../../security/sensitive-paths.js';
 
 const execFileAsync = promisify(execFile);
 
-type BashExecution = { stdout: string; stderr: string };
+type BashExecution = { stdout: string; stderr: string; exitCode?: number };
 type BashExecutor = (file: string, args: string[], options: {
   cwd: string; signal?: AbortSignal; timeout: number; maxBuffer: number; env?: NodeJS.ProcessEnv;
 }) => Promise<BashExecution>;
 
+export interface BashBackendRequest {
+  command: string;
+  cwd: string;
+  signal?: AbortSignal;
+  timeout: number;
+  maxBuffer: number;
+  config: BashConfig;
+}
+
+export type BashBackendExecutor = (request: BashBackendRequest) => Promise<BashExecution>;
+
+export interface BackendInvocation { file: string; args: string[] }
+
 export interface BashToolDependencies {
   executeFile?: BashExecutor;
+  loadBashConfig?: () => Promise<BashConfig>;
+  backendExecutors?: Partial<Record<BashBackend, BashBackendExecutor>>;
   lookupOsUser?: (username: string) => Promise<string | undefined>;
   lookupGiteaToken?: (username: string) => Promise<string | undefined>;
   lookupGiteaBaseUrl?: () => Promise<string | undefined>;
   isRoot?: () => boolean;
   warn?: (message: string) => void;
+}
+
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+export function buildDockerInvocation(request: BashBackendRequest): BackendInvocation {
+  const docker = request.config.docker;
+  if (!docker?.image?.trim()) throw new Error("backend 'docker' 配置无效：请设置 bash.docker.image");
+  const args = ['run', '--rm', '-i', '-v', `${request.cwd}:/work`, '-w', '/work'];
+  if (docker.network?.trim()) args.push('--network', docker.network.trim());
+  if (Array.isArray(docker.extraArgs)) args.push(...docker.extraArgs);
+  args.push(docker.image, 'bash', '-c', request.command);
+  return { file: 'docker', args };
+}
+
+export function buildSshInvocation(request: BashBackendRequest): BackendInvocation {
+  const ssh = request.config.ssh;
+  if (!ssh?.host?.trim()) throw new Error("backend 'ssh' 配置无效：请设置 bash.ssh.host");
+  const destination = ssh.user?.trim() ? `${ssh.user.trim()}@${ssh.host.trim()}` : ssh.host.trim();
+  const args = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'];
+  if (ssh.port !== undefined) args.push('-p', String(ssh.port));
+  if (ssh.keyPath?.trim()) args.push('-i', expandHome(ssh.keyPath.trim()));
+  const prefix = ssh.commandPrefix?.trim() ? `${ssh.commandPrefix.trim()} ` : '';
+  const remoteCommand = `cd -- ${shellQuote(request.cwd)} && ${prefix}bash -lc ${shellQuote(request.command)}`;
+  args.push(destination, remoteCommand);
+  return { file: 'ssh', args };
+}
+
+function processFailure(backend: Exclude<BashBackend, 'local'>, executable: string, error: unknown): Error {
+  if (error instanceof Error && error.name === 'AbortError') return error;
+  const failure = error as NodeJS.ErrnoException & { stderr?: string; code?: string | number };
+  if (failure.code === 'ENOENT') {
+    const requirement = backend === 'docker' ? 'Docker' : 'SSH client';
+    return new Error(`backend '${backend}' 需要 ${requirement}：${executable}: command not found`);
+  }
+  const detail = typeof failure.stderr === 'string' && failure.stderr.trim()
+    ? failure.stderr.trim()
+    : error instanceof Error ? error.message : String(error);
+  return new Error(`backend '${backend}' 执行失败${failure.code !== undefined ? ` (exit ${failure.code})` : ''}：${detail}`);
+}
+
+/** Execute a non-local backend without a shell on the host. stdin is closed immediately. */
+function spawnBackend(backend: Exclude<BashBackend, 'local'>, file: string, args: string[], request: BashBackendRequest): Promise<BashExecution> {
+  return new Promise((resolvePromise, reject) => {
+    if (request.signal?.aborted) {
+      reject(request.signal.reason instanceof Error ? request.signal.reason : new DOMException('The operation was aborted', 'AbortError'));
+      return;
+    }
+    let child;
+    try {
+      child = spawn(file, args, { cwd: request.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (error) {
+      reject(processFailure(backend, file, error));
+      return;
+    }
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let outputBytes = 0;
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const onAbort = () => {
+      child.kill('SIGTERM');
+      fail(request.signal?.reason instanceof Error ? request.signal.reason : new DOMException('The operation was aborted', 'AbortError'));
+    };
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      request.signal?.removeEventListener('abort', onAbort);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(processFailure(backend, file, error));
+    };
+    const collect = (target: Buffer[]) => (chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes > request.maxBuffer) {
+        child.kill('SIGTERM');
+        fail(new Error(`output exceeded maxBuffer (${request.maxBuffer} bytes)`));
+        return;
+      }
+      target.push(chunk);
+    };
+    child.stdout.on('data', collect(stdout));
+    child.stderr.on('data', collect(stderr));
+    child.on('error', fail);
+    child.on('close', (code, signal) => {
+      if (settled) return;
+      const out = Buffer.concat(stdout).toString('utf8');
+      const err = Buffer.concat(stderr).toString('utf8');
+      if (code !== 0) {
+        fail(Object.assign(new Error(signal ? `terminated by ${signal}` : `process exited with code ${code}`), { code: code ?? signal ?? 'unknown', stderr: err }));
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolvePromise({ stdout: out, stderr: err, exitCode: code ?? 0 });
+    });
+    request.signal?.addEventListener('abort', onAbort, { once: true });
+    timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      fail(new Error(`timed out after ${request.timeout}ms`));
+    }, request.timeout);
+    child.stdin.end();
+  });
+}
+
+function defaultBackendExecutors(executeFile: BashExecutor): Record<BashBackend, BashBackendExecutor> {
+  return {
+    local: ({ command, cwd, signal, timeout, maxBuffer }) => executeFile(
+      process.env.SHELL || '/bin/sh', ['-lc', command], { cwd, signal, timeout, maxBuffer },
+    ),
+    docker: (request) => {
+      const invocation = buildDockerInvocation(request);
+      return spawnBackend('docker', invocation.file, invocation.args, request);
+    },
+    ssh: (request) => {
+      const invocation = buildSshInvocation(request);
+      return spawnBackend('ssh', invocation.file, invocation.args, request);
+    },
+  };
 }
 
 const GUEST_DENIAL = 'guest 只能操作自己的工作目录';
@@ -332,6 +469,8 @@ function guestEnvironment(guestOsUser: string, home: string, token: string | und
 
 export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpec {
   const executeFile = dependencies.executeFile ?? execFileAsync as BashExecutor;
+  const loadBashConfig = dependencies.loadBashConfig ?? (async () => (await loadConfig()).bash);
+  const backendExecutors = { ...defaultBackendExecutors(executeFile), ...dependencies.backendExecutors };
   const lookupOsUser = dependencies.lookupOsUser ?? osUserForGuest;
   const lookupGiteaToken = dependencies.lookupGiteaToken ?? giteaTokenFor;
   const lookupGiteaBaseUrl = dependencies.lookupGiteaBaseUrl ?? (async () => (await loadConfig()).gitea.baseUrl);
@@ -421,13 +560,20 @@ export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpe
       if (context.authorizeCommand && !await context.authorizeCommand(command, cwd)) {
         return { error: '用户拒绝了该命令的执行', command, cwd };
       }
-      const result = await executeFile(process.env.SHELL || '/bin/sh', ['-lc', String(args.command)], {
-        cwd,
-        signal: context.signal,
-        timeout: Number(args.timeout_ms ?? 120_000),
-        maxBuffer: 10 * 1024 * 1024,
+      const config = await loadBashConfig();
+      const backend = config.backend as string;
+      if (backend !== 'local' && backend !== 'docker' && backend !== 'ssh') {
+        throw new Error(`bash backend 非法：'${backend}'（仅支持 local、docker、ssh）`);
+      }
+      const result = await backendExecutors[backend]({
+        command: String(args.command), cwd, signal: context.signal,
+        timeout: Number(args.timeout_ms ?? 120_000), maxBuffer: 10 * 1024 * 1024, config,
       });
-      return { stdout: result.stdout, stderr: result.stderr };
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+      };
     },
   };
 }

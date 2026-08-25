@@ -34,6 +34,7 @@ Edit `~/.taiwei/config.json`, or set environment variables:
   "budget": { "systemMax": 20000, "historyMax": 180000, "toolsMax": 30000, "outputReserve": 16000 },
   "retry": { "maxAttempts": 3, "baseDelayMs": 1000, "maxDelayMs": 30000 },
   "runtime": { "maxConcurrentTurns": 4 },
+  "bash": { "backend": "local" },
   "policy": { "rules": [] },
   "customPrompt": "",
   "hookTimeoutSeconds": 10,
@@ -105,6 +106,50 @@ The optional legacy `models` array remains the user-curated candidate list for t
 `embedModel` selects the OpenAI-compatible embedding model and defaults to the `embeddings` model group. Set it to a concrete model such as `qwen3.7-text-embedding` when needed; embeddings use the same `baseUrl` and `apiKey` as chat.
 
 `autoLoadSkills` defaults to `true`: each new gateway chat turn and each REPL startup activates every enabled installed skill automatically. Skills named in `skillsDisabled` are skipped. Set `autoLoadSkills` to `false` to keep manual, session-level activation with `/skill load`.
+
+## Bash execution backends
+
+The `bash.backend` setting selects where administrator shell commands run. It defaults to `local`, so an omitted setting retains the existing host-shell behavior. Gateway guests always use the existing per-tenant `runuser` sandbox; this setting never redirects guest commands to Docker or SSH.
+
+Local execution (the default):
+
+```json
+{ "bash": { "backend": "local" } }
+```
+
+Docker execution mounts only the command's current working directory at `/work`. `network` and `extraArgs` are optional:
+
+```json
+{
+  "bash": {
+    "backend": "docker",
+    "docker": {
+      "image": "node:22-bookworm",
+      "network": "none",
+      "extraArgs": ["--read-only"]
+    }
+  }
+}
+```
+
+SSH execution uses noninteractive authentication and a 10-second connection timeout. `port`, `user`, `keyPath`, and `commandPrefix` are optional; `host` is required:
+
+```json
+{
+  "bash": {
+    "backend": "ssh",
+    "ssh": {
+      "host": "prod.example.com",
+      "port": 22,
+      "user": "deploy",
+      "keyPath": "~/.ssh/id_ed25519",
+      "commandPrefix": "sudo -n"
+    }
+  }
+}
+```
+
+Docker and SSH inherit the bash tool's `timeout_ms`, cancellation signal, and 10 MiB output limit. Their child stdin is closed immediately to prevent interactive commands from hanging. An abort or timeout terminates the child process. Missing executables, connection failures, missing required backend settings, and unknown backend names return explicit errors; taiwei never silently falls back to local execution.
 
 ## Usage
 
