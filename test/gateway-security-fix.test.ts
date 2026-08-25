@@ -132,7 +132,7 @@ test('guest storage keys resist slug and share-prefix collisions', () => {
   assert.match(guestIdForShareToken('token'), /^guest-share-[a-f0-9]{24}$/);
 });
 
-test('guest responses redact host paths, identity snapshots, context and tool internals', async () => {
+test('guest responses redact host paths, identity snapshots and context while preserving tool calls', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-guest-dto-'));
   const previousHome = process.env.TAIWEI_HOME;
   process.env.TAIWEI_HOME = directory;
@@ -151,6 +151,9 @@ test('guest responses redact host paths, identity snapshots, context and tool in
   }, {
     role: 'assistant', content: 'done', timestamp: new Date().toISOString(),
     toolCalls: [{ name: 'bash', args: { command: 'cat /home/secret/private.txt' }, result: 'secret result' }],
+  }, {
+    role: 'assistant', content: 'image ready', timestamp: new Date().toISOString(),
+    toolCalls: [{ name: 'generate_image', args: { prompt: 'sunset' }, result: '![image](https://cdn.example/generated.png)' }],
   });
   await guestSessions.save(session);
   const config: TaiweiConfig = structuredClone(DEFAULT_CONFIG);
@@ -170,11 +173,11 @@ test('guest responses redact host paths, identity snapshots, context and tool in
     const serialized = JSON.stringify(body);
     assert.equal(body.identity, undefined);
     assert.equal(body.contextMessages, undefined);
-    // guest 仍隐藏 identity/账号快照/上下文，但工具调用内容(含媒体/路径)完整可见
     assert.doesNotMatch(serialized, /secret-account|secret-os|secret-gitea|secret context/);
     assert.match(serialized, /"name":"bash"/);
     assert.match(serialized, /cat \/home\/secret\/private\.txt/);
     assert.match(serialized, /secret result/);
+    assert.match(serialized, /"name":"generate_image","args":\{"prompt":"sunset"\},"result":"!\[image\]\(https:\/\/cdn\.example\/generated\.png\)"/);
   } finally {
     await closeGateway(server);
     if (previousHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = previousHome;

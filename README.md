@@ -139,7 +139,7 @@ Cron arguments that contain spaces should be quoted:
 /cron add status "every 1h" "Review this repository and summarize its status"
 ```
 
-Ctrl+C cancels an active LLM request or tool. Both the REPL and resident gateway start the scheduler. Agent jobs wait for an active interactive turn. Jobs support cron/interval schedules or a one-shot ISO `at`, timezones, timeout, retry/backoff, overlap and misfire policies, and console/webhook/no delivery. Every result survives restarts in `~/.taiwei/cron-runs.jsonl`.
+Ctrl+C cancels an active LLM request or tool. Both the REPL and resident gateway start the scheduler. Agent jobs wait for an active interactive turn. Jobs support cron/interval schedules or a one-shot ISO `at`, timezones, timeout, retry/backoff, overlap and misfire policies, and console/webhook/no delivery. Jobs and run results survive restarts in `~/.taiwei/state.db`.
 
 ### Background task tools
 
@@ -214,7 +214,7 @@ bash scripts/cleanup_deployment.sh 8c6976e5 myapp 8801 /root/workspace/current-s
 
 For a session-workspace deployment, run that command from the project directory or set `TAIWEI_SESSION_WORKSPACE` to its absolute path. Legacy project-root deployments continue to work without that variable.
 
-Each conversation is stored as a JSON file under `~/.taiwei/sessions/`, so history and agent context survive browser refreshes and gateway restarts. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
+Each conversation is stored in `~/.taiwei/state.db`; guest rows carry an isolated owner scope, so history and agent context survive browser refreshes and gateway restarts without sharing guest data. The gateway binds to localhost by default. Set `gateway.host` and `gateway.port` in `~/.taiwei/config.json`, with `serve --port N` taking precedence over the configured port.
 
 The composer includes a circular context-usage ring. taiwei requests OpenAI-compatible streaming usage (`stream_options.include_usage`), normalizes `prompt_tokens`, `completion_tokens`, and `total_tokens`, and emits an SSE `usage` event after each provider call. The gateway accumulates those provider-reported values in the current session file, and the browser updates the ring as usage arrives (with a small interim completion estimate while text is streaming). Hover or focus the ring to inspect the totals, window size, and percentage.
 
@@ -290,7 +290,7 @@ Authentication is opt-in. It is strongly recommended whenever the gateway binds 
 
 On config load/save, taiwei replaces a non-empty plaintext password with a salted scrypt value in the form `scrypt$<saltHex>$<hashHex>`. Existing plaintext configurations migrate automatically at startup or after their first successful login; login accepts both formats during migration. You may leave `auth.password` empty in the file and supply the plaintext `TAIWEI_AUTH_PASSWORD` only in the environment when starting the gateway. If authentication is enabled and neither source provides a password, `taiwei serve` refuses to start with setup instructions.
 
-Open the gateway and use **管理员登录** for the local administrator account. Successful login creates a seven-day sliding session in `~/.taiwei/gateway-sessions.json`; the browser keeps both an HttpOnly cookie and a bearer token, and gateway restarts preserve active logins. Login lock state is persisted separately in `~/.taiwei/login-locks.json`: five failures for the same account and IP within a sliding ten-minute window trigger a ten-minute cooldown, ten cumulative failures permanently lock that account/IP pair, and ten failures across any accounts from one IP within a sliding ten-minute window lock the IP for ten minutes. A successful login resets the matching account/IP counters. Click the username in the top-right corner and choose **退出登录 / Logout** to invalidate the current token and return to login.
+Open the gateway and use **管理员登录** for the local administrator account. Successful login creates a seven-day sliding session in `~/.taiwei/state.db`; the browser keeps both an HttpOnly cookie and a bearer token, and gateway restarts preserve active logins. Login lock state is stored in the same database: five failures for the same account and IP within a sliding ten-minute window trigger a ten-minute cooldown, ten cumulative failures permanently lock that account/IP pair, and ten failures across any accounts from one IP within a sliding ten-minute window lock the IP for ten minutes. A successful login resets the matching account/IP counters. Click the username in the top-right corner and choose **退出登录 / Logout** to invalidate the current token and return to login.
 
 #### Sharing and ordinary users
 
@@ -339,8 +339,8 @@ All durable state lives in `~/.taiwei/`:
 
 ```text
 config.json       model and provider settings
-cron.json         scheduled jobs
-cron-runs.jsonl   append-only scheduled-run ledger
+state.db          authoritative sessions, cron jobs/runs, login sessions and login locks
+history.db        rebuildable conversation search index (separate from authoritative state)
 audit.jsonl       redacted append-only policy and execution audit
 mcp.json          MCP server definitions
 memory.md         durable agent memory
@@ -349,13 +349,12 @@ rag-index.json    generated BM25 and embedding index
 knowledge/        .md and .txt knowledge documents
 skills/           <name>/SKILL.md skills
 plugins/          <name>/plugin.js plugins
-sessions/         durable web chat conversations
-guests/           guest-scoped core memory and web sessions
-gateway-sessions.json  durable gateway login tokens
-login-locks.json   durable login failure and lock state
+guests/           guest-scoped core memory and workspace files
 uploads/           local web-chat attachments
 tasks/             background task registry and per-task logs
 ```
+
+On the first SQLite-backed startup, legacy `sessions/*.json`, guest session JSON, `cron.json`, `cron-runs.jsonl`, `gateway-sessions.json`, and `login-locks.json` are imported and renamed with a `.bak-<timestamp>` suffix. They are retained for recovery but are no longer written. On Node versions without `node:sqlite`, taiwei keeps using the legacy JSON formats as a compatibility fallback.
 
 ### Skills
 

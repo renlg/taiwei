@@ -128,7 +128,7 @@ export class CronScheduler {
       };
     } finally { this.running.set(job.id, Math.max(0, (this.running.get(job.id) ?? 1) - 1)); }
     await this.ledger.append(run!);
-    await appendAudit({ type: 'cron.run', runId: `cron:${job.id}:${startedAt}`, sessionId: `cron:${job.id}`, outcome: run!.status, jobId: job.id, ledger: 'cron-runs.jsonl' }).catch(() => {});
+    await appendAudit({ type: 'cron.run', runId: `cron:${job.id}:${startedAt}`, sessionId: `cron:${job.id}`, outcome: run!.status, jobId: job.id, ledger: 'state.db:cron_runs' }).catch(() => {});
     if (source === 'scheduled') await this.store.update(job.id, { lastScheduledAt: this.now().toISOString() });
     if (this.deliver && !(silent && run!.status === 'ok')) await this.deliver(job, run!, silent);
     return run!;
@@ -138,7 +138,7 @@ export class CronScheduler {
     const timestamp = this.now().toISOString();
     const run: CronRun = { jobId: job.id, kind: job.kind, startedAt: timestamp, endedAt: timestamp, status: 'skipped', error };
     await this.ledger.append(run);
-    await appendAudit({ type: 'cron.run', runId: `cron:${job.id}:${timestamp}`, sessionId: `cron:${job.id}`, outcome: 'skipped', jobId: job.id, ledger: 'cron-runs.jsonl' }).catch(() => {});
+    await appendAudit({ type: 'cron.run', runId: `cron:${job.id}:${timestamp}`, sessionId: `cron:${job.id}`, outcome: 'skipped', jobId: job.id, ledger: 'state.db:cron_runs' }).catch(() => {});
     return run;
   }
 }

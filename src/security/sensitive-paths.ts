@@ -5,6 +5,7 @@ const SENSITIVE_BASENAMES = new Set([
   'config.json',
   'gateway-sessions.json',
   'login-locks.json',
+  'state.db',
   'mcp.json',
   'tenant-accounts.db',
   'tenants.db',
@@ -20,7 +21,8 @@ const SECRET_TEXT = [
 export function isSensitiveGuestPath(path: string): boolean {
   const normalized = normalize(path);
   const name = basename(normalized).toLowerCase();
-  if (SENSITIVE_BASENAMES.has(name)) return true;
+  if (SENSITIVE_BASENAMES.has(name) || name.startsWith('state.db-')
+    || name.startsWith('gateway-sessions.json.bak-') || name.startsWith('login-locks.json.bak-')) return true;
   const segments = normalized.toLowerCase().split(sep);
   if (/^\.env(?:\..*)?$/.test(name) && segments.some((part) => part.includes('gitea-mcp'))) return true;
   if (name === 'config.json' && basename(dirname(normalized)).toLowerCase().includes('gitea-mcp')) return true;
@@ -32,7 +34,7 @@ export function assertGuestPathNotSensitive(path: string): void {
 }
 
 export function containsSensitivePathReference(value: string): boolean {
-  return /(?:^|[\s'"=:(])(?:~?\/)?[^\s'";&|()<>]*(?:\.taiwei\/(?:config|gateway-sessions|login-locks)\.json|(?:^|\/)mcp\.json|\.env\.gitea|gitea-mcp\/[^\s'";&|()<>]*\.env(?:\.[^\s'";&|()<>]*)?)/i.test(value);
+  return /(?:^|[\s'"=:(])(?:~?\/)?[^\s'";&|()<>]*(?:\.taiwei\/(?:(?:config|gateway-sessions|login-locks)\.json|state\.db)|(?:^|\/)mcp\.json|\.env\.gitea|gitea-mcp\/[^\s'";&|()<>]*\.env(?:\.[^\s'";&|()<>]*)?)/i.test(value);
 }
 
 /** Defense in depth for subprocess/file-search output; path checks remain the primary boundary. */

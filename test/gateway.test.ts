@@ -8,7 +8,7 @@ import type { AgentEvent } from '../src/agent/loop.js';
 import { AuthSessionStore } from '../src/gateway/auth.js';
 import { AgentChatBridge, type ChatBridge, type ChatSink } from '../src/gateway/chat.js';
 import { LOGIN_COOLDOWN_MS, LoginLockStore } from '../src/gateway/login-locks.js';
-import { closeGateway, createGatewayServer, formatGatewayTurnError, guestIdForUsername, guestRouteAllowed, listenGateway } from '../src/gateway/server.js';
+import { closeGateway, createGatewayServer, formatGatewayTurnError, guestIdForShareToken, guestIdForUsername, guestRouteAllowed, listenGateway } from '../src/gateway/server.js';
 import { createOssObjectKey } from '../src/gateway/oss.js';
 import { SessionStore } from '../src/gateway/sessions.js';
 import type { ChatMessage } from '../src/llm/client.js';
@@ -59,11 +59,13 @@ class MockChat implements ChatBridge {
   histories: ChatMessage[][] = [];
   messages: string[] = [];
   workspaceRoots: Array<string | undefined> = [];
+  guestIds: Array<string | undefined> = [];
 
-  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], _sessionId?: string, _memory?: MemoryStore, _agentId?: string, _role?: 'admin' | 'guest', _identity?: string, _runtimeSessionId?: string, _providerId?: string, _model?: string, workspaceRoot?: string, _userContent?: import('../src/llm/client.js').ContentBlock[]): Promise<void> {
+  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], _sessionId?: string, _memory?: MemoryStore, _agentId?: string, _role?: 'admin' | 'guest', _identity?: string, _runtimeSessionId?: string, _providerId?: string, _model?: string, workspaceRoot?: string, _userContent?: import('../src/llm/client.js').ContentBlock[], _tenantIdentity?: import('../src/tools/registry.js').TenantIdentity, guestId?: string): Promise<void> {
     this.messages.push(message);
     this.histories.push(history);
     this.workspaceRoots.push(workspaceRoot);
+    this.guestIds.push(guestId);
     for (const event of [
       { type: 'token', text: 'Hello ' },
       { type: 'tool', name: 'read', args: { path: 'README.md' } },
@@ -503,6 +505,8 @@ test('guest uploads are allowed, size-limited, and use identity-isolated OSS key
   try {
     assert.equal(guestRouteAllowed('POST', '/api/upload'), true);
     assert.equal(guestRouteAllowed('GET', '/api/skills'), true);
+    assert.equal(guestRouteAllowed('GET', '/api/user-skills'), true);
+    assert.equal(guestRouteAllowed('DELETE', '/api/user-skills/guest-alice/skill-name'), true);
     assert.equal(guestRouteAllowed('POST', '/api/skills'), false);
 
     const guestUpload = await fetch(`${baseUrl}/api/upload`, {
@@ -1186,8 +1190,8 @@ test('ai-connect OAuth guests are chat-only, legacy guest login is removed, and 
     assert.match(tokenRequestBody, /client_secret=taiwei-secret-2026/);
     assert.match(tokenRequestBody, /code=valid/);
     assert.equal(userinfoAuthorization, 'Bearer provider-access-token');
-    const persistedSessions = JSON.parse(await readFile(authFile, 'utf8')) as Record<string, { username: string; role: string }>;
-    assert.deepEqual({ username: persistedSessions[oauthToken].username, role: persistedSessions[oauthToken].role }, { username: 'Alice.Example', role: 'guest' });
+    const persistedSession = await new AuthSessionStore(authFile).authenticate(oauthToken);
+    assert.deepEqual({ username: persistedSession?.username, role: persistedSession?.role }, { username: 'Alice.Example', role: 'guest' });
     const oauthHeaders = { authorization: `Bearer ${oauthToken}` };
     assert.equal((await fetch(`${baseUrl}/api/sessions`, { headers: oauthHeaders })).status, 200);
     assert.equal((await fetch(`${baseUrl}/api/memory`, { headers: oauthHeaders })).status, 403);
@@ -1210,9 +1214,12 @@ test('ai-connect OAuth guests are chat-only, legacy guest login is removed, and 
     const shareSessionResponse = await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: shareHeaders });
     assert.equal(shareSessionResponse.status, 201);
     const shareSession = await shareSessionResponse.json() as { id: string };
-    assert.equal((await fetch(`${baseUrl}/api/chat`, {
+    const shareChatResponse = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST', headers: { ...shareHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ message: 'hello', sessionId: shareSession.id }),
-    })).status, 200);
+    });
+    assert.equal(shareChatResponse.status, 200);
+    await shareChatResponse.text();
+    assert.equal(guestChat.guestIds.at(-1), guestIdForShareToken(share.token));
     assert.equal((await fetch(`${baseUrl}/api/skills`, { headers: shareHeaders })).status, 200);
     for (const route of ['/api/tools', '/api/memory', '/api/settings']) {
       const denied = await fetch(`${baseUrl}${route}`, { headers: shareHeaders });
@@ -1225,7 +1232,7 @@ test('ai-connect OAuth guests are chat-only, legacy guest login is removed, and 
       method: 'POST', headers: { ...oauthHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ message: 'hello', sessionId: guestSession.id }),
     })).status, 200);
     const oauthGuestId = guestIdForUsername('Alice.Example');
-    assert.ok((await stat(join(directory, 'guests', oauthGuestId, 'sessions', `${guestSession.id}.json`))).isFile());
+    assert.equal((await SessionStore.forGuest(oauthGuestId).get(guestSession.id))?.id, guestSession.id);
     // Guest 会话工作目录固定为专属根（guests/<guestId>/workspace），即使会话建在自定义文件夹里也不收窄写权限边界。
     const customFolder = await (await fetch(`${baseUrl}/api/folders`, {
       method: 'POST', headers: { ...oauthHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'test' }),

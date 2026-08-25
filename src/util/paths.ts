@@ -18,6 +18,7 @@ export interface TaiweiPaths {
   plugins: string;
   sessions: string;
   historyDb: string;
+  stateDb: string;
   gatewaySessions: string;
   loginLocks: string;
   uploads: string;
@@ -45,6 +46,7 @@ export function getPaths(): TaiweiPaths {
     plugins: join(home, 'plugins'),
     sessions: join(home, 'sessions'),
     historyDb: join(home, 'history.db'),
+    stateDb: join(home, 'state.db'),
     gatewaySessions: join(home, 'gateway-sessions.json'),
     loginLocks: join(home, 'login-locks.json'),
     uploads: join(home, 'uploads'),
@@ -120,7 +122,6 @@ export async function ensureTaiweiHome(): Promise<TaiweiPaths> {
     mkdir(paths.workspaces, { recursive: true }),
   ]);
   await Promise.all([
-    writeIfMissing(paths.cron, '[]\n'),
     writeIfMissing(paths.mcp, '[]\n'),
     writeIfMissing(paths.memory, ''),
   ]);

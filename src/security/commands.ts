@@ -30,7 +30,7 @@ export interface ConfirmationDecision {
 export type ConfirmationHandler = (request: ConfirmationRequest) => Promise<ConfirmationDecision>;
 
 export const DEFAULT_DANGER_PATTERNS: readonly DangerPattern[] = [
-  { pattern: String.raw`\.taiwei[\\/](?:config|gateway-sessions|login-locks)\.json\b`, reason: 'access to taiwei sensitive config (auth credentials / session tokens)', level: 'danger' },
+  { pattern: String.raw`\.taiwei[\\/](?:(?:config|gateway-sessions|login-locks)\.json|state\.db)\b`, reason: 'access to taiwei sensitive config (auth credentials / session tokens)', level: 'danger' },
   { pattern: String.raw`\bsudo\s+rm\b`, reason: 'sudo rm can remove protected system data', level: 'danger' },
   { pattern: String.raw`\brm[ \t]+(?:(?:-[A-Za-z]+|--[A-Za-z][A-Za-z-]*)[ \t]+)*(?:-[A-Za-z]*r[A-Za-z]*|--recursive)(?=[ \t]|$)`, reason: 'recursive delete is destructive and unrecoverable', level: 'danger' },
   { pattern: String.raw`\brm\s+(?:-[A-Za-z]*r[A-Za-z]*f|-[A-Za-z]*f[A-Za-z]*r)\s+(?:--\s+)?(?:/(?:\*|\s|$)|~(?:/|\s|$)|/Users(?:/|\s|$)|/System(?:/|\s|$)|/Library(?:/|\s|$)|/etc(?:/|\s|$)|/usr(?:/|\s|$)|/var(?:/|\s|$))`, reason: 'recursive forced removal targets a root, home, or system path', level: 'danger' },

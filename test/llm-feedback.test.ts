@@ -34,6 +34,7 @@ test('unrepairable tool arguments produce regeneration feedback without poisonin
   const baseUrl = await listen(server);
   try {
     const config = structuredClone(DEFAULT_CONFIG);
+    config.skillSelfLearning = false;
     config.baseUrl = baseUrl;
     config.retry = { ...config.retry, maxAttempts: 1 };
     assert.equal(await runAgentTurn('hello', context(), new ToolRegistry(), config), 'recovered');
@@ -85,6 +86,7 @@ test('an unretryable 400 is fed back into the next model iteration', async () =>
   const baseUrl = await listen(server);
   try {
     const config = structuredClone(DEFAULT_CONFIG);
+    config.skillSelfLearning = false;
     config.baseUrl = baseUrl;
     config.model = 'feedback-model';
     config.retry = { ...config.retry, maxAttempts: 1, maxFeedbackIterations: 2 };
@@ -121,6 +123,7 @@ test('model feedback iteration stops after the configured safety limit', async (
   const baseUrl = await listen(server);
   try {
     const config = structuredClone(DEFAULT_CONFIG);
+    config.skillSelfLearning = false;
     config.baseUrl = baseUrl;
     config.retry = { ...config.retry, maxAttempts: 1, maxFeedbackIterations: 2 };
     const events: AgentEvent[] = [];
@@ -144,6 +147,7 @@ test('AbortError bypasses model feedback iteration', async () => isolated(async 
   const baseUrl = await listen(server);
   try {
     const config = structuredClone(DEFAULT_CONFIG);
+    config.skillSelfLearning = false;
     config.baseUrl = baseUrl;
     config.retry = { ...config.retry, maxAttempts: 1, maxFeedbackIterations: 2 };
     const events: AgentEvent[] = [];

@@ -249,7 +249,7 @@ test('estimate-based compression runs when provider omits usage', async () => te
     const history: ChatMessage[] = [];
     for (let index = 0; index < 30; index += 1) { history.push({ role: 'user', content: `old ${index} ${'x'.repeat(40)}` }, { role: 'assistant', content: `answer ${index}` }); }
     context.setMessages(history);
-    const config = { ...structuredClone(DEFAULT_CONFIG), baseUrl, model: 'primary', contextWindow: 300, compressThreshold: 0.5, memoryFlush: false, budget: { systemMax: 30, historyMax: 250, toolsMax: 20, outputReserve: 50 } };
+    const config = { ...structuredClone(DEFAULT_CONFIG), baseUrl, model: 'primary', contextWindow: 300, compressThreshold: 0.5, memoryFlush: false, skillSelfLearning: false, budget: { systemMax: 30, historyMax: 250, toolsMax: 20, outputReserve: 50 } };
     const agentEvents: AgentEvent[] = [];
     await runAgentTurn('new prompt', context, new ToolRegistry(), config, { retainConversation: true, onEvent: (event) => { agentEvents.push(event); } });
     const usageEvents = agentEvents.filter((event) => event.type === 'usage');

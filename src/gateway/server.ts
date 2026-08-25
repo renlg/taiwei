@@ -686,7 +686,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       const guests = await readdir(taiweiPaths.guests, { withFileTypes: true });
       for (const guest of guests) {
         if (!guest.isDirectory()) continue;
-        finalized += await new SessionStore(join(taiweiPaths.guests, guest.name, 'sessions')).finalizeStalePending();
+        finalized += await SessionStore.forGuest(guest.name).finalizeStalePending();
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -747,6 +747,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       // remains visible while all subsequent access uses the collision-resistant key.
       await mkdir(taiweiPaths.guests, { recursive: true });
       await rename(legacyDirectory, destination);
+      await SessionStore.moveGuestScope(legacyGuestId, guestId);
       const foldersFile = join(destination, 'folders.json');
       try {
         const folders = JSON.parse(await readFile(foldersFile, 'utf8')) as unknown;
@@ -1003,7 +1004,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         }
       }
       const activeSessions = guestId
-        ? new SessionStore(join(taiweiPaths.guests, guestId, 'sessions'))
+        ? SessionStore.forGuest(guestId)
         : sessions;
       const requestIdentityUsername = authenticatedRole === 'admin'
         ? 'admin'

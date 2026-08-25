@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -36,7 +36,7 @@ test('durable scheduler fires intervals, run-now persists, and restart reloads t
   assert.ok(calls >= 1);
   const manual = await scheduler.runNow(job.id);
   assert.equal(manual.status, 'ok');
-  assert.match(await readFile(join(directory, 'cron-runs.jsonl'), 'utf8'), new RegExp(job.id));
+  assert.equal((await stat(join(directory, 'state.db'))).isFile(), true);
   const restarted = new CronRunLedger(); await restarted.initialize();
   assert.ok((await restarted.list(job.id)).length >= 2);
 }));

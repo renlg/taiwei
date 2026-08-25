@@ -513,6 +513,7 @@ test('agent turn compresses old complete turns above the configured context thre
       baseUrl: `http://127.0.0.1:${address.port}`,
       contextWindow: 100,
       compressThreshold: 0.7,
+      skillSelfLearning: false,
     };
     const answer = await runAgentTurn('latest-user', context, new ToolRegistry(), config, {
       onEvent: (event) => { if (event.type === 'usage') usageEvents.push(event.usage); },
@@ -579,6 +580,7 @@ test('agent turn silently keeps history when conversation compression fails', as
       contextWindow: 100,
       compressThreshold: 0.7,
       memoryFlush: false,
+      skillSelfLearning: false,
     };
     assert.equal(await runAgentTurn('latest', context, new ToolRegistry(), config), 'Answer survives');
     assert.equal(requests, 2);
@@ -616,7 +618,7 @@ test('memory flush sentinel and empty output do not append', async () => {
     const address = server.address();
     assert(address && typeof address === 'object');
     await writeFile(join(directory, 'memory.md'), 'Keep this memory unchanged.\n');
-    const config = { ...structuredClone(DEFAULT_CONFIG), baseUrl: `http://127.0.0.1:${address.port}`, contextWindow: 100 };
+    const config = { ...structuredClone(DEFAULT_CONFIG), baseUrl: `http://127.0.0.1:${address.port}`, contextWindow: 100, skillSelfLearning: false };
     for (let run = 0; run < 2; run += 1) {
       const context = new AgentContext(new MemoryStore(), new SkillLoader());
       for (let index = 0; index < 15; index += 1) {
@@ -663,7 +665,7 @@ test('memoryFlush false skips flush while conversation compression still runs', 
       context.messages.push({ role: 'user', content: `user-${index}` });
       context.messages.push({ role: 'assistant', content: `assistant-${index}` });
     }
-    const config = { ...structuredClone(DEFAULT_CONFIG), baseUrl: `http://127.0.0.1:${address.port}`, contextWindow: 100, memoryFlush: false };
+    const config = { ...structuredClone(DEFAULT_CONFIG), baseUrl: `http://127.0.0.1:${address.port}`, contextWindow: 100, memoryFlush: false, skillSelfLearning: false };
     assert.equal(await runAgentTurn('latest', context, new ToolRegistry(), config), 'Answer');
     assert.equal(flushes, 0);
     assert.equal(compressions, 1);
@@ -711,7 +713,7 @@ test('memory flush failure does not block conversation compression', async () =>
       context.messages.push({ role: 'user', content: `user-${index}` });
       context.messages.push({ role: 'assistant', content: `assistant-${index}` });
     }
-    const config = { ...structuredClone(DEFAULT_CONFIG), baseUrl: `http://127.0.0.1:${address.port}`, contextWindow: 100 };
+    const config = { ...structuredClone(DEFAULT_CONFIG), baseUrl: `http://127.0.0.1:${address.port}`, contextWindow: 100, skillSelfLearning: false };
     assert.equal(await runAgentTurn('latest', context, new ToolRegistry(), config), 'Answer');
     assert.equal(compressions, 1);
     assert.match(String(context.messages[0]?.content), /Summary after failed flush/);
