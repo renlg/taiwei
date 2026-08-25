@@ -1,4 +1,5 @@
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { mkdir, writeFile, access, realpath } from 'node:fs/promises';
 
@@ -11,6 +12,7 @@ export interface TaiweiPaths {
   memory: string;
   memoryDir: string;
   skills: string;
+  userSkills: string;
   knowledge: string;
   ragIndex: string;
   plugins: string;
@@ -37,6 +39,7 @@ export function getPaths(): TaiweiPaths {
     memory: join(home, 'memory.md'),
     memoryDir: join(home, 'memory'),
     skills: join(home, 'skills'),
+    userSkills: join(home, 'user-skills'),
     knowledge: join(home, 'knowledge'),
     ragIndex: join(home, 'rag-index.json'),
     plugins: join(home, 'plugins'),
@@ -76,6 +79,22 @@ export async function resolveInWorkspace(path: string, workspaceRoot: string): P
 }
 
 const VALID_GUEST_ID = /^[a-z0-9_-]{1,64}$/;
+const VALID_USER_SKILL_OWNER = /^[a-z0-9_-]{1,64}$/;
+
+export function guestIdForUsername(username: string): string {
+  const safe = username.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'user';
+  const digest = createHash('sha256').update(username.normalize('NFC')).digest('hex').slice(0, 24);
+  return `guest-${safe}-${digest}`;
+}
+
+export function validateUserSkillOwner(owner: string): string {
+  if (!VALID_USER_SKILL_OWNER.test(owner)) throw new Error('Invalid user skill owner');
+  return owner;
+}
+
+export function userSkillsFor(owner: string): string {
+  return join(getPaths().userSkills, validateUserSkillOwner(owner));
+}
 
 export function guestMemory(guestId: string): string {
   if (!VALID_GUEST_ID.test(guestId)) throw new Error('Invalid guest id');
@@ -95,6 +114,7 @@ export async function ensureTaiweiHome(): Promise<TaiweiPaths> {
   await Promise.all([
     mkdir(paths.home, { recursive: true }),
     mkdir(paths.skills, { recursive: true }),
+    mkdir(paths.userSkills, { recursive: true }),
     mkdir(paths.knowledge, { recursive: true }),
     mkdir(paths.memoryDir, { recursive: true }),
     mkdir(paths.plugins, { recursive: true }),

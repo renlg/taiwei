@@ -24,6 +24,7 @@ import { searchTool } from './tools/impl/search.js';
 import { createNginxAddProxyTool } from './tools/impl/nginx-add-proxy.js';
 import { createWatchdogTools } from './tools/impl/watchdog.js';
 import { createLoadSkillTool } from './tools/impl/skill.js';
+import { createUserSkillTools } from './tools/impl/user-skill.js';
 import { writeTool } from './tools/impl/write.js';
 import { editTool } from './tools/impl/edit.js';
 import { ToolRegistry, type TenantIdentity } from './tools/registry.js';
@@ -69,7 +70,8 @@ export class TaiweiApp {
     this.hooks = new HookRunner(this.config.hooks, this.config.hookTimeoutSeconds, workspace);
     this.delegation = new DelegationManager((request) => this.runChild(request), this.config.delegation.maxConcurrent, this.config.delegation.maxDepth);
     const nginxAddProxyTool = createNginxAddProxyTool({ publicUrl: this.config.publicUrl });
-    for (const tool of [bashTool, readTool, writeTool, editTool, searchTool, nginxAddProxyTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills), ...createMemoryTools(this.memory), ...createWatchdogTools(this.cronJobs, this.scheduler), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
+    // User-skill management tools: create_skill, list_skills, delete_skill.
+    for (const tool of [bashTool, readTool, writeTool, editTool, searchTool, nginxAddProxyTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills), ...createUserSkillTools(), ...createMemoryTools(this.memory), ...createWatchdogTools(this.cronJobs, this.scheduler), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
     this.registry.register(createDelegateTool(this.delegation));
     // history.db is a rebuildable index. A missing/unsupported SQLite runtime must never block chat startup.
     await importHistoryIfEmpty().catch(() => {});

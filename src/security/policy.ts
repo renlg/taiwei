@@ -11,8 +11,8 @@ export interface PolicyInput {
 }
 export interface PolicyDecision { effect: PolicyEffect; rule: string; explicit: boolean; allowExternalPath?: boolean; }
 
-const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch']);
-const GUEST_READ_TOOLS = new Set(['read_file', 'search_files', 'rag_search', 'web_search', 'generate_image', 'generate_video', 'session_search', 'session_list', 'session_get', 'load_skill']);
+const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch', 'create_skill', 'delete_skill']);
+const GUEST_READ_TOOLS = new Set(['read_file', 'search_files', 'rag_search', 'web_search', 'generate_image', 'generate_video', 'session_search', 'session_list', 'session_get', 'load_skill', 'create_skill', 'list_skills', 'delete_skill']);
 
 function matchesPattern(value: string, pattern: string): boolean {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*').replaceAll('?', '.');

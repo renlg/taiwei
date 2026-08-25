@@ -12,7 +12,7 @@ import { openSse, sendSse } from './sse.js';
 import { applyDefaultProvider, getCurrentModel, managedProvider, publicProvider, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
 import { DEFAULT_CONFIG, expandHome, loadConfig, resolveContextWindow, resolveToolSettings, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
 import { hashPassword, isScryptPassword, verifyPassword } from '../config/password.js';
-import { getPaths } from '../util/paths.js';
+import { getPaths, guestIdForUsername } from '../util/paths.js';
 import { DEFAULT_DANGER_PATTERNS } from '../security/commands.js';
 import { ConfirmationBroker } from './confirmations.js';
 import { HOOK_EVENTS, HookRunner, type HookCommands, type HookEvent } from '../hooks/runner.js';
@@ -23,6 +23,7 @@ import { createEmbedder } from '../rag/embedding.js';
 import { loadMcpConfig, type McpServerConfig } from '../mcp/client.js';
 import { ToolRegistry, type ToolConfigSchema } from '../tools/registry.js';
 import type { Skill } from '../skills/loader.js';
+import { UserSkillStore } from '../skills/user-store.js';
 import { appendMessage as appendHistoryMessage, upsertSession as upsertHistorySession, type HistoryMessageInput, type HistorySessionMeta } from '../history/db.js';
 import { MemoryStore } from '../memory/store.js';
 import { CronJobStore, type CronJobInput } from '../cron/jobs.js';
@@ -248,11 +249,7 @@ function legacyGuestIdForUsername(username: string): string {
   return `guest-${safe || 'user'}`;
 }
 
-export function guestIdForUsername(username: string): string {
-  const safe = username.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'user';
-  const digest = createHash('sha256').update(username.normalize('NFC')).digest('hex').slice(0, 24);
-  return `guest-${safe}-${digest}`;
-}
+export { guestIdForUsername } from '../util/paths.js';
 
 function legacyGuestIdForShareToken(token: string): string {
   return `guest-${token.slice(0, 8).toLowerCase()}`;
@@ -275,7 +272,7 @@ interface GuestPublicMessage {
   role: 'user' | 'assistant';
   content: string;
   attachments?: GuestPublicAttachment[];
-  toolCalls?: SessionToolCall[];
+  toolCalls?: Array<{ name: string; redacted: true }>;
   timestamp: string;
   status?: 'stopped' | 'error' | 'pending';
 }
@@ -285,7 +282,7 @@ function guestPublicSession(session: GatewaySession): Omit<GatewaySession, 'mess
     role: message.role,
     content: message.content,
     ...(message.attachments?.length ? { attachments: message.attachments.map(({ name, type }) => ({ name, ...(type ? { type } : {}) })) } : {}),
-    ...(message.toolCalls?.length ? { toolCalls: message.toolCalls } : {}),
+    ...(message.toolCalls?.length ? { toolCalls: message.toolCalls.map((tool) => ({ name: tool.name, redacted: true as const })) } : {}),
     timestamp: message.timestamp,
     ...(message.status ? { status: message.status } : {}),
   }));
@@ -311,6 +308,8 @@ export function guestRouteAllowed(method: string, pathname: string): boolean {
   if ((method === 'GET' || method === 'POST') && pathname === '/api/agents') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/agent') return true;
   if (method === 'GET' && pathname === '/api/skills') return true;
+  if (method === 'GET' && pathname === '/api/user-skills') return true;
+  if (method === 'DELETE' && /^\/api\/user-skills\/[^/]+\/[^/]+$/.test(pathname)) return true;
   if (method === 'GET' && pathname === '/api/auth/gitea-user') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/deployments') return true;
   if (method === 'GET' && pathname === '/api/deployments/doctor') return true;
@@ -695,6 +694,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
     if (finalized) log(`[taiwei] finalized ${finalized} stale pending gateway turn(s)`);
   })().catch((error) => log(`[taiwei] stale pending cleanup failed: ${error instanceof Error ? error.message : String(error)}`));
   const skillLoader = options.skillLoader ?? new SkillLoader();
+  const userSkillStore = new UserSkillStore(taiweiPaths.userSkills);
   const toolRegistry = options.toolRegistry;
   const knowledgeDirectory = resolve(options.knowledgeDirectory ?? taiweiPaths.knowledge);
   const ragIndexPath = resolve(options.ragIndexPath ?? taiweiPaths.ragIndex);
@@ -1415,6 +1415,28 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           description: skill.description,
           enabled: !(skillLoader.isDisabled?.(skill) ?? config.skillsDisabled?.includes(skill.name)),
         })) });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/user-skills') {
+        if (authenticatedRole === 'guest' && !guestId) throw new HttpError(403, 'Guest skill owner is unavailable');
+        const skills = await userSkillStore.list(authenticatedRole === 'guest' ? guestId : undefined);
+        const grouped = skills.reduce<Record<string, Array<{ name: string; description: string; owner: string }>>>((owners, skill) => {
+          (owners[skill.owner] ??= []).push({ name: skill.name, description: skill.description, owner: skill.owner });
+          return owners;
+        }, {});
+        json(response, 200, { skills: grouped });
+        return;
+      }
+      const userSkillRoute = pathname.match(/^\/api\/user-skills\/([^/]+)\/([^/]+)$/);
+      if (method === 'DELETE' && userSkillRoute) {
+        let owner: string;
+        let name: string;
+        try { owner = decodeURIComponent(userSkillRoute[1]); name = decodeURIComponent(userSkillRoute[2]); }
+        catch { throw new HttpError(400, 'Invalid user skill path encoding'); }
+        if (authenticatedRole === 'guest' && (!guestId || owner !== guestId)) throw new HttpError(403, 'Guests can only delete their own user skills');
+        const deleted = await userSkillStore.delete(owner, name);
+        if (!deleted) throw new HttpError(404, `User skill not found: ${owner}/${name}`);
+        json(response, 200, { ok: true, deleted: true });
         return;
       }
       const skillRoute = pathname.match(/^\/api\/skills\/([^/]+)$/);

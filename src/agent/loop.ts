@@ -15,6 +15,9 @@ import { emitEvent } from '../observability/events.js';
 import { filterToolsForModel, resolveModel } from '../llm/catalog.js';
 import { selectionFor } from '../config/model.js';
 import { ProviderHttpError } from '../llm/retry.js';
+import { guestIdForUsername } from '../util/paths.js';
+import { parseSkill } from '../skills/loader.js';
+import { UserSkillStore } from '../skills/user-store.js';
 
 export interface RunTurnOptions {
   signal?: AbortSignal;
@@ -55,6 +58,9 @@ const NO_MEMORY = 'NO_MEMORY';
 const MEMORY_FLUSH_TAIL_CHARS = 800;
 const MEMORY_FLUSH_MAX_CHARS = 60 * 1024;
 const FLUSH_TOOL_RESULT_CHARS = 2_000;
+const SKILL_SELF_LEARNING_MAX_CHARS = 80 * 1024;
+const NO_SKILL = 'NO_SKILL';
+const SKILL_SELF_LEARNING_PROMPT = `Review the supplied conversation and decide whether it contains a reusable multi-step workflow worth saving as a skill. Good candidates include repeated tool-driven procedures, a discovered platform API workflow, or standard deployment/project steps. Do not create a skill for one-off facts, trivial answers, incomplete/failed work, or generic advice. If there is no strong candidate, output exactly NO_SKILL. Otherwise output only one complete SKILL.md: YAML frontmatter with a lowercase filesystem-safe name (1-64 letters, numbers, hyphens, or underscores) and a specific description, followed by actionable steps, checks, pitfalls, and reusable commands with conversation-specific secrets removed. Do not wrap it in a code fence.`;
 
 interface ModelErrorFeedback {
   message: string;
@@ -150,6 +156,35 @@ async function flushMemory(
   return true;
 }
 
+async function distillUserSkill(
+  conversation: ChatMessage[],
+  config: TaiweiConfig,
+  model: string,
+  owner: string,
+  signal?: AbortSignal,
+  store = new UserSkillStore(),
+): Promise<boolean> {
+  const history = renderFlushHistory(conversation);
+  const result = await streamChat({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    model: config.skillSelfLearningModel?.trim() || model,
+    messages: [
+      { role: 'system', content: SKILL_SELF_LEARNING_PROMPT },
+      { role: 'user', content: `Conversation history:\n${history.length > SKILL_SELF_LEARNING_MAX_CHARS ? history.slice(-SKILL_SELF_LEARNING_MAX_CHARS) : history}` },
+    ],
+    tools: [],
+    signal,
+    timeoutMs: 60_000,
+  });
+  const content = result.content.trim();
+  if (!content || content === NO_SKILL) return false;
+  const parsed = parseSkill(content, 'distilled SKILL.md');
+  const saved = await store.save(owner, parsed.name, content);
+  if (saved.created) console.log(`[taiwei] Learned user skill "${saved.name}" for ${owner}`);
+  return saved.created;
+}
+
 async function compressConversation(
   conversation: ChatMessage[],
   boundary: number,
@@ -191,6 +226,7 @@ export async function runAgentTurn(
   const conversation = options.retainConversation === false ? [] : context.messages;
   if (options.agentProfile) context.profile = options.agentProfile;
   conversation.push({ role: 'user', content: options.userContent?.length ? options.userContent : prompt });
+  const selfLearningConversation = [...conversation];
   let fullText = '';
   let compressionAttempted = false;
   let consecutiveModelFeedbacks = 0;
@@ -278,6 +314,7 @@ export async function runAgentTurn(
           instruction: 'The previous upstream LLM request failed after provider retry/fallback handling. Use this feedback to choose the next step or explain the failure to the user.',
         }),
       });
+      selfLearningConversation.push(conversation.at(-1)!);
       continue;
     }
     consecutiveModelFeedbacks = 0;
@@ -321,8 +358,17 @@ export async function runAgentTurn(
       return { call: { ...call, function: { ...call.function, arguments: repaired ?? '{}' } }, repaired };
     });
     conversation.push({ role: 'assistant', content: result.content || null, ...(normalizedToolCalls.length ? { tool_calls: normalizedToolCalls.map(({ call }) => call) } : {}) });
+    selfLearningConversation.push(conversation.at(-1)!);
     if (!result.toolCalls.length) {
       const text = fullText || result.content;
+      if (config.skillSelfLearning) {
+        const owner = options.role === 'guest' ? guestIdForUsername(options.identity ?? 'guest') : 'admin';
+        try { await distillUserSkill(selfLearningConversation, config, model, owner, options.signal); }
+        catch (error) {
+          if (isAbortError(error, options.signal)) throw error;
+          console.debug(`[taiwei] Skill self-learning skipped: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       options.onEvent?.({ type: 'done', text });
       const endEvent = { type: 'turn.end', runId, sessionId, agentId: options.agentProfile?.id, model: result.model ?? model, latencyMs: Date.now() - startedAt, usage: result.usage, outcome: 'success' } as const;
       emitEvent(endEvent); await appendAudit(endEvent).catch(() => {});
@@ -364,6 +410,7 @@ export async function runAgentTurn(
       });
       options.onEvent?.({ type: 'tool_result', name: call.function.name, result: output });
       conversation.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: output });
+      selfLearningConversation.push(conversation.at(-1)!);
     }
   }
   throw new Error(`Agent stopped after reaching the ${maxTurns}-turn safety limit`); }

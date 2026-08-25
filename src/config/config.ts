@@ -22,6 +22,8 @@ export interface TaiweiConfig {
   contextWindows?: Record<string, number>;
   compressThreshold?: number;
   memoryFlush: boolean;
+  skillSelfLearning: boolean;
+  skillSelfLearningModel?: string;
   baseUrl: string;
   /** 对外访问地址，如 http://14.103.23.160，可选；nginx_add_proxy 优先使用。 */
   publicUrl?: string;
@@ -95,6 +97,7 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   contextWindow: 256_000,
   compressThreshold: 0.7,
   memoryFlush: true,
+  skillSelfLearning: true,
   baseUrl: 'https://api.openai.com/v1',
   publicUrl: '',
   apiKey: '',
@@ -213,6 +216,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     customPrompt: typeof storedConfig.customPrompt === 'string' ? storedConfig.customPrompt : DEFAULT_CONFIG.customPrompt,
     compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...storedConfig } as TaiweiConfig),
     memoryFlush: typeof storedConfig.memoryFlush === 'boolean' ? storedConfig.memoryFlush : DEFAULT_CONFIG.memoryFlush,
+    skillSelfLearning: typeof storedConfig.skillSelfLearning === 'boolean' ? storedConfig.skillSelfLearning : DEFAULT_CONFIG.skillSelfLearning,
     hookTimeoutSeconds: normalizeHookTimeout(storedConfig.hookTimeoutSeconds),
     hooks: normalizeHooks(storedConfig.hooks),
     autoLoadSkills: storedConfig.autoLoadSkills ?? DEFAULT_CONFIG.autoLoadSkills,
@@ -307,6 +311,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       customPrompt: typeof storedConfig.customPrompt === 'string' ? storedConfig.customPrompt : DEFAULT_CONFIG.customPrompt,
       compressThreshold: resolveCompressThreshold({ ...DEFAULT_CONFIG, ...storedConfig } as TaiweiConfig),
       memoryFlush: typeof storedConfig.memoryFlush === 'boolean' ? storedConfig.memoryFlush : DEFAULT_CONFIG.memoryFlush,
+      skillSelfLearning: typeof storedConfig.skillSelfLearning === 'boolean' ? storedConfig.skillSelfLearning : DEFAULT_CONFIG.skillSelfLearning,
       hookTimeoutSeconds: normalizeHookTimeout(storedConfig.hookTimeoutSeconds),
       hooks: normalizeHooks(storedConfig.hooks),
       skillsDisabled: normalizeStringList(storedConfig.skillsDisabled),
