@@ -118,6 +118,26 @@ export class SessionStore {
 
   async initialize(): Promise<void> { await mkdir(this.directory, { recursive: true }); }
 
+  async finalizeStalePending(message = '上次运行因网关重启而中断。'): Promise<number> {
+    await this.initialize();
+    const files = await readdir(this.directory, { withFileTypes: true });
+    let finalized = 0;
+    for (const entry of files) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      try {
+        const session = await this.readFile(join(this.directory, entry.name));
+        const pending = session.messages.at(-1);
+        if (pending?.role !== 'assistant' || pending.status !== 'pending') continue;
+        pending.status = 'stopped';
+        if (!pending.content.trim()) pending.content = message;
+        session.updatedAt = new Date().toISOString();
+        await this.save(session);
+        finalized += 1;
+      } catch { /* A malformed session must not prevent gateway startup. */ }
+    }
+    return finalized;
+  }
+
   async create(agentId = 'build', folderId?: string, currentModel?: string, providerId?: string, identity?: SessionIdentity): Promise<GatewaySession> {
     const now = new Date().toISOString();
     const session: GatewaySession = {

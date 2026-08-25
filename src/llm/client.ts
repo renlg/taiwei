@@ -37,6 +37,46 @@ export interface TokenUsage {
 
 export interface ChatResult { content: string; toolCalls: ToolCall[]; usage?: TokenUsage; model?: string; attempts?: number; }
 
+/** Conservatively repairs common serialization damage in tool arguments. */
+export function repairToolCallArguments(raw: string): string | null {
+  const parses = (value: string): boolean => {
+    try { JSON.parse(value); return true; } catch { return false; }
+  };
+  let candidate = raw.trim();
+  if (parses(candidate)) return candidate;
+
+  const fenced = candidate.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced) candidate = fenced[1].trim();
+  // A simple identifier in object-key position has only one JSON spelling.
+  candidate = candidate.replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, '$1"$2"$3');
+  candidate = candidate.replace(/,\s*([}\]])/g, '$1');
+  if (parses(candidate)) return candidate;
+
+  let inString = false;
+  let escaped = false;
+  const stack: string[] = [];
+  for (const character of candidate) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') { inString = true; continue; }
+    if (character === '{') stack.push('}');
+    else if (character === '[') stack.push(']');
+    else if (character === '}' || character === ']') {
+      if (stack.at(-1) !== character) return null;
+      stack.pop();
+    }
+  }
+  if (escaped) return null;
+  if (inString) candidate += '"';
+  candidate += stack.reverse().join('');
+  candidate = candidate.replace(/,\s*([}\]])/g, '$1');
+  return parses(candidate) ? candidate : null;
+}
+
 export interface ChatRequest {
   baseUrl: string;
   apiKey: string;

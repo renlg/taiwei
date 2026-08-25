@@ -8,7 +8,7 @@ import type { AgentEvent } from '../src/agent/loop.js';
 import { AuthSessionStore } from '../src/gateway/auth.js';
 import { AgentChatBridge, type ChatBridge, type ChatSink } from '../src/gateway/chat.js';
 import { LOGIN_COOLDOWN_MS, LoginLockStore } from '../src/gateway/login-locks.js';
-import { closeGateway, createGatewayServer, guestIdForUsername, guestRouteAllowed, listenGateway } from '../src/gateway/server.js';
+import { closeGateway, createGatewayServer, formatGatewayTurnError, guestIdForUsername, guestRouteAllowed, listenGateway } from '../src/gateway/server.js';
 import { createOssObjectKey } from '../src/gateway/oss.js';
 import { SessionStore } from '../src/gateway/sessions.js';
 import type { ChatMessage } from '../src/llm/client.js';
@@ -23,6 +23,7 @@ import { SkillLoader } from '../src/skills/loader.js';
 import type { TaiweiApp } from '../src/app.js';
 import { createMemoryTools, writeExtendedMemory } from '../src/tools/impl/memory.js';
 import { installGatewayTestAdminAuth, invalidGatewayAuthHeader } from './gateway-test-auth.js';
+import { ProviderHttpError } from '../src/llm/retry.js';
 
 installGatewayTestAdminAuth();
 

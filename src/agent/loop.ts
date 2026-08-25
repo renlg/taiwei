@@ -1,6 +1,6 @@
 import type { AgentContext } from './context.js';
 import { resolveCompressThreshold, resolveContextWindow, type TaiweiConfig } from '../config/config.js';
-import { messageText, streamChat, type ChatMessage, type ChatResult, type ContentBlock, type TokenUsage } from '../llm/client.js';
+import { messageText, repairToolCallArguments, streamChat, type ChatMessage, type ChatResult, type ContentBlock, type TokenUsage } from '../llm/client.js';
 import { toOpenAITool } from '../llm/tools.js';
 import type { TenantIdentity, ToolRegistry } from '../tools/registry.js';
 import type { ConfirmationHandler } from '../security/commands.js';
@@ -316,7 +316,11 @@ export async function runAgentTurn(
       model,
       ...(compressedThisRequest ? { compressed: true } : {}),
     });
-    conversation.push({ role: 'assistant', content: result.content || null, ...(result.toolCalls.length ? { tool_calls: result.toolCalls } : {}) });
+    const normalizedToolCalls = result.toolCalls.map((call) => {
+      const repaired = repairToolCallArguments(call.function.arguments || '{}');
+      return { call: { ...call, function: { ...call.function, arguments: repaired ?? '{}' } }, repaired };
+    });
+    conversation.push({ role: 'assistant', content: result.content || null, ...(normalizedToolCalls.length ? { tool_calls: normalizedToolCalls.map(({ call }) => call) } : {}) });
     if (!result.toolCalls.length) {
       const text = fullText || result.content;
       options.onEvent?.({ type: 'done', text });
@@ -324,11 +328,16 @@ export async function runAgentTurn(
       emitEvent(endEvent); await appendAudit(endEvent).catch(() => {});
       return text;
     }
-    for (const call of result.toolCalls) {
+    for (const normalized of normalizedToolCalls) {
+      const call = normalized.call;
       let args: Record<string, unknown> = {};
       let output: string;
-      try { args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>; }
-      catch (error) { output = JSON.stringify({ error: `Invalid tool arguments: ${(error as Error).message}` }); }
+      if (normalized.repaired === null) {
+        output = JSON.stringify({ error: 'Invalid tool call arguments, please regenerate with valid JSON.' });
+      } else {
+        try { args = JSON.parse(call.function.arguments) as Record<string, unknown>; }
+        catch { output = JSON.stringify({ error: 'Invalid tool call arguments, please regenerate with valid JSON.' }); }
+      }
       options.onEvent?.({ type: 'tool', name: call.function.name, args });
       const cwd = options.cwd ?? process.cwd();
       output ??= await registry.dispatch(call.function.name, args, {

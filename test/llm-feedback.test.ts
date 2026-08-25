@@ -10,6 +10,39 @@ import { DEFAULT_CONFIG } from '../src/config/config.js';
 import { MemoryStore } from '../src/memory/store.js';
 import { SkillLoader } from '../src/skills/loader.js';
 import { ToolRegistry } from '../src/tools/registry.js';
+import { repairToolCallArguments, type ChatMessage } from '../src/llm/client.js';
+
+test('repairToolCallArguments conservatively repairs common malformed JSON', () => {
+  assert.equal(repairToolCallArguments('{"name": "ls"'), '{"name": "ls"}');
+  assert.equal(repairToolCallArguments('{name: "ls"}'), '{"name": "ls"}');
+  assert.equal(repairToolCallArguments('{"name":"ls",}'), '{"name":"ls"}');
+  assert.equal(repairToolCallArguments('```json\n{"name":"ls"}\n```'), '{"name":"ls"}');
+  assert.equal(repairToolCallArguments('{"name": ]'), null);
+});
+
+test('unrepairable tool arguments produce regeneration feedback without poisoning upstream history', async () => isolated(async () => {
+  const requests: Array<{ messages: ChatMessage[] }> = [];
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof requests[number]);
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(requests.length === 1
+      ? { choices: [{ message: { content: null, tool_calls: [{ id: 'bad-call', type: 'function', function: { name: 'bash', arguments: '{"command": ]' } }] } }] }
+      : { choices: [{ message: { content: 'recovered', tool_calls: [] } }] }));
+  });
+  const baseUrl = await listen(server);
+  try {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.baseUrl = baseUrl;
+    config.retry = { ...config.retry, maxAttempts: 1 };
+    assert.equal(await runAgentTurn('hello', context(), new ToolRegistry(), config), 'recovered');
+    const assistant = requests[1]?.messages.find((message) => message.role === 'assistant' && message.tool_calls?.length);
+    const tool = requests[1]?.messages.find((message) => message.role === 'tool');
+    assert.equal(assistant?.role === 'assistant' ? assistant.tool_calls?.[0]?.function.arguments : undefined, '{}');
+    assert.match(tool?.content ?? '', /please regenerate with valid JSON/);
+  } finally { await close(server); }
+}));
 
 async function isolated(run: (directory: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-llm-feedback-'));
