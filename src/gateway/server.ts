@@ -35,7 +35,7 @@ import { uploadToOss } from './oss.js';
 import { TenantAccountService, TenantAccountStore } from './tenants.js';
 import { tenantWorkspaceForGuest, osUserForGuest } from './tenant-os.js';
 import {
-  cleanupDeployment, DeploymentStore, inspectDeployment, validateDeploymentInput,
+  cleanupDeployment, DeploymentStore, deploymentPreflight, inspectDeployment, validateDeploymentInput,
   type CleanupStep, type DeploymentDoctorResult, type DeploymentRecord, type DeploymentRepository,
 } from './deployments.js';
 
@@ -95,7 +95,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '65';
+const STATIC_ASSET_VERSION = '66';
 
 function contentWithTurnError(content: string, message: string): string {
   const error = `[错误] ${message || '未知错误'}`;
@@ -979,10 +979,12 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         try { name = decodeURIComponent(deploymentDeleteRoute[1]); }
         catch { throw new HttpError(400, '部署名称编码无效'); }
         const ownerHash = new URL(request.url ?? '/', 'http://localhost').searchParams.get('ownerHash')?.trim();
+        const force = new URL(request.url ?? '/', 'http://localhost').searchParams.get('force') === '1';
         if (!ownerHash) throw new HttpError(400, 'ownerHash is required');
         if (authenticatedRole === 'guest' && ownerHash !== await deploymentIdentity()) throw new HttpError(403, '不能清理其他用户的部署');
         const record = await repository.getDeployment(name, ownerHash);
         if (!record) throw new HttpError(404, 'Deployment not found');
+        const preflight = await deploymentPreflight(record);
         const workspaceDirectories = await deploymentWorkspaceDirectories();
         // 放行所有 guest 项目根(/home/<osUser>/projects)，保证 guest 部署记录的目录可被清理
         let guestProjectsRoots: string[] = [];
@@ -998,11 +1000,11 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         }
         const cleanup = options.deploymentCleanup ?? cleanupDeployment;
         const steps = await cleanup(record, {
-          projectsRoot: join(taiweiPaths.home, 'projects'), skillsRoot: taiweiPaths.skills, workspaceDirectories, guestProjectsRoots,
+          projectsRoot: join(taiweiPaths.home, 'projects'), skillsRoot: taiweiPaths.skills, workspaceDirectories, guestProjectsRoots, force,
         });
         const ok = steps.every((step) => step.status !== 'failed');
         if (ok) await repository.markCleaned(record.id);
-        json(response, 200, { ok, steps, deployment: ok ? await repository.getDeployment(name, ownerHash) : record });
+        json(response, 200, { ok, steps, preflight, deployment: ok ? await repository.getDeployment(name, ownerHash) : record });
         return;
       }
       if (method === 'GET' && pathname === '/api/auth/gitea-user') {

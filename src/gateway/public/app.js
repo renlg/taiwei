@@ -783,16 +783,32 @@ function renderDeployments(data) {
     doctor.addEventListener('click', async () => { doctor.disabled = true; try { await loadDeployDoctor(deployment); } finally { doctor.disabled = false; } });
     const remove = document.createElement('button'); remove.className = 'small-button deployment-cleanup'; remove.type = 'button'; remove.textContent = '删除';
     remove.addEventListener('click', async () => {
-      const confirmed = await confirmDialog({ title: '清理部署', desc: '将停止记录端口上的进程、删除项目目录并移除 nginx location。', object: `${deployment.name} · ${deployment.ownerHash}`, okText: '确认删除', danger: true });
-      if (!confirmed) return;
-      remove.disabled = true; elements.deploymentsError.textContent = '';
-      try {
-        const result = await requestJson(`/api/deployments/${encodeURIComponent(deployment.name)}?ownerHash=${encodeURIComponent(deployment.ownerHash)}`, { method: 'DELETE' });
-        elements.deploymentsResult.textContent = result.steps.map((step) => `${step.status === 'failed' ? '✗' : '✓'} ${step.step}: ${step.message}`).join('\n');
-        elements.deploymentsResult.classList.toggle('failed', !result.ok);
-        await loadDeployments();
-      } catch (error) { elements.deploymentsError.textContent = error.message; }
-      finally { remove.disabled = false; }
+      const base = `/api/deployments/${encodeURIComponent(deployment.name)}?ownerHash=${encodeURIComponent(deployment.ownerHash)}`;
+      const doDelete = async (force) => {
+        remove.disabled = true; elements.deploymentsError.textContent = '';
+        try {
+          const result = await requestJson(`${base}${force ? '&force=1' : ''}`, { method: 'DELETE' });
+          if (!result.ok && result.steps?.some((s) => s.step === 'stop_port' && s.status === 'failed')) {
+            // 端口/项目仍存在 → 提示用户确认后强制删除
+            const forceText = [];
+            if (result.preflight?.portRunning) forceText.push('端口仍在运行');
+            if (result.preflight?.dirExists) forceText.push('项目文件仍存在');
+            const confirmed = await confirmDialog({
+              title: '关闭端口并删除项目？',
+              desc: `${forceText.join('、')}。删除将关闭端口进程、删除项目目录并移除 nginx location，操作不可撤销。`,
+              object: `${deployment.name} · ${deployment.ownerHash}`,
+              okText: '关闭端口并删除', danger: true,
+            });
+            if (!confirmed) { return; }
+            return await doDelete(true);
+          }
+          elements.deploymentsResult.textContent = result.steps.map((step) => `${step.status === 'failed' ? '✗' : '✓'} ${step.step}: ${step.message}`).join('\n');
+          elements.deploymentsResult.classList.toggle('failed', !result.ok);
+          await loadDeployments();
+        } catch (error) { elements.deploymentsError.textContent = error.message; }
+        finally { remove.disabled = false; }
+      };
+      await doDelete(false);
     });
     actions.append(doctor, remove); row.append(main, actions); elements.deploymentsList.append(row);
   }

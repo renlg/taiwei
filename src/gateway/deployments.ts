@@ -378,17 +378,32 @@ async function safeProjectDirectory(
   return target;
 }
 
-export async function cleanupDeployment(record: DeploymentRecord, options: { projectsRoot?: string; skillsRoot?: string; workspaceDirectories?: readonly string[]; guestProjectsRoots?: readonly string[] } = {}): Promise<CleanupStep[]> {
+export async function deploymentPreflight(record: DeploymentRecord): Promise<{ portRunning: boolean; dirExists: boolean }> {
+  const pids = await listeningPids(record.port);
+  let dirExists = false;
+  try {
+    const st = await stat(record.dir);
+    dirExists = st.isDirectory();
+  } catch { dirExists = false; }
+  return { portRunning: pids.length > 0, dirExists };
+}
+
+export async function cleanupDeployment(record: DeploymentRecord, options: { projectsRoot?: string; skillsRoot?: string; workspaceDirectories?: readonly string[]; guestProjectsRoots?: readonly string[]; force?: boolean } = {}): Promise<CleanupStep[]> {
   const projectsRoot = options.projectsRoot ?? join(getPaths().home, 'projects');
   const skillsRoot = options.skillsRoot ?? getPaths().skills;
-  // 删除前检查：端口若仍有项目进程在监听 → 拒绝删除并提示（不自动杀进程）
+  const steps: CleanupStep[] = [];
+  // 端口仍在运行且未确认 force → 拒绝删除（由前端先确认，确认后带 force=1 再来）
   const runningPids = await listeningPids(record.port);
-  if (runningPids.length) {
+  if (runningPids.length && !options.force) {
     return [{
-      step: 'stop_port', status: 'failed', message: `端口 ${record.port} 仍有项目进程在运行（PID ${runningPids.join(', ')}），请先停止项目再删除`,
+      step: 'stop_port', status: 'failed', message: `端口 ${record.port} 仍有项目进程在运行（PID ${runningPids.join(', ')}），需确认关闭端口后删除`,
     }];
   }
-  const steps: CleanupStep[] = [{ step: 'stop_port', status: 'skipped', message: `端口 ${record.port} 未监听，无需停止` }];
+  if (runningPids.length && options.force) {
+    steps.push(await stopPort(record.port));
+  } else {
+    steps.push({ step: 'stop_port', status: 'skipped', message: `端口 ${record.port} 未监听，无需停止` });
+  }
   try {
     const target = await safeProjectDirectory(record.dir, projectsRoot, options.workspaceDirectories ?? [], options.guestProjectsRoots ?? []);
     await rm(target, { recursive: true, force: true });
