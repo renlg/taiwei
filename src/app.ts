@@ -8,6 +8,7 @@ import { loadConfig, resolveToolSettings, resolveWorkspaceDir, type TaiweiConfig
 import { getCurrentModel } from './config/model.js';
 import { CronJobStore, type CronJob } from './cron/jobs.js';
 import { CronScheduler, type CronExecutionResult } from './cron/scheduler.js';
+import { executeWatchdogScript } from './cron/script.js';
 import type { CronRun } from './cron/runs.js';
 import { McpBridge } from './mcp/bridge.js';
 import { MemoryStore } from './memory/store.js';
@@ -21,6 +22,7 @@ import { webSearchTool } from './tools/impl/websearch.js';
 import { readTool } from './tools/impl/read.js';
 import { searchTool } from './tools/impl/search.js';
 import { createNginxAddProxyTool } from './tools/impl/nginx-add-proxy.js';
+import { createWatchdogTools } from './tools/impl/watchdog.js';
 import { createLoadSkillTool } from './tools/impl/skill.js';
 import { writeTool } from './tools/impl/write.js';
 import { editTool } from './tools/impl/edit.js';
@@ -67,7 +69,7 @@ export class TaiweiApp {
     this.hooks = new HookRunner(this.config.hooks, this.config.hookTimeoutSeconds, workspace);
     this.delegation = new DelegationManager((request) => this.runChild(request), this.config.delegation.maxConcurrent, this.config.delegation.maxDepth);
     const nginxAddProxyTool = createNginxAddProxyTool({ publicUrl: this.config.publicUrl });
-    for (const tool of [bashTool, readTool, writeTool, editTool, searchTool, nginxAddProxyTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills), ...createMemoryTools(this.memory), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
+    for (const tool of [bashTool, readTool, writeTool, editTool, searchTool, nginxAddProxyTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills), ...createMemoryTools(this.memory), ...createWatchdogTools(this.cronJobs, this.scheduler), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
     this.registry.register(createDelegateTool(this.delegation));
     // history.db is a rebuildable index. A missing/unsupported SQLite runtime must never block chat startup.
     await importHistoryIfEmpty().catch(() => {});
@@ -123,7 +125,12 @@ export class TaiweiApp {
   stopSession(sessionId: string): boolean { return this.runtime.stop(sessionId); }
 
   private async executeCron(job: CronJob, signal: AbortSignal): Promise<CronExecutionResult> {
-    if (job.kind === 'script') throw new Error(`Cron job "${job.name}" has unsupported kind "script"`);
+    if (job.kind === 'script') {
+      this.config = await loadConfig();
+      const cwd = resolveWorkspaceDir(this.config);
+      await mkdir(cwd, { recursive: true });
+      return executeWatchdogScript(job.script!, cwd, signal);
+    }
     if (job.kind === 'command') throw new Error('Cron command jobs are not supported; use kind "agent"');
     const result = await this.runtime.run(`cron:${job.id}`, async (runtimeSignal) => {
       const cronContext = new AgentContext(this.memory, this.skills);

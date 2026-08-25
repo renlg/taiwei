@@ -55,7 +55,7 @@ export interface GatewayServerOptions {
   publicDirectory?: string;
   sessions?: SessionStore;
   deployments?: DeploymentRepository;
-  deploymentCleanup?: (record: DeploymentRecord, options: { projectsRoot: string; skillsRoot: string; workspaceDirectories: readonly string[] }) => Promise<CleanupStep[]>;
+  deploymentCleanup?: (record: DeploymentRecord, options: { projectsRoot: string; skillsRoot: string; workspaceDirectories: readonly string[]; guestProjectsRoots: readonly string[]; force: boolean }) => Promise<CleanupStep[]>;
   deploymentInspect?: (record: DeploymentRecord) => Promise<DeploymentDoctorResult>;
   modelState?: GatewayModelState;
   contextWindow?: (model: string) => number | Promise<number>;
@@ -931,7 +931,6 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       let authenticatedUsername: string | undefined;
       let authenticatedRole: 'admin' | 'guest' = 'admin';
       let guestId: string | undefined;
-      const presentedToken = requestToken(request) ?? requestShareToken(request);
       // All API routes are private unless they are explicitly allow-listed above.
       // This remains fail-closed even when auth/oauth/share are disabled; enabling
       // share only adds another accepted credential and never grants anonymity.
@@ -1013,6 +1012,21 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return createHash('sha256').update(identity).digest('hex').slice(0, 8);
       };
       const deploymentWorkspaceDirectories = async () => (await activeFolders.list()).map((folder) => folder.path);
+      const deploymentGuestProjectsRoots = async (): Promise<string[]> => {
+        if (!tenantAccounts) return [];
+        try {
+          const accounts = await tenantAccounts.store.listAccounts();
+          const filteredAccounts = authenticatedRole === 'guest'
+            ? accounts.filter((account) => Boolean(authenticatedUsername) && account.username === authenticatedUsername)
+            : accounts;
+          return filteredAccounts
+            .map((account) => join(options.tenantHomeRoot ?? '/home', account.osUsername, 'projects'))
+            .filter((directory) => directory !== join(taiweiPaths.home, 'projects'));
+        } catch (error) {
+          log(`[taiwei] could not enumerate tenant accounts for deployment directory validation: ${error instanceof Error ? error.message : String(error)}`);
+          return [];
+        }
+      };
       if (method === 'POST' && pathname === '/api/logout') {
         if (authenticatedToken) await authSessions.delete(authenticatedToken);
         json(response, 200, { ok: true }, { 'set-cookie': sessionCookie('', 0) });
@@ -1049,17 +1063,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           if (submittedOwner && submittedOwner !== await deploymentIdentity()) throw new HttpError(403, '不能注册或更新其他用户的部署');
         }
         const workspaceDirectories = await deploymentWorkspaceDirectories();
-        let guestProjectsRoots: string[] = [];
-        if (tenantAccounts) {
-          try {
-            const accounts = await tenantAccounts.store.listAccounts();
-            guestProjectsRoots = accounts
-              .map((account) => join(options.tenantHomeRoot ?? '/home', account.osUsername, 'projects'))
-              .filter((directory) => directory !== join(taiweiPaths.home, 'projects'));
-          } catch (error) {
-            log(`[taiwei] could not enumerate tenant accounts for deployment dir validation: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        }
+        const guestProjectsRoots = await deploymentGuestProjectsRoots();
         const input = validateDeploymentInput(body, join(taiweiPaths.home, 'projects'), workspaceDirectories, guestProjectsRoots);
         if (authenticatedRole === 'guest' && input.ownerHash !== await deploymentIdentity()) throw new HttpError(403, '不能注册或更新其他用户的部署');
         json(response, 200, await repository.upsertDeployment(input));
@@ -1089,18 +1093,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         if (!record) throw new HttpError(404, 'Deployment not found');
         const preflight = await deploymentPreflight(record);
         const workspaceDirectories = await deploymentWorkspaceDirectories();
-        // 放行所有 guest 项目根(/home/<osUser>/projects)，保证 guest 部署记录的目录可被清理
-        let guestProjectsRoots: string[] = [];
-        if (tenantAccounts) {
-          try {
-            const accounts = await tenantAccounts.store.listAccounts();
-            guestProjectsRoots = accounts
-              .map((account) => join(options.tenantHomeRoot ?? '/home', account.osUsername, 'projects'))
-              .filter((directory) => directory !== join(taiweiPaths.home, 'projects'));
-          } catch (error) {
-            log(`[taiwei] could not enumerate tenant accounts for deployment cleanup: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        }
+        const guestProjectsRoots = await deploymentGuestProjectsRoots();
         const cleanup = options.deploymentCleanup ?? cleanupDeployment;
         const steps = await cleanup(record, {
           projectsRoot: join(taiweiPaths.home, 'projects'), skillsRoot: taiweiPaths.skills, workspaceDirectories, guestProjectsRoots, force,
@@ -1635,6 +1628,9 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           json(response, 400, { error: `Unknown model: ${model}`, models: listed.models });
           return;
         }
+        if (authenticatedRole === 'guest' && body.sessionId === undefined) {
+          throw new HttpError(403, 'Guest model selection must target a guest session');
+        }
         if (body.sessionId !== undefined) {
           if (typeof body.sessionId !== 'string') throw new HttpError(400, 'sessionId must be a string');
           const session = await activeSessions.get(body.sessionId);
@@ -1785,7 +1781,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           return;
         }
         const requestedGroup = request.headers['x-session-id'];
-        const group = sanitizeFilename(typeof requestedGroup === 'string' ? requestedGroup : 'unassigned');
+        const baseGroup = sanitizeFilename(typeof requestedGroup === 'string' ? requestedGroup : 'unassigned');
+        const group = guestId ? `${guestId}-${baseGroup}` : baseGroup;
         const directory = join(uploadsDirectory, group);
         await mkdir(directory, { recursive: true });
         const path = join(directory, `${Date.now()}-${randomUUID()}-${name}`);

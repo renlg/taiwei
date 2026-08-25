@@ -9,7 +9,6 @@ import { appendAudit } from '../../observability/audit.js';
 import { getPaths } from '../../util/paths.js';
 import type { ToolContext, ToolSpec } from '../registry.js';
 
-const SCRIPT_PATH = '/root/.taiwei/skills/taiwei-编程部署/scripts/nginx_deploy.py';
 const LOCATIONS_PATH = '/etc/nginx/taiwei-projects-locations.conf';
 const RESERVED_PORTS = new Set([8688, 8890, 8899]);
 const PROXY_PATH = /^\/taiwei\/([0-9a-f]{8})\/([a-z0-9][a-z0-9-]*)\/$/;
@@ -252,7 +251,8 @@ export function createNginxAddProxyTool(dependencies: NginxAddProxyDependencies 
         return finish({ ok: true, message: `反代已存在: ${path},无需重复配置`, alreadyExists: true, url }, details);
       }
 
-      const result = await execute('python3', [SCRIPT_PATH, ownerHash, name, String(port)], { shell: false, signal: context.signal });
+      const scriptPath = join(getPaths().skills, 'taiwei-编程部署', 'scripts', 'nginx_deploy.py');
+      const result = await execute('python3', [scriptPath, ownerHash, name, String(port)], { shell: false, signal: context.signal });
       const timestamp = now();
       const logDirectory = join(getPaths().home, 'logs');
       const logPath = join(logDirectory, `nginx-add-${timestamp.toISOString().replace(/[:.]/g, '-')}.log`);
