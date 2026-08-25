@@ -24,6 +24,8 @@ import { loadMcpConfig, type McpServerConfig } from '../mcp/client.js';
 import { ToolRegistry, type ToolConfigSchema } from '../tools/registry.js';
 import type { Skill } from '../skills/loader.js';
 import { UserSkillStore } from '../skills/user-store.js';
+import { validateUserSkillName } from '../skills/user-store.js';
+import { UserSkillStateStore } from '../skills/user-state.js';
 import { appendMessage as appendHistoryMessage, upsertSession as upsertHistorySession, type HistoryMessageInput, type HistorySessionMeta } from '../history/db.js';
 import { MemoryStore } from '../memory/store.js';
 import { CronJobStore, type CronJobInput } from '../cron/jobs.js';
@@ -72,6 +74,8 @@ export interface GatewayServerOptions {
   configState?: { load(): Promise<TaiweiConfig>; save(config: TaiweiConfig): Promise<void> };
   hooks?: HookRunner;
   skillLoader?: Pick<SkillLoader, 'list' | 'load'> & Partial<Pick<SkillLoader, 'setDisabled' | 'isDisabled'>>;
+  userSkillStore?: UserSkillStore;
+  userSkillStateStore?: UserSkillStateStore;
   toolRegistry?: ToolRegistry;
   knowledgeDirectory?: string;
   ragIndexPath?: string;
@@ -99,7 +103,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '66';
+const STATIC_ASSET_VERSION = '67';
 
 function contentWithTurnError(content: string, message: string): string {
   const error = `[错误] ${message || '未知错误'}`;
@@ -308,6 +312,10 @@ export function guestRouteAllowed(method: string, pathname: string): boolean {
   if ((method === 'GET' || method === 'POST') && pathname === '/api/agents') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/agent') return true;
   if (method === 'GET' && pathname === '/api/skills') return true;
+  if (method === 'GET' && pathname === '/api/skill-store') return true;
+  if (method === 'POST' && pathname === '/api/skill-store/install') return true;
+  if (method === 'POST' && /^\/api\/skill-store\/[^/]+\/state$/.test(pathname)) return true;
+  if (method === 'DELETE' && /^\/api\/skill-store\/[^/]+$/.test(pathname)) return true;
   if (method === 'GET' && pathname === '/api/user-skills') return true;
   if (method === 'DELETE' && /^\/api\/user-skills\/[^/]+\/[^/]+$/.test(pathname)) return true;
   if (method === 'GET' && pathname === '/api/auth/gitea-user') return true;
@@ -694,7 +702,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
     if (finalized) log(`[taiwei] finalized ${finalized} stale pending gateway turn(s)`);
   })().catch((error) => log(`[taiwei] stale pending cleanup failed: ${error instanceof Error ? error.message : String(error)}`));
   const skillLoader = options.skillLoader ?? new SkillLoader();
-  const userSkillStore = new UserSkillStore(taiweiPaths.userSkills);
+  const userSkillStore = options.userSkillStore ?? new UserSkillStore(taiweiPaths.userSkills);
+  const userSkillStateStore = options.userSkillStateStore ?? new UserSkillStateStore(taiweiPaths.skillStates);
   const toolRegistry = options.toolRegistry;
   const knowledgeDirectory = resolve(options.knowledgeDirectory ?? taiweiPaths.knowledge);
   const ragIndexPath = resolve(options.ragIndexPath ?? taiweiPaths.ragIndex);
@@ -1418,6 +1427,76 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         })) });
         return;
       }
+      const skillStoreOwner = authenticatedRole === 'guest' ? guestId : 'admin';
+      if (pathname.startsWith('/api/skill-store') && !skillStoreOwner) throw new HttpError(403, 'Guest skill owner is unavailable');
+      if (method === 'GET' && pathname === '/api/skill-store') {
+        const url = new URL(request.url ?? '/', 'http://localhost');
+        const q = (url.searchParams.get('q') ?? '').trim().toLocaleLowerCase();
+        const rawPage = Number(url.searchParams.get('page') ?? '1');
+        const rawPageSize = Number(url.searchParams.get('pageSize') ?? '20');
+        if (!Number.isInteger(rawPage) || rawPage < 1) throw new HttpError(400, 'page must be a positive integer');
+        if (!Number.isInteger(rawPageSize) || rawPageSize < 1) throw new HttpError(400, 'pageSize must be a positive integer');
+        const pageSize = Math.min(rawPageSize, 100);
+        const catalog = (await allSkills(await configState.load())).filter((skill) => !q
+          || skill.name.toLocaleLowerCase().includes(q)
+          || skill.description.toLocaleLowerCase().includes(q));
+        const installedSkills = await userSkillStore.list(skillStoreOwner!);
+        const installed = new Set(installedSkills.map((skill) => skill.name));
+        const disabled = await userSkillStateStore.disabled(skillStoreOwner!);
+        const total = catalog.length;
+        const totalPages = Math.ceil(total / pageSize);
+        const start = (rawPage - 1) * pageSize;
+        json(response, 200, {
+          items: catalog.slice(start, start + pageSize).map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            installed: installed.has(skill.name),
+            enabled: installed.has(skill.name) ? !disabled.has(skill.name) : true,
+            source: 'system',
+          })),
+          total, page: rawPage, pageSize, totalPages,
+        });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/skill-store/install') {
+        const body = await readJson(request) as { name?: unknown };
+        if (typeof body.name !== 'string') throw new HttpError(400, 'name is required');
+        let name: string;
+        try { name = validateUserSkillName(body.name); }
+        catch (error) { throw new HttpError(400, (error as Error).message); }
+        let skill: Skill;
+        try { skill = await skillLoader.load(name, { includeDisabled: true }); }
+        catch { throw new HttpError(404, `Skill not found: ${name}`); }
+        const saved = await userSkillStore.save(skillStoreOwner!, name, await readFile(skill.path, 'utf8'));
+        json(response, 200, { ok: true, installed: true, created: saved.created });
+        return;
+      }
+      const skillStoreStateRoute = pathname.match(/^\/api\/skill-store\/([^/]+)\/state$/);
+      if (method === 'POST' && skillStoreStateRoute) {
+        let name: string;
+        try { name = validateUserSkillName(decodeURIComponent(skillStoreStateRoute[1])); }
+        catch (error) { throw new HttpError(400, `Invalid skill name: ${(error as Error).message}`); }
+        const body = await readJson(request) as { enabled?: unknown };
+        if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be boolean');
+        try { await userSkillStore.load(skillStoreOwner!, name); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new HttpError(404, 'Installed skill not found');
+          throw error;
+        }
+        await userSkillStateStore.setEnabled(skillStoreOwner!, name, body.enabled);
+        json(response, 200, { ok: true, enabled: body.enabled });
+        return;
+      }
+      const skillStoreDeleteRoute = pathname.match(/^\/api\/skill-store\/([^/]+)$/);
+      if (method === 'DELETE' && skillStoreDeleteRoute) {
+        let name: string;
+        try { name = validateUserSkillName(decodeURIComponent(skillStoreDeleteRoute[1])); }
+        catch (error) { throw new HttpError(400, `Invalid skill name: ${(error as Error).message}`); }
+        const deleted = await userSkillStore.delete(skillStoreOwner!, name);
+        if (deleted) await userSkillStateStore.remove(skillStoreOwner!, name);
+        json(response, 200, { ok: true, deleted });
+        return;
+      }
       if (method === 'GET' && pathname === '/api/user-skills') {
         if (authenticatedRole === 'guest' && !guestId) throw new HttpError(403, 'Guest skill owner is unavailable');
         const skills = await userSkillStore.list(authenticatedRole === 'guest' ? guestId : undefined);
@@ -1437,6 +1516,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         if (authenticatedRole === 'guest' && (!guestId || owner !== guestId)) throw new HttpError(403, 'Guests can only delete their own user skills');
         const deleted = await userSkillStore.delete(owner, name);
         if (!deleted) throw new HttpError(404, 'User skill not found');
+        await userSkillStateStore.remove(owner, name);
         json(response, 200, { ok: true, deleted: true });
         return;
       }

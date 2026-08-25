@@ -124,13 +124,22 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
     case '/skill': {
       const pluginSkills = app.plugins.skills();
       if (action === 'list') {
-        const installed = [...await app.skills.list(), ...pluginSkills];
+        const installed = [...await app.skills.list(), ...await app.userSkills.loadEnabled('admin', await app.userSkillStates.disabled('admin')), ...pluginSkills];
         const active = new Set(app.context.listActiveSkills().map((skill) => skill.name));
         output(installed.length ? installed.map((skill) => `${active.has(skill.name) ? '*' : ' '} ${skill.name} — ${skill.description}`).join('\n') : 'No skills installed.');
       } else if (action === 'load' && args[0]) {
         const pluginSkill = pluginSkills.find((skill) => skill.name === args[0]);
-        const skill = pluginSkill ?? await app.context.loadSkill(args[0]);
+        let skill = pluginSkill;
         if (pluginSkill) app.context.activateSkill(pluginSkill);
+        else {
+          try { skill = await app.userSkills.load('admin', args[0]); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+          if (skill) {
+            if (!await app.userSkillStates.isEnabled('admin', skill.name)) throw new Error(`Skill "${skill.name}" is disabled for this user`);
+            app.context.activateUserSkill(skill);
+          } else skill = await app.context.loadSkill(args[0]);
+        }
+        if (!skill) throw new Error(`Skill not found: ${args[0]}`);
         output(`[taiwei] Loaded skill ${skill.name}.`);
       } else if (action === 'unload' && args[0]) output(app.context.unloadSkill(args[0]) ? `[taiwei] Unloaded ${args[0]}.` : `[taiwei] Skill ${args[0]} was not active.`);
       else throw new Error('Usage: /skill list | /skill load <name> | /skill unload <name>');
@@ -200,7 +209,7 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
 export async function runRepl(app: TaiweiApp): Promise<void> {
   if (app.config.autoLoadSkills !== false) {
     try {
-      app.context.setAvailableSkills(await app.skills.list());
+      await app.refreshContextSkills(app.context, 'admin');
     } catch { /* Skill discovery is optional and must not prevent the REPL from starting. */ }
   }
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: color.cyan('taiwei> ') });

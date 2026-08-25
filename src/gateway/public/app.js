@@ -71,6 +71,15 @@ const elements = {
   skillsError: $('#skills-error'),
   skillList: $('#skill-list'),
   skillDetail: $('#skill-detail'),
+  skillStoreOpen: $('#skill-store-open'),
+  skillStoreModal: $('#skill-store-modal'),
+  skillStoreClose: $('#skill-store-close'),
+  skillStoreSearch: $('#skill-store-search'),
+  skillStoreError: $('#skill-store-error'),
+  skillStoreList: $('#skill-store-list'),
+  skillStorePrev: $('#skill-store-prev'),
+  skillStoreNext: $('#skill-store-next'),
+  skillStorePage: $('#skill-store-page'),
   knowledgeOpen: $('#knowledge-open'),
   knowledgeModal: $('#knowledge-modal'),
   knowledgeClose: $('#knowledge-close'),
@@ -699,7 +708,7 @@ async function openSettings() {
 }
 
 function closeResourcePanels(except) {
-  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
+  for (const modal of [elements.skillsModal, elements.skillStoreModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
     if (modal !== except && modal.open) modal.close();
   }
 }
@@ -924,6 +933,86 @@ async function openSkills() {
   if (!elements.skillsModal.open) elements.skillsModal.showModal();
   elements.body.classList.remove('sidebar-open');
   await loadSkills();
+}
+
+const skillStoreState = { page: 1, pageSize: 20, totalPages: 0, query: '' };
+let skillStoreSearchTimer = null;
+
+async function updateStoreSkill(name, action, enabled) {
+  elements.skillStoreError.textContent = '';
+  if (action === 'install') {
+    await requestJson('/api/skill-store/install', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }),
+    });
+    showToast(`${name} 已安装`);
+  } else if (action === 'state') {
+    await requestJson(`/api/skill-store/${encodeURIComponent(name)}/state`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }),
+    });
+    showToast(`${name} 已${enabled ? '启用' : '禁用'}`);
+  } else if (action === 'delete') {
+    await requestJson(`/api/skill-store/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    showToast(`${name} 已删除`);
+  }
+  await loadSkillStore();
+}
+
+function renderSkillStoreItem(skill) {
+  const item = document.createElement('article');
+  item.className = `skill-store-item${skill.enabled ? '' : ' disabled'}`;
+  const content = document.createElement('div'); content.className = 'skill-store-item-content';
+  const heading = document.createElement('div'); heading.className = 'skill-store-item-heading';
+  const name = document.createElement('strong'); name.textContent = skill.name;
+  const badge = document.createElement('span'); badge.className = `skill-store-badge ${skill.installed ? 'installed' : ''}`; badge.textContent = skill.installed ? '已安装' : '未安装';
+  heading.append(name, badge);
+  const description = document.createElement('p'); description.textContent = skill.description;
+  content.append(heading, description);
+  const actions = document.createElement('div'); actions.className = 'skill-store-actions';
+  if (!skill.installed) {
+    const install = document.createElement('button'); install.type = 'button'; install.className = 'primary-button'; install.textContent = '安装';
+    install.addEventListener('click', async () => { install.disabled = true; try { await updateStoreSkill(skill.name, 'install'); } catch (error) { install.disabled = false; elements.skillStoreError.textContent = error.message; } });
+    actions.append(install);
+  } else {
+    const toggleLabel = document.createElement('label'); toggleLabel.className = 'mcp-switch'; toggleLabel.title = skill.enabled ? '点击禁用' : '点击启用';
+    const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = skill.enabled; toggle.setAttribute('aria-label', `${skill.enabled ? '禁用' : '启用'} ${skill.name}`);
+    const track = document.createElement('span'); toggleLabel.append(toggle, track);
+    toggle.addEventListener('change', async () => { toggle.disabled = true; try { await updateStoreSkill(skill.name, 'state', toggle.checked); } catch (error) { toggle.checked = !toggle.checked; toggle.disabled = false; elements.skillStoreError.textContent = error.message; } });
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'secondary-button danger-button'; remove.textContent = '删除';
+    remove.addEventListener('click', async () => {
+      if (!window.confirm(`确定删除个人技能“${skill.name}”吗？`)) return;
+      remove.disabled = true; try { await updateStoreSkill(skill.name, 'delete'); } catch (error) { remove.disabled = false; elements.skillStoreError.textContent = error.message; }
+    });
+    actions.append(toggleLabel, remove);
+  }
+  item.append(content, actions);
+  return item;
+}
+
+async function loadSkillStore() {
+  elements.skillStoreError.textContent = '';
+  renderResourceEmpty(elements.skillStoreList, '加载中…');
+  const params = new URLSearchParams({ page: String(skillStoreState.page), pageSize: String(skillStoreState.pageSize) });
+  if (skillStoreState.query) params.set('q', skillStoreState.query);
+  try {
+    const result = await requestJson(`/api/skill-store?${params}`);
+    skillStoreState.page = result.page;
+    skillStoreState.totalPages = result.totalPages;
+    elements.skillStorePage.textContent = `第 ${result.page}/${Math.max(1, result.totalPages)} 页 · 共 ${result.total} 项`;
+    elements.skillStorePrev.disabled = result.page <= 1;
+    elements.skillStoreNext.disabled = !result.totalPages || result.page >= result.totalPages;
+    if (!result.items.length) renderResourceEmpty(elements.skillStoreList, '没有匹配的技能');
+    else elements.skillStoreList.replaceChildren(...result.items.map(renderSkillStoreItem));
+  } catch (error) {
+    elements.skillStoreError.textContent = error.message;
+    renderResourceEmpty(elements.skillStoreList, '技能商店加载失败');
+  }
+}
+
+async function openSkillStore() {
+  closeResourcePanels(elements.skillStoreModal);
+  if (!elements.skillStoreModal.open) elements.skillStoreModal.showModal();
+  elements.body.classList.remove('sidebar-open');
+  await loadSkillStore();
 }
 
 function renderKnowledge(data) {
@@ -2958,6 +3047,18 @@ elements.settingsOpen.addEventListener('click', openSettings);
 elements.settingsClose.addEventListener('click', () => elements.settingsModal.close());
 elements.skillsOpen.addEventListener('click', openSkills);
 elements.skillsClose.addEventListener('click', () => elements.skillsModal.close());
+elements.skillStoreOpen.addEventListener('click', openSkillStore);
+elements.skillStoreClose.addEventListener('click', () => elements.skillStoreModal.close());
+elements.skillStoreSearch.addEventListener('input', () => {
+  clearTimeout(skillStoreSearchTimer);
+  skillStoreSearchTimer = setTimeout(() => {
+    skillStoreState.query = elements.skillStoreSearch.value.trim();
+    skillStoreState.page = 1;
+    void loadSkillStore();
+  }, 300);
+});
+elements.skillStorePrev.addEventListener('click', () => { if (skillStoreState.page > 1) { skillStoreState.page -= 1; void loadSkillStore(); } });
+elements.skillStoreNext.addEventListener('click', () => { if (skillStoreState.page < skillStoreState.totalPages) { skillStoreState.page += 1; void loadSkillStore(); } });
 elements.knowledgeOpen.addEventListener('click', openKnowledge);
 elements.knowledgeClose.addEventListener('click', () => elements.knowledgeModal.close());
 elements.mcpOpen.addEventListener('click', openMcp);
@@ -2975,7 +3076,7 @@ elements.guestGitea.addEventListener('click', openDeployments);
 elements.deploymentsClose.addEventListener('click', () => elements.deploymentsModal.close());
 elements.deploymentsRefresh.addEventListener('click', loadDeployments);
 elements.deploymentsDoctor.addEventListener('click', () => loadDeployDoctor());
-for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
+for (const modal of [elements.skillsModal, elements.skillStoreModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
   modal.addEventListener('click', (event) => { if (event.target === modal) modal.close(); });
 }
 elements.memoryContent.addEventListener('input', updateMemoryControls);

@@ -14,6 +14,7 @@ export interface TaiweiPaths {
   memoryDir: string;
   skills: string;
   userSkills: string;
+  skillStates: string;
   knowledge: string;
   ragIndex: string;
   plugins: string;
@@ -43,6 +44,7 @@ export function getPaths(): TaiweiPaths {
     memoryDir: join(home, 'memory'),
     skills: join(home, 'skills'),
     userSkills: join(home, 'user-skills'),
+    skillStates: join(home, 'skill-states'),
     knowledge: join(home, 'knowledge'),
     ragIndex: join(home, 'rag-index.json'),
     plugins: join(home, 'plugins'),
@@ -115,6 +117,7 @@ export async function ensureTaiweiHome(): Promise<TaiweiPaths> {
     mkdir(paths.home, { recursive: true }),
     mkdir(paths.skills, { recursive: true }),
     mkdir(paths.userSkills, { recursive: true }),
+    mkdir(paths.skillStates, { recursive: true }),
     mkdir(paths.knowledge, { recursive: true }),
     mkdir(paths.memoryDir, { recursive: true }),
     mkdir(paths.plugins, { recursive: true }),

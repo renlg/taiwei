@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getPaths, validateUserSkillOwner } from '../util/paths.js';
-import { parseSkill } from './loader.js';
+import { parseSkill, type Skill } from './loader.js';
 
 const VALID_SKILL_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -51,6 +51,24 @@ export class UserSkillStore {
 
   async read(owner: string, name: string): Promise<string> {
     return readFile(this.skillPath(owner, name), 'utf8');
+  }
+
+  async load(owner: string, name: string): Promise<Skill> {
+    const path = this.skillPath(owner, name);
+    const skill = parseSkill(await readFile(path, 'utf8'), path);
+    if (skill.name !== validateUserSkillName(name)) throw new Error(`Skill frontmatter name must equal "${name}"`);
+    return skill;
+  }
+
+  async loadEnabled(owner: string, disabled: ReadonlySet<string> = new Set()): Promise<Skill[]> {
+    const skills = await this.list(owner);
+    const loaded: Skill[] = [];
+    for (const skill of skills) {
+      if (disabled.has(skill.name)) continue;
+      try { loaded.push(await this.load(owner, skill.name)); }
+      catch { /* Invalid or concurrently deleted skills are omitted. */ }
+    }
+    return loaded;
   }
 
   async list(owner?: string): Promise<UserSkill[]> {

@@ -420,6 +420,7 @@ export async function runAgentTurn(
         delegationDepth: options.delegationDepth ?? 0,
         role: options.role,
         identity: options.identity,
+        guestId: options.guestId,
         tenantIdentity: options.tenantIdentity,
         workspaceRoot: options.workspaceRoot ?? cwd,
         runId,

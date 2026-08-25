@@ -444,6 +444,8 @@ Check correctness, security, and maintainability.
 
 Disabled skills remain visible in the gateway manager but are omitted from CLI skill listings and cannot be loaded until re-enabled. The gateway endpoints are `GET /api/skills`, `GET /api/skills/:name`, and `POST /api/skills/:name` with `{"enabled":true|false}`. Tool management uses `GET /api/tools`, `POST /api/tools/:name`, and `POST /api/tools/reload`.
 
+The gateway sidebar also includes **技能商店**, where admins and guests can search the system catalog and install, enable, disable, or delete their own copies. User skill state is isolated by owner under `user-skills/` and `skill-states/`; changes are reflected in the next agent turn without restarting taiwei.
+
 ### MCP
 
 `mcp.json` is an array. Stdio, legacy HTTP SSE, and modern Streamable HTTP transports are supported through the official MCP SDK. Streamable HTTP sends JSON-RPC POST requests accepting JSON or SSE, supports custom headers, and uses reconnect backoff. MCP tool-list change notifications refresh registered schemas.

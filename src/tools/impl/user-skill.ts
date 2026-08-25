@@ -1,9 +1,10 @@
 import { guestIdForUsername } from '../../util/paths.js';
 import { UserSkillStore } from '../../skills/user-store.js';
+import { UserSkillStateStore } from '../../skills/user-state.js';
 import type { ToolContext, ToolSpec } from '../registry.js';
 
 function ownSkillOwner(context: ToolContext): string {
-  return context.role === 'guest' ? guestIdForUsername(context.identity ?? 'guest') : 'admin';
+  return context.role === 'guest' ? context.guestId ?? guestIdForUsername(context.identity ?? 'guest') : 'admin';
 }
 
 function writableOwner(args: Record<string, unknown>, context: ToolContext): string {
@@ -14,7 +15,7 @@ function writableOwner(args: Record<string, unknown>, context: ToolContext): str
   return own;
 }
 
-export function createUserSkillTools(store = new UserSkillStore()): ToolSpec[] {
+export function createUserSkillTools(store = new UserSkillStore(), states = new UserSkillStateStore()): ToolSpec[] {
   return [
     {
       name: 'create_skill',
@@ -59,7 +60,10 @@ export function createUserSkillTools(store = new UserSkillStore()): ToolSpec[] {
       },
       async execute(args, context) {
         if (typeof args.name !== 'string') throw new Error('name is required');
-        return { deleted: await store.delete(writableOwner(args, context), args.name) };
+        const owner = writableOwner(args, context);
+        const deleted = await store.delete(owner, args.name);
+        if (deleted) await states.remove(owner, args.name);
+        return { deleted };
       },
     },
   ];

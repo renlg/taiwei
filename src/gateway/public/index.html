@@ -54,6 +54,11 @@
           <button class="sidebar-section-button" id="deployments-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🚀</span><span class="sidebar-label">部署管理</span></button>
         </nav>
       </div>
+      <div class="resource-section skill-store-sidebar">
+        <nav class="sidebar-sections open" aria-label="技能商店">
+          <button class="sidebar-section-button" id="skill-store-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🏪</span><span class="sidebar-label">技能商店</span></button>
+        </nav>
+      </div>
       <div class="history-heading"><span>历史会话</span><span class="history-actions"><span id="session-count">0</span><button id="folder-add" type="button" title="添加文件夹" aria-label="添加文件夹">＋</button></span></div>
       <nav class="session-list" id="session-list" aria-label="历史会话"></nav>
       <div class="sidebar-footer">
@@ -285,6 +290,21 @@
         <div class="resource-list skill-list" id="skill-list" aria-label="技能列表"></div>
         <article class="skill-detail markdown-view" id="skill-detail"><div class="resource-empty">选择一个技能查看详情</div></article>
       </div>
+    </div>
+  </dialog>
+  <dialog class="modal management-modal" id="skill-store-modal">
+    <div class="modal-card management-card skill-store-card">
+      <header><div><h2>技能商店</h2><p>浏览系统技能并安装到你的个人技能目录</p></div><button class="icon-button" id="skill-store-close" type="button" aria-label="关闭">×</button></header>
+      <div class="skill-store-toolbar">
+        <input id="skill-store-search" type="search" placeholder="按名称或描述搜索…" aria-label="搜索技能商店">
+      </div>
+      <div class="management-error" id="skill-store-error" role="alert"></div>
+      <div class="resource-list skill-store-list" id="skill-store-list" aria-label="技能商店列表"></div>
+      <footer class="skill-store-pagination">
+        <button class="secondary-button" id="skill-store-prev" type="button">上一页</button>
+        <span id="skill-store-page">第 1/1 页</span>
+        <button class="secondary-button" id="skill-store-next" type="button">下一页</button>
+      </footer>
     </div>
   </dialog>
   <dialog class="modal management-modal" id="knowledge-modal">

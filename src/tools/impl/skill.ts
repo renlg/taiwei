@@ -1,7 +1,10 @@
 import type { SkillLoader } from '../../skills/loader.js';
+import { UserSkillStore } from '../../skills/user-store.js';
+import { UserSkillStateStore } from '../../skills/user-state.js';
+import { guestIdForUsername } from '../../util/paths.js';
 import type { ToolSpec } from '../registry.js';
 
-export function createLoadSkillTool(skillLoader: SkillLoader): ToolSpec {
+export function createLoadSkillTool(skillLoader: SkillLoader, userSkills = new UserSkillStore(), userSkillStates = new UserSkillStateStore()): ToolSpec {
   return {
     name: 'load_skill',
     description: 'Load an available skill\'s full instructions into the current conversation before using that skill.',
@@ -15,6 +18,17 @@ export function createLoadSkillTool(skillLoader: SkillLoader): ToolSpec {
       const name = typeof args.name === 'string' ? args.name.trim() : '';
       if (!name) return 'Skill not found: ' + name;
       try {
+        const owner = context.role === 'guest' ? context.guestId ?? guestIdForUsername(context.identity ?? 'guest') : 'admin';
+        try {
+          const userSkill = await userSkills.load(owner, name);
+          if (!await userSkillStates.isEnabled(owner, userSkill.name)) return `Skill "${name}" is disabled for this user`;
+          if (!context.agentContext) return 'Unable to load skill: no active agent context';
+          context.agentContext.activateUserSkill(userSkill);
+          return userSkill.body;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          // ENOENT means the user skill does not exist; fall through to the system skill loader.
+        }
         // includeDisabled lets us distinguish a disabled skill from one that does not exist.
         const skill = await skillLoader.load(name, { includeDisabled: true });
         if (skillLoader.isDisabled(skill)) return `Skill "${name}" is disabled`;

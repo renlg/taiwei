@@ -10,6 +10,8 @@ export class AgentContext {
   readonly messages: ChatMessage[] = [];
   private readonly availableSkills = new Map<string, Skill>();
   private readonly activeSkills = new Map<string, Skill>();
+  private readonly availableUserSkills = new Map<string, Skill>();
+  private readonly activeUserSkills = new Map<string, Skill>();
   private retrievedContext = '';
 
   constructor(readonly memory: MemoryStore, private readonly skillLoader: SkillLoader, readonly extendedMemory = true, public profile?: AgentProfile) {}
@@ -19,9 +21,13 @@ export class AgentContext {
     if (workspace) sections.push(`Current workspace (default working directory for tools): ${workspace}`);
     if (customPrompt.trim()) sections.push(`Custom instructions (from settings):\n${customPrompt.trim()}`);
     if (this.profile) sections.push(`Agent profile (${this.profile.id}, ${this.profile.mode} mode):\n${this.profile.prompt}`);
-    const availableSkills = renderSkillIndex([...this.availableSkills.values()].filter((skill) => !this.skillLoader.isDisabled(skill)));
+    const available = new Map([...this.availableSkills.entries()].filter(([, skill]) => !this.skillLoader.isDisabled(skill)));
+    for (const [name, skill] of this.availableUserSkills) available.set(name, skill);
+    const availableSkills = renderSkillIndex([...available.values()]);
     if (availableSkills) sections.push(availableSkills);
-    const activeSkills = renderSkills([...this.activeSkills.values()].filter((skill) => !this.skillLoader.isDisabled(skill)));
+    const active = new Map([...this.activeSkills.entries()].filter(([, skill]) => !this.skillLoader.isDisabled(skill)));
+    for (const [name, skill] of this.activeUserSkills) active.set(name, skill);
+    const activeSkills = renderSkills([...active.values()]);
     if (activeSkills) sections.push(activeSkills);
     const memory = (await this.memory.tail()).trim();
     if (memory) sections.push(`Persistent memory (may be outdated; use as background only):\n${memory}`);
@@ -37,16 +43,27 @@ export class AgentContext {
 
   activateSkill(skill: Skill): void { this.activeSkills.set(skill.name, skill); }
 
+  activateUserSkill(skill: Skill): void { this.activeUserSkills.set(skill.name, skill); }
+
   setAvailableSkills(skills: Skill[]): void {
     this.availableSkills.clear();
     for (const skill of skills) this.availableSkills.set(skill.name, skill);
   }
 
+  setUserSkills(skills: Skill[]): void {
+    this.availableUserSkills.clear();
+    for (const skill of skills) this.availableUserSkills.set(skill.name, skill);
+    for (const name of this.activeUserSkills.keys()) {
+      if (!this.availableUserSkills.has(name)) this.activeUserSkills.delete(name);
+    }
+  }
+
   unloadSkill(name: string): boolean {
-    return this.activeSkills.delete(name);
+    return this.activeSkills.delete(name) || this.activeUserSkills.delete(name);
   }
 
   listActiveSkills(): Skill[] { return [...this.activeSkills.values()]; }
+  listActiveUserSkills(): Skill[] { return [...this.activeUserSkills.values()]; }
   setMessages(messages: ChatMessage[]): void { this.messages.splice(0, this.messages.length, ...messages); }
   setRetrievedContext(context: string): void { this.retrievedContext = context; }
   clear(): void { this.messages.length = 0; this.retrievedContext = ''; }

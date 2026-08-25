@@ -15,6 +15,7 @@ import { MemoryStore } from './memory/store.js';
 import { PluginLoader } from './plugins/loader.js';
 import { SkillLoader } from './skills/loader.js';
 import { UserSkillStore } from './skills/user-store.js';
+import { UserSkillStateStore } from './skills/user-state.js';
 import { bashTool } from './tools/impl/bash.js';
 import { createMemoryTools } from './tools/impl/memory.js';
 import { imageGenTool, videoGenTool } from './tools/impl/media.js';
@@ -42,6 +43,7 @@ import { taskTools } from './tools/impl/task.js';
 import { BrowserToolRuntime } from './tools/impl/browser.js';
 import { SessionRuntime } from './agent/runtime.js';
 import { PolicyEngine } from './security/policy.js';
+import { guestIdForUsername } from './util/paths.js';
 
 export class TaiweiApp {
   config!: TaiweiConfig;
@@ -49,6 +51,7 @@ export class TaiweiApp {
   readonly memory = new MemoryStore();
   readonly skills = new SkillLoader();
   readonly userSkills = new UserSkillStore();
+  readonly userSkillStates = new UserSkillStateStore();
   readonly context = new AgentContext(this.memory, this.skills);
   readonly interrupt = new InterruptManager();
   readonly turns = new TurnQueue();
@@ -75,7 +78,7 @@ export class TaiweiApp {
     this.delegation = new DelegationManager((request) => this.runChild(request), this.config.delegation.maxConcurrent, this.config.delegation.maxDepth);
     const nginxAddProxyTool = createNginxAddProxyTool({ publicUrl: this.config.publicUrl });
     // User-skill management tools: create_skill, list_skills, delete_skill.
-    for (const tool of [bashTool, readTool, writeTool, editTool, diagnosticsTool, searchTool, nginxAddProxyTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills), ...createUserSkillTools(), ...createMemoryTools(this.memory), ...createWatchdogTools(this.cronJobs, this.scheduler), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
+    for (const tool of [bashTool, readTool, writeTool, editTool, diagnosticsTool, searchTool, nginxAddProxyTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills, this.userSkills, this.userSkillStates), ...createUserSkillTools(this.userSkills, this.userSkillStates), ...createMemoryTools(this.memory), ...createWatchdogTools(this.cronJobs, this.scheduler), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
     this.registry.register(createDelegateTool(this.delegation));
     // history.db is a rebuildable index. A missing/unsupported SQLite runtime must never block chat startup.
     await importHistoryIfEmpty().catch(() => {});
@@ -94,6 +97,8 @@ export class TaiweiApp {
       try {
         this.config = await loadConfig();
         this.skills.setDisabled(this.config.skillsDisabled);
+        const turnContext = options.context ?? this.context;
+        await this.refreshContextSkills(turnContext, options.role === 'guest' ? options.guestId ?? 'guest' : 'admin');
         this.registry.configure(resolveToolSettings(this.config));
         const cwd = options.workspaceRoot ? resolve(options.workspaceRoot) : resolveWorkspaceDir(this.config);
         await mkdir(cwd, { recursive: true });
@@ -103,7 +108,7 @@ export class TaiweiApp {
           if (gate.block) throw new Error(gate.reason ?? 'Message blocked by hook');
         }
         const profile = getAgentProfile(options.agentId ?? this.activeAgentId);
-        return await runAgentTurn(prompt, options.context ?? this.context, this.registry, { ...this.config, ...(profile.model ? { model: profile.model } : {}) }, {
+        return await runAgentTurn(prompt, turnContext, this.registry, { ...this.config, ...(profile.model ? { model: profile.model } : {}) }, {
           signal,
           enableDiagnostics: options.enableDiagnostics,
           cwd,
@@ -132,6 +137,18 @@ export class TaiweiApp {
 
   stopSession(sessionId: string): boolean { return this.runtime.stop(sessionId); }
 
+  async refreshContextSkills(context: AgentContext, owner = 'admin'): Promise<void> {
+    if (this.config.autoLoadSkills === false) {
+      context.setAvailableSkills([]);
+      context.setUserSkills([]);
+      return;
+    }
+    try { context.setAvailableSkills(await this.skills.list()); }
+    catch { context.setAvailableSkills([]); }
+    try { context.setUserSkills(await this.userSkills.loadEnabled(owner, await this.userSkillStates.disabled(owner))); }
+    catch { context.setUserSkills([]); }
+  }
+
   private async executeCron(job: CronJob, signal: AbortSignal): Promise<CronExecutionResult> {
     if (job.kind === 'script') {
       this.config = await loadConfig();
@@ -145,6 +162,7 @@ export class TaiweiApp {
       try {
         this.config = await loadConfig();
         this.skills.setDisabled(this.config.skillsDisabled);
+        await this.refreshContextSkills(cronContext, 'admin');
         this.registry.configure(resolveToolSettings(this.config));
         const cwd = resolveWorkspaceDir(this.config);
         await mkdir(cwd, { recursive: true });
@@ -167,6 +185,7 @@ export class TaiweiApp {
 
   private async runChild(request: DelegateRequest & { childSessionId: string; signal: AbortSignal }): Promise<string> {
     const context = new AgentContext(request.memory, this.skills, request.extendedMemory, request.profile);
+    await this.refreshContextSkills(context, request.role === 'guest' ? guestIdForUsername(request.identity) : 'admin');
     const config = { ...this.config, ...(request.profile.model ? { model: request.profile.model } : {}) };
     const output = await runAgentTurn(request.task, context, this.registry, config, {
       signal: request.signal, cwd: request.workspaceRoot, retainConversation: false,
