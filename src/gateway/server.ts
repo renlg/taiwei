@@ -270,13 +270,12 @@ export function publicApiRouteAllowed(method: string, pathname: string): boolean
   return method === 'GET' && pathname === '/api/oauth/callback';
 }
 
-interface GuestPublicToolCall { name: string; redacted: true }
 interface GuestPublicAttachment { name: string; type?: string }
 interface GuestPublicMessage {
   role: 'user' | 'assistant';
   content: string;
   attachments?: GuestPublicAttachment[];
-  toolCalls?: GuestPublicToolCall[];
+  toolCalls?: SessionToolCall[];
   timestamp: string;
   status?: 'stopped' | 'error' | 'pending';
 }
@@ -286,7 +285,7 @@ function guestPublicSession(session: GatewaySession): Omit<GatewaySession, 'mess
     role: message.role,
     content: message.content,
     ...(message.attachments?.length ? { attachments: message.attachments.map(({ name, type }) => ({ name, ...(type ? { type } : {}) })) } : {}),
-    ...(message.toolCalls?.length ? { toolCalls: message.toolCalls.map(({ name }) => ({ name, redacted: true })) } : {}),
+    ...(message.toolCalls?.length ? { toolCalls: message.toolCalls } : {}),
     timestamp: message.timestamp,
     ...(message.status ? { status: message.status } : {}),
   }));
@@ -1783,7 +1782,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           turnId: pending.turnId,
           answer: pending.answer,
           toolCalls: authenticatedRole === 'guest'
-            ? pending.toolCalls.map(({ name }) => ({ name, redacted: true }))
+            ? pending.toolCalls
             : pending.toolCalls,
           usage: pending.usage,
         });

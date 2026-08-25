@@ -170,8 +170,11 @@ test('guest responses redact host paths, identity snapshots, context and tool in
     const serialized = JSON.stringify(body);
     assert.equal(body.identity, undefined);
     assert.equal(body.contextMessages, undefined);
-    assert.doesNotMatch(serialized, /secret-account|secret-os|secret-gitea|secret context|\/home\/secret|cat \/home|secret result/);
-    assert.match(serialized, /"name":"bash","redacted":true/);
+    // guest 仍隐藏 identity/账号快照/上下文，但工具调用内容(含媒体/路径)完整可见
+    assert.doesNotMatch(serialized, /secret-account|secret-os|secret-gitea|secret context/);
+    assert.match(serialized, /"name":"bash"/);
+    assert.match(serialized, /cat \/home\/secret\/private\.txt/);
+    assert.match(serialized, /secret result/);
   } finally {
     await closeGateway(server);
     if (previousHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = previousHome;

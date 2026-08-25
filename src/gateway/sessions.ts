@@ -126,10 +126,14 @@ export class SessionStore {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
       try {
         const session = await this.readFile(join(this.directory, entry.name));
-        const pending = session.messages.at(-1);
-        if (pending?.role !== 'assistant' || pending.status !== 'pending') continue;
-        pending.status = 'stopped';
-        if (!pending.content.trim()) pending.content = message;
+        let changed = false;
+        for (const pending of session.messages) {
+          if (pending.role !== 'assistant' || pending.status !== 'pending') continue;
+          pending.status = 'stopped';
+          if (!pending.content.trim()) pending.content = message;
+          changed = true;
+        }
+        if (!changed) continue;
         session.updatedAt = new Date().toISOString();
         await this.save(session);
         finalized += 1;
