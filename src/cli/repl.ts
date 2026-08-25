@@ -11,7 +11,7 @@ import { mkdir, stat } from 'node:fs/promises';
 import type { ConfirmationHandler } from '../security/commands.js';
 import { randomUUID } from 'node:crypto';
 import { appendMessage, getSession, listSessions, rebuildHistoryDb, searchMessages, upsertSession } from '../history/db.js';
-import { BUILTIN_AGENTS, getAgentProfile } from '../agents/profiles.js';
+import { getAgentProfile, getAgentProfiles } from '../agents/profiles.js';
 
 const color = {
   cyan: (text: string) => `\x1b[36m${text}\x1b[0m`,
@@ -104,10 +104,10 @@ async function handleCommand(app: TaiweiApp, line: string, rl: Interface): Promi
       output(await handleModelCommand(app, action)); break;
     }
     case '/agent': {
-      if (!action || action === 'list') output(BUILTIN_AGENTS.map((profile) => `${profile.id === app.activeAgentId ? '*' : ' '} ${profile.id} (${profile.mode})`).join('\n'));
+      if (!action || action === 'list') output(getAgentProfiles().map((profile) => `${profile.id === app.activeAgentId ? '*' : ' '} ${profile.id} (${profile.mode})`).join('\n'));
       else if (action === 'use' && args[0]) { getAgentProfile(args[0]); app.activeAgentId = args[0]; app.context.clear(); output(`[taiwei] Agent set to ${args[0]}.`); }
       else if (action === 'reset') { app.activeAgentId = 'build'; app.context.clear(); output('[taiwei] Agent reset to build.'); }
-      else throw new Error('Usage: /agent list | /agent use <plan|build|research> | /agent reset');
+      else throw new Error('Usage: /agent list | /agent use <agent-id> | /agent reset');
       break;
     }
     case '/workspace': {

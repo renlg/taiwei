@@ -1,3 +1,5 @@
+import { loadUserAgents } from './user-agents.js';
+
 export interface AgentProfile {
   id: string;
   mode: 'plan' | 'build';
@@ -22,8 +24,16 @@ export const BUILTIN_AGENTS: readonly AgentProfile[] = [
 ];
 
 export function getAgentProfile(id = 'build'): AgentProfile {
-  const profile = BUILTIN_AGENTS.find((item) => item.id === id);
+  const profile = BUILTIN_AGENTS.find((item) => item.id === id) ?? loadUserAgents().find((item) => item.id === id);
   if (!profile) throw new Error(`Unknown agent profile: ${id}`);
+  return cloneProfile(profile);
+}
+
+export function getAgentProfiles(): AgentProfile[] {
+  return [...BUILTIN_AGENTS, ...loadUserAgents()].map(cloneProfile);
+}
+
+function cloneProfile(profile: AgentProfile): AgentProfile {
   return {
     ...profile,
     toolPolicy: profile.toolPolicy ? {
@@ -49,16 +59,21 @@ export function toolDenied(name: string, profile?: AgentProfile): boolean {
 function intersectAllow(parent?: string[], child?: string[]): string[] | undefined {
   if (!parent || !child) return undefined;
   const result: string[] = [];
-  for (const pattern of parent) {
-    if (child.includes(pattern)) result.push(pattern);
-    else if (pattern.endsWith('*')) {
-      for (const childPattern of child) {
-        if (childPattern.startsWith(pattern.slice(0, -1)) || pattern.slice(0, -1).startsWith(childPattern.slice(0, -1))) {
-          result.push(childPattern.endsWith('*') || pattern.endsWith('*') ? (childPattern.length <= pattern.length ? childPattern : pattern) : childPattern);
-        }
+  for (const parentPattern of parent) {
+    for (const childPattern of child) {
+      let intersection: string | undefined;
+      const parentWildcard = parentPattern.endsWith('*');
+      const childWildcard = childPattern.endsWith('*');
+      if (!parentWildcard && !childWildcard) intersection = parentPattern === childPattern ? parentPattern : undefined;
+      else if (!parentWildcard) intersection = matchesToolPattern(parentPattern, childPattern) ? parentPattern : undefined;
+      else if (!childWildcard) intersection = matchesToolPattern(childPattern, parentPattern) ? childPattern : undefined;
+      else {
+        const parentPrefix = parentPattern.slice(0, -1);
+        const childPrefix = childPattern.slice(0, -1);
+        if (parentPrefix.startsWith(childPrefix)) intersection = parentPattern;
+        else if (childPrefix.startsWith(parentPrefix)) intersection = childPattern;
       }
-    } else if (child.some((cp) => cp.endsWith('*') && matchesToolPattern(pattern, cp))) {
-      result.push(pattern);
+      if (intersection && !result.includes(intersection)) result.push(intersection);
     }
   }
   return result.length > 0 ? result : undefined;

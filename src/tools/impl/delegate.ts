@@ -9,10 +9,10 @@ const CONFIG: ToolConfigSchema = {
 export function createDelegateTool(manager: DelegationManager): ToolSpec {
   return {
     name: 'delegate_task',
-    description: 'Delegate an isolated task to a child agent; only its final result is returned. Defaults to the "research" agent (read-only: search files, read files, web search). Administrators may enable "plan" or "build" via the allowedAgents tool setting.',
+    description: 'Delegate an isolated task to a built-in or user-defined child agent; only its final result is returned. Defaults to the "research" agent. The selected name must be enabled via the allowedAgents tool setting.',
     configSchema: CONFIG,
     parameters: {
-      type: 'object', properties: { task: { type: 'string' }, agent: { type: 'string', enum: ['research', 'plan', 'build'] } },
+      type: 'object', properties: { task: { type: 'string' }, agent: { type: 'string', description: 'Built-in or user-defined agent name' }, agentId: { type: 'string', description: 'Alias for agent' } },
       required: ['task'], additionalProperties: false,
     },
     async execute(args, context) {
@@ -21,7 +21,8 @@ export function createDelegateTool(manager: DelegationManager): ToolSpec {
       if (!context.agentContext) throw new Error('delegate_task requires the caller agent context');
       const allowedRaw = typeof context.toolConfig?.allowedAgents === 'string' ? context.toolConfig.allowedAgents : 'research';
       const allowed = allowedRaw.split(',').map((value) => value.trim()).filter(Boolean);
-      const agentId = typeof args.agent === 'string' ? args.agent : 'research';
+      if (typeof args.agent === 'string' && typeof args.agentId === 'string' && args.agent !== args.agentId) throw new Error('agent and agentId must match when both are provided');
+      const agentId = typeof args.agent === 'string' ? args.agent : typeof args.agentId === 'string' ? args.agentId : 'research';
       if (!allowed.includes(agentId)) throw new Error(`Delegating to agent "${agentId}" is not permitted; allowed agent types: ${allowed.join(', ')}`);
       const parentProfile = context.agentProfile ?? getAgentProfile('build');
       const profile = narrowProfile(parentProfile, getAgentProfile(agentId));

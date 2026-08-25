@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import type { TaiweiApp } from '../app.js';
 import type { ChatMessage } from '../llm/client.js';
 import { appendMessage, getSession, listSessions, upsertSession } from '../history/db.js';
-import { BUILTIN_AGENTS, getAgentProfile } from '../agents/profiles.js';
+import { getAgentProfile, getAgentProfiles } from '../agents/profiles.js';
 import { resolveModelCatalog } from '../config/model.js';
 import { completeCommand, parseInput, renderLine } from './state.js';
 
@@ -129,7 +129,7 @@ export class TerminalTui {
       if (command === '/resume' && args[0]) { await this.resume(args[0]); this.render(); return; }
       if (command === '/export' && args[0]) { const session = await getSession(this.sessionId, 10_000); await writeFile(args.join(' '), `${JSON.stringify(session, null, 2)}\n`, 'utf8'); this.status(`Exported ${args.join(' ')}`); return; }
       if (command === '/agent') {
-        if (!args[0]) this.status(BUILTIN_AGENTS.map((item) => `${item.id === this.app.activeAgentId ? '*' : ' '} ${item.id} (${item.mode})`).join('\n'));
+        if (!args[0]) this.status(getAgentProfiles().map((item) => `${item.id === this.app.activeAgentId ? '*' : ' '} ${item.id} (${item.mode})`).join('\n'));
         else { getAgentProfile(args[0]); this.app.activeAgentId = args[0]; this.status(`Agent set to ${args[0]}`); }
         return;
       }

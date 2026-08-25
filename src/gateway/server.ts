@@ -28,7 +28,7 @@ import { appendMessage as appendHistoryMessage, upsertSession as upsertHistorySe
 import { MemoryStore } from '../memory/store.js';
 import { CronJobStore, type CronJobInput } from '../cron/jobs.js';
 import { CronScheduler, jobNextRun } from '../cron/scheduler.js';
-import { BUILTIN_AGENTS, getAgentProfile } from '../agents/profiles.js';
+import { getAgentProfile, getAgentProfiles } from '../agents/profiles.js';
 import { readAudit } from '../observability/audit.js';
 import type { PluginLoader } from '../plugins/loader.js';
 import type { ChatMessage, ContentBlock } from '../llm/client.js';
@@ -1621,7 +1621,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'GET' && pathname === '/api/agents') {
-        json(response, 200, { agents: BUILTIN_AGENTS.map(({ id, mode }) => ({ id, mode })) }); return;
+        json(response, 200, { agents: getAgentProfiles().map(({ id, mode }) => ({ id, mode })) }); return;
       }
       if (method === 'POST' && pathname === '/api/agent') {
         const body = await readJson(request) as { sessionId?: unknown; agentId?: unknown };

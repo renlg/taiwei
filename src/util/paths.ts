@@ -6,6 +6,7 @@ import { mkdir, writeFile, access, realpath } from 'node:fs/promises';
 export interface TaiweiPaths {
   home: string;
   config: string;
+  agentsFile: string;
   cron: string;
   cronRuns: string;
   mcp: string;
@@ -34,6 +35,7 @@ export function getPaths(): TaiweiPaths {
   return {
     home,
     config: join(home, 'config.json'),
+    agentsFile: join(home, 'agents.json'),
     cron: join(home, 'cron.json'),
     cronRuns: join(home, 'cron-runs.jsonl'),
     mcp: join(home, 'mcp.json'),

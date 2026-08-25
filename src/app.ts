@@ -35,7 +35,7 @@ import { HookRunner } from './hooks/runner.js';
 import { historyTools } from './tools/impl/history.js';
 import { importHistoryIfEmpty } from './history/db.js';
 import { appendMessage, upsertSession } from './history/db.js';
-import { getAgentProfile, type AgentProfile } from './agents/profiles.js';
+import { getAgentProfile, getAgentProfiles, type AgentProfile } from './agents/profiles.js';
 import { DelegationManager, type DelegateRequest } from './agent/delegation.js';
 import { createDelegateTool } from './tools/impl/delegate.js';
 import { taskTools } from './tools/impl/task.js';
@@ -65,6 +65,7 @@ export class TaiweiApp {
 
   async initialize(options: { external?: boolean; scheduler?: boolean } = {}): Promise<void> {
     this.config = await loadConfig();
+    getAgentProfiles(); // Load and validate ~/.taiwei/agents.json once at startup.
     this.runtime = new SessionRuntime(this.config.runtime.maxConcurrentTurns);
     this.skills.setDisabled(this.config.skillsDisabled);
     this.registry.configure(resolveToolSettings(this.config));

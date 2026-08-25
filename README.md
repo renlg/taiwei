@@ -154,6 +154,34 @@ Multiple tasks run concurrently. The task registry (`~/.taiwei/tasks/registry.js
 
 Plan, Build, and Research are built-in session profiles. Plan hides and rejects shell, file-write, browser, and MCP tools; Build retains the normal tool set; Research allows only `search_files`, `read_file`, and `web_search` (read-only investigation). `delegate_task` starts an isolated child conversation, returns only its final result, inherits the parent’s restrictions, propagates cancellation, and defaults to three concurrent children with depth two. Delegation defaults to the `research` agent (least-privilege read-only); administrators may enable `plan` or `build` via the `delegate_task` tool setting `allowedAgents`.
 
+### 自定义 Subagent
+
+在 `~/.taiwei/agents.json` 中定义可委派的自定义 agent（`TAIWEI_HOME` 可覆盖该目录）：
+
+```json
+{
+  "agents": [
+    {
+      "name": "frontend",
+      "mode": "build",
+      "systemPrompt": "你是前端专家，负责实现并验证前端改动。",
+      "model": "gpt-5.6-sol",
+      "tools": ["search_files", "read_file", "write_file", "bash"],
+      "maxTurns": 30
+    },
+    {
+      "name": "reviewer",
+      "mode": "plan",
+      "systemPrompt": "只做代码评审，不改文件。",
+      "tools": ["read_file", "search_files"],
+      "model": "claude-sonnet"
+    }
+  ]
+}
+```
+
+`name` 不得与内置的 `plan`、`build`、`research` 或其他自定义 agent 重名；`mode` 只能是 `plan` 或 `build`，`systemPrompt` 必填。`tools` 是工具授权上限，支持以 `*` 结尾的前缀通配；省略 `tools` 表示不额外限制，最终权限仍会与父 agent 的 profile 及运行时 admin/guest policy 取交集。要让 `delegate_task` 选择自定义 agent，还需在该工具的 `allowedAgents` 设置中加入名称，例如 `research,frontend,reviewer`。配置在进程启动时缓存，修改后请重启 taiwei。
+
 ### Browser tools
 
 Playwright is loaded only when a `browser_*` tool is first used. Install its Chromium binary after `npm install`:
