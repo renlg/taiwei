@@ -984,9 +984,21 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const record = await repository.getDeployment(name, ownerHash);
         if (!record) throw new HttpError(404, 'Deployment not found');
         const workspaceDirectories = await deploymentWorkspaceDirectories();
+        // 放行所有 guest 项目根(/home/<osUser>/projects)，保证 guest 部署记录的目录可被清理
+        let guestProjectsRoots: string[] = [];
+        if (tenantAccounts) {
+          try {
+            const accounts = await tenantAccounts.store.listAccounts();
+            guestProjectsRoots = accounts
+              .map((account) => join(options.tenantHomeRoot ?? '/home', account.osUsername, 'projects'))
+              .filter((directory) => directory !== join(taiweiPaths.home, 'projects'));
+          } catch (error) {
+            log(`[taiwei] could not enumerate tenant accounts for deployment cleanup: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
         const cleanup = options.deploymentCleanup ?? cleanupDeployment;
         const steps = await cleanup(record, {
-          projectsRoot: join(taiweiPaths.home, 'projects'), skillsRoot: taiweiPaths.skills, workspaceDirectories,
+          projectsRoot: join(taiweiPaths.home, 'projects'), skillsRoot: taiweiPaths.skills, workspaceDirectories, guestProjectsRoots,
         });
         const ok = steps.every((step) => step.status !== 'failed');
         if (ok) await repository.markCleaned(record.id);

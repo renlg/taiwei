@@ -345,17 +345,28 @@ async function stopPort(port: number): Promise<CleanupStep> {
   }
 }
 
-async function safeProjectDirectory(directory: string, projectsRoot: string, workspaceDirectories: readonly string[]): Promise<string> {
+async function safeProjectDirectory(
+  directory: string,
+  projectsRoot: string,
+  workspaceDirectories: readonly string[],
+  guestProjectsRoots: readonly string[] = [],
+): Promise<string> {
   const root = resolve(projectsRoot);
   const target = resolve(directory);
   const child = relative(root, target);
   const workspace = workspaceDirectories.map((directory) => resolve(directory)).find((directory) => directory === target);
+  // 精确匹配 guest 项目根下的子目录：/home/<user>/projects/<name>
+  const guestProject = guestProjectsRoots
+    .map((directory) => resolve(directory))
+    .find((directory) => target !== directory && target.startsWith(directory + '/'));
   const legacyProject = Boolean(child) && !child.startsWith('..') && !isAbsolute(child);
-  if (!legacyProject && !workspace) throw new Error(`Refusing to delete path outside the projects root or registered workspaces`);
+  if (!legacyProject && !workspace && !guestProject) throw new Error(`Refusing to delete path outside the projects root or registered workspaces`);
   try {
     const realTarget = await realpath(target);
     if (workspace) {
       if (realTarget !== await realpath(workspace)) throw new Error('Refusing to delete a workspace symlink target');
+    } else if (guestProject) {
+      // guest 项目目录按实际路径删除，不做 symlink 跟随校验
     } else {
       const realRoot = await realpath(root);
       const realChild = relative(realRoot, realTarget);
@@ -367,12 +378,19 @@ async function safeProjectDirectory(directory: string, projectsRoot: string, wor
   return target;
 }
 
-export async function cleanupDeployment(record: DeploymentRecord, options: { projectsRoot?: string; skillsRoot?: string; workspaceDirectories?: readonly string[] } = {}): Promise<CleanupStep[]> {
+export async function cleanupDeployment(record: DeploymentRecord, options: { projectsRoot?: string; skillsRoot?: string; workspaceDirectories?: readonly string[]; guestProjectsRoots?: readonly string[] } = {}): Promise<CleanupStep[]> {
   const projectsRoot = options.projectsRoot ?? join(getPaths().home, 'projects');
   const skillsRoot = options.skillsRoot ?? getPaths().skills;
-  const steps: CleanupStep[] = [await stopPort(record.port)];
+  // 删除前检查：端口若仍有项目进程在监听 → 拒绝删除并提示（不自动杀进程）
+  const runningPids = await listeningPids(record.port);
+  if (runningPids.length) {
+    return [{
+      step: 'stop_port', status: 'failed', message: `端口 ${record.port} 仍有项目进程在运行（PID ${runningPids.join(', ')}），请先停止项目再删除`,
+    }];
+  }
+  const steps: CleanupStep[] = [{ step: 'stop_port', status: 'skipped', message: `端口 ${record.port} 未监听，无需停止` }];
   try {
-    const target = await safeProjectDirectory(record.dir, projectsRoot, options.workspaceDirectories ?? []);
+    const target = await safeProjectDirectory(record.dir, projectsRoot, options.workspaceDirectories ?? [], options.guestProjectsRoots ?? []);
     await rm(target, { recursive: true, force: true });
     steps.push({ step: 'delete_files', status: 'ok', message: `Deleted ${target}` });
   } catch (error) {
