@@ -1754,21 +1754,23 @@ function renderTools(container, calls = []) {
   const list = document.createElement('div');
   list.className = 'tool-list';
   for (const call of calls) {
+    const redacted = call.redacted === true;
     const isMediaGeneration = MEDIA_GENERATION_TOOLS.has(call.name);
     const details = document.createElement('details');
-    details.className = `tool-entry${isMediaGeneration ? ' tool-entry-media' : ''}${call.result !== undefined ? ' done' : ''}`;
+    details.className = `tool-entry${isMediaGeneration ? ' tool-entry-media' : ''}${call.result !== undefined || redacted ? ' done' : ''}`;
     const summary = document.createElement('summary');
     const dot = document.createElement('i');
     dot.className = 'tool-state';
     const label = document.createElement('span');
-    const preview = JSON.stringify(call.args || {});
+    const preview = redacted ? '' : JSON.stringify(call.args || {});
     const toolIcon = call.name === 'generate_image' ? '🖼️' : call.name === 'generate_video' ? '🎬' : '🔧';
-    label.textContent = `${toolIcon} ${call.name} ${preview.length > 70 ? `${preview.slice(0, 70)}…` : preview}`;
+    label.textContent = `${toolIcon} ${call.name}${preview ? ` ${preview.length > 70 ? `${preview.slice(0, 70)}…` : preview}` : ''}`;
     const detail = document.createElement('div');
     detail.className = 'tool-detail';
     const opensWithMedia = isMediaGeneration && call.result !== undefined && containsMedia(call.result);
     details.open = opensWithMedia;
     details.addEventListener('toggle', () => {
+      if (redacted) return;
       if (details.open) renderToolDetail(detail, call.args, call.result, call.name);
     });
     if (opensWithMedia) renderToolDetail(detail, call.args, call.result, call.name);
@@ -2029,7 +2031,7 @@ function renderSessionList() {
     name.type = 'button';
     name.className = 'folder-name';
     name.textContent = folder.name;
-    name.title = folder.path;
+    name.title = folder.path || folder.name;
     const actions = document.createElement('span');
     actions.className = 'folder-actions';
     const addSession = document.createElement('button');
@@ -3425,6 +3427,10 @@ elements.theme.addEventListener('click', () => {
 });
 
 async function loadChat() {
+  if (!state.authToken && !state.shareToken) {
+    showLogin();
+    return;
+  }
   try {
     const modelsRequest = requestJson('/api/models').catch(() => null);
     if (state.role === 'guest' || state.shareToken) {
@@ -3514,8 +3520,12 @@ async function initialize() {
     applyRole('guest');
     const clean = new URL(location.href); clean.searchParams.delete('share'); history.replaceState({}, '', clean);
   }
-  if (state.authToken || state.shareToken) showChat();
-  await loadChat();
+  if (state.authToken || state.shareToken) {
+    showChat();
+    await loadChat();
+  } else {
+    showLogin();
+  }
 }
 
 initialize();

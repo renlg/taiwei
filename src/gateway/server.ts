@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import type { ChatBridge } from './chat.js';
 import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
 import { LoginLockStore, type LoginLock } from './login-locks.js';
-import { sanitizeContextMessages, SessionStore, type SessionAttachment, type SessionIdentity, type SessionMessage, type SessionToolCall, type SessionUsage } from './sessions.js';
-import { FolderStore, guestFolderName, workspaceFolderMetadata } from './folders.js';
+import { sanitizeContextMessages, SessionStore, type GatewaySession, type SessionAttachment, type SessionIdentity, type SessionMessage, type SessionToolCall, type SessionUsage } from './sessions.js';
+import { FolderStore, guestFolderName, workspaceFolderMetadata, type GatewayFolder } from './folders.js';
 import { openSse, sendSse } from './sse.js';
 import { applyDefaultProvider, getCurrentModel, managedProvider, publicProvider, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
 import { DEFAULT_CONFIG, expandHome, loadConfig, resolveContextWindow, resolveToolSettings, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
@@ -218,9 +218,61 @@ function requestShareToken(request: IncomingMessage): string | undefined {
   return undefined;
 }
 
-function guestIdForUsername(username: string): string {
+function legacyGuestIdForUsername(username: string): string {
   const safe = username.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
   return `guest-${safe || 'user'}`;
+}
+
+export function guestIdForUsername(username: string): string {
+  const safe = username.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'user';
+  const digest = createHash('sha256').update(username.normalize('NFC')).digest('hex').slice(0, 24);
+  return `guest-${safe}-${digest}`;
+}
+
+function legacyGuestIdForShareToken(token: string): string {
+  return `guest-${token.slice(0, 8).toLowerCase()}`;
+}
+
+export function guestIdForShareToken(token: string): string {
+  const digest = createHash('sha256').update(token).digest('hex').slice(0, 24);
+  return `guest-share-${digest}`;
+}
+
+export function publicApiRouteAllowed(method: string, pathname: string): boolean {
+  if (method === 'GET' && pathname === '/api/health') return true;
+  if (method === 'POST' && pathname === '/api/login') return true;
+  if (method === 'POST' && pathname === '/api/oauth/start') return true;
+  return method === 'GET' && pathname === '/api/oauth/callback';
+}
+
+interface GuestPublicToolCall { name: string; redacted: true }
+interface GuestPublicAttachment { name: string; type?: string }
+interface GuestPublicMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  attachments?: GuestPublicAttachment[];
+  toolCalls?: GuestPublicToolCall[];
+  timestamp: string;
+  status?: 'stopped' | 'error' | 'pending';
+}
+
+function guestPublicSession(session: GatewaySession): Omit<GatewaySession, 'messages' | 'contextMessages' | 'identity'> & { messages: GuestPublicMessage[] } {
+  const messages = session.messages.map((message): GuestPublicMessage => ({
+    role: message.role,
+    content: message.content,
+    ...(message.attachments?.length ? { attachments: message.attachments.map(({ name, type }) => ({ name, ...(type ? { type } : {}) })) } : {}),
+    ...(message.toolCalls?.length ? { toolCalls: message.toolCalls.map(({ name }) => ({ name, redacted: true })) } : {}),
+    timestamp: message.timestamp,
+    ...(message.status ? { status: message.status } : {}),
+  }));
+  const { contextMessages: _contextMessages, identity: _identity, messages: _messages, ...metadata } = session;
+  return { ...metadata, messages };
+}
+
+type GuestPublicFolder = Omit<GatewayFolder, 'path' | 'dirName'>;
+
+function guestPublicFolder({ path: _path, dirName: _dirName, ...folder }: GatewayFolder): GuestPublicFolder {
+  return folder;
 }
 
 export function guestRouteAllowed(method: string, pathname: string): boolean {
@@ -637,11 +689,53 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
   let mcpInitialized = false;
   const buildKnowledgeIndex = options.buildKnowledgeIndex ?? (async () => buildIndex(createEmbedder(await configState.load())));
   const searchKnowledge = options.searchKnowledge ?? (async (query: string, limit: number) => retrieve(query, limit, createEmbedder(await configState.load())));
-  const authEnabled = options.auth?.enabled ?? false;
-  if (authEnabled && !options.auth?.password) {
+  const startupAuthEnabled = options.auth?.enabled ?? false;
+  if (startupAuthEnabled && !options.auth?.password) {
     throw new Error('Gateway auth is enabled but no password is set. Set auth.password in ~/.taiwei/config.json or TAIWEI_AUTH_PASSWORD.');
   }
   const log = options.log ?? console.log;
+  const migrateLegacyGuestStorage = async (legacyGuestId: string, guestId: string): Promise<void> => {
+    if (legacyGuestId === guestId) return;
+    const legacyDirectory = join(taiweiPaths.guests, legacyGuestId);
+    const destination = join(taiweiPaths.guests, guestId);
+    try {
+      await stat(destination);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    try {
+      // Compatibility strategy: old slug/truncated-token storage is moved once,
+      // before any new hashed directory is created. Existing guest data therefore
+      // remains visible while all subsequent access uses the collision-resistant key.
+      await mkdir(taiweiPaths.guests, { recursive: true });
+      await rename(legacyDirectory, destination);
+      const foldersFile = join(destination, 'folders.json');
+      try {
+        const folders = JSON.parse(await readFile(foldersFile, 'utf8')) as unknown;
+        if (Array.isArray(folders)) {
+          let changed = false;
+          for (const item of folders) {
+            if (!item || typeof item !== 'object') continue;
+            const folder = item as { path?: unknown };
+            if (typeof folder.path !== 'string') continue;
+            const suffix = relative(legacyDirectory, folder.path);
+            if (suffix === '' || (!suffix.startsWith('..') && !isAbsolute(suffix))) {
+              folder.path = resolve(destination, suffix);
+              changed = true;
+            }
+          }
+          if (changed) await writeFile(foldersFile, `${JSON.stringify(folders, null, 2)}\n`, 'utf8');
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log(`[taiwei] could not rewrite migrated guest folders: ${(error as Error).message}`);
+      }
+      log(`[taiwei] migrated legacy guest storage ${legacyGuestId} -> ${guestId}`);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'EEXIST' && code !== 'ENOTEMPTY') throw error;
+    }
+  };
   let deploymentInitializationError: Error | undefined;
   const deploymentReady = deployments.initialize().catch((error) => {
     deploymentInitializationError = error instanceof Error ? error : new Error(String(error));
@@ -713,9 +807,9 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         json(response, 200, { ok: true });
         return;
       }
+      const accessConfig = await configState.load();
       if (method === 'POST' && pathname === '/api/oauth/start') {
-        const config = await configState.load();
-        if (!config.oauth.enabled) {
+        if (!accessConfig.oauth.enabled) {
           json(response, 404, { error: 'OAuth login is disabled' });
           return;
         }
@@ -726,9 +820,9 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         for (const [key, expiresAt] of oauthStates) if (expiresAt <= now) oauthStates.delete(key);
         const expiresAt = now + OAUTH_STATE_TTL_MS;
         oauthStates.set(state, expiresAt);
-        const redirectUri = config.oauth.redirectUri.trim() || `${requestOrigin(request, config)}/api/oauth/callback`;
-        const authorizeUrl = new URL(`${oauthProviderBaseUrl(config.oauth.providerBaseUrl)}/api/oauth/authorize`);
-        authorizeUrl.searchParams.set('client_id', config.oauth.clientId);
+        const redirectUri = accessConfig.oauth.redirectUri.trim() || `${requestOrigin(request, accessConfig)}/api/oauth/callback`;
+        const authorizeUrl = new URL(`${oauthProviderBaseUrl(accessConfig.oauth.providerBaseUrl)}/api/oauth/authorize`);
+        authorizeUrl.searchParams.set('client_id', accessConfig.oauth.clientId);
         authorizeUrl.searchParams.set('redirect_uri', redirectUri);
         authorizeUrl.searchParams.set('response_type', 'code');
         authorizeUrl.searchParams.set('state', state);
@@ -743,17 +837,16 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         oauthStates.delete(state);
         if (!state || !expiresAt || expiresAt <= Date.now()) throw new HttpError(400, 'Invalid or expired OAuth state');
         if (!code) throw new HttpError(400, 'Missing OAuth authorization code');
-        const config = await configState.load();
-        if (!config.oauth.enabled) throw new HttpError(400, 'OAuth login is disabled');
-        const providerBaseUrl = oauthProviderBaseUrl(config.oauth.providerBaseUrl);
+        if (!accessConfig.oauth.enabled) throw new HttpError(400, 'OAuth login is disabled');
+        const providerBaseUrl = oauthProviderBaseUrl(accessConfig.oauth.providerBaseUrl);
         let tokenResponse: Response;
         try {
           tokenResponse = await fetch(`${providerBaseUrl}/api/oauth/token`, {
             method: 'POST',
             headers: { 'content-type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({
-              client_id: config.oauth.clientId,
-              client_secret: config.oauth.clientSecret,
+              client_id: accessConfig.oauth.clientId,
+              client_secret: accessConfig.oauth.clientSecret,
               code,
               grant_type: 'authorization_code',
             }),
@@ -794,6 +887,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'POST' && pathname === '/api/login') {
+        const authEnabled = accessConfig.auth.enabled;
         if (!authEnabled) {
           json(response, 404, { error: 'Authentication is disabled' });
           return;
@@ -801,10 +895,13 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const body = await readJson(request) as { username?: unknown; password?: unknown };
         const ip = request.socket.remoteAddress ?? 'unknown';
         const attemptedUsername = typeof body?.username === 'string' ? body.username : '';
-        const configuredPassword = options.auth?.password ?? '';
+        const configuredPassword = options.authPasswordFromEnvironment
+          ? options.auth?.password ?? ''
+          : accessConfig.auth.password;
+        const configuredUsername = accessConfig.auth.username;
         const adminValid = authEnabled && typeof body?.username === 'string'
           && typeof body?.password === 'string'
-          && constantTimeEqual(body.username, options.auth?.username ?? '')
+          && constantTimeEqual(body.username, configuredUsername)
           && verifyPassword(body.password, configuredPassword);
         const attempt = await loginLocks.attempt(attemptedUsername, ip, adminValid);
         if (attempt.lock) {
@@ -834,22 +931,28 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       let authenticatedUsername: string | undefined;
       let authenticatedRole: 'admin' | 'guest' = 'admin';
       let guestId: string | undefined;
-      const accessConfig = await configState.load();
       const presentedToken = requestToken(request) ?? requestShareToken(request);
-      const authRequired = authEnabled || accessConfig.oauth.enabled || Boolean(presentedToken);
-      if (authRequired && pathname.startsWith('/api/')) {
+      // All API routes are private unless they are explicitly allow-listed above.
+      // This remains fail-closed even when auth/oauth/share are disabled; enabling
+      // share only adds another accepted credential and never grants anonymity.
+      const authRequired = pathname.startsWith('/api/') && !publicApiRouteAllowed(method, pathname);
+      if (authRequired) {
         authenticatedToken = requestToken(request);
         const authenticated = authenticatedToken ? await authSessions.authenticate(authenticatedToken) : undefined;
         if (authenticated) {
           authenticatedUsername = authenticated.username;
           authenticatedRole = authenticated.role ?? 'admin';
-          if (authenticatedRole === 'guest') guestId = guestIdForUsername(authenticated.username);
+          if (authenticatedRole === 'guest') {
+            guestId = guestIdForUsername(authenticated.username);
+            await migrateLegacyGuestStorage(legacyGuestIdForUsername(authenticated.username), guestId);
+          }
         } else {
           const shareToken = requestShareToken(request) ?? authenticatedToken;
           if (accessConfig.share.enabled && shareToken && constantTimeEqual(shareToken, accessConfig.share.token)) {
             authenticatedRole = 'guest';
             authenticatedUsername = '访客';
-            guestId = `guest-${shareToken.slice(0, 8).toLowerCase()}`;
+            guestId = guestIdForShareToken(shareToken);
+            await migrateLegacyGuestStorage(legacyGuestIdForShareToken(shareToken), guestId);
             authenticatedToken = undefined;
           } else {
           json(response, 401, { error: 'unauthorized' });
@@ -921,7 +1024,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         json(response, 200, {
           model,
           contextWindow: await contextWindowFor(model),
-          authEnabled,
+          authEnabled: accessConfig.auth.enabled,
           role: authenticatedRole,
           workspace: resolveWorkspaceDir(config),
           ...(authenticatedUsername ? { username: authenticatedUsername } : {}),
@@ -1574,23 +1677,26 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             existing.updatedAt = new Date().toISOString();
             await activeSessions.save(existing);
           }
-          json(response, 200, existing);
+          json(response, 200, authenticatedRole === 'guest' ? guestPublicSession(existing) : existing);
           return;
         }
-        json(response, 201, await activeSessions.create(
+        const created = await activeSessions.create(
           'build', folder.id, model, provider,
           await sessionIdentity(authenticatedRole, requestIdentityUsername),
-        ));
+        );
+        json(response, 201, authenticatedRole === 'guest' ? guestPublicSession(created) : created);
         return;
       }
       if (method === 'GET' && pathname === '/api/folders') {
-        json(response, 200, await activeFolders.list());
+        const folders = await activeFolders.list();
+        json(response, 200, authenticatedRole === 'guest' ? folders.map(guestPublicFolder) : folders);
         return;
       }
       if (method === 'POST' && pathname === '/api/folders') {
         const body = await readJson(request) as { name?: unknown; parentId?: unknown };
         if (body.parentId !== undefined && typeof body.parentId !== 'string') throw new HttpError(400, 'parentId must be a string');
-        json(response, 201, await activeFolders.create(body.name, body.parentId));
+        const folder = await activeFolders.create(body.name, body.parentId);
+        json(response, 201, authenticatedRole === 'guest' ? guestPublicFolder(folder) : folder);
         return;
       }
       const folderRoute = pathname.match(/^\/api\/folders\/([^/]+)$/);
@@ -1600,7 +1706,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         if (!existing) throw new HttpError(404, 'Folder not found');
         if (existing.system) throw new HttpError(403, 'System folders cannot be renamed');
         const body = await readJson(request) as { name?: unknown };
-        json(response, 200, await activeFolders.rename(id, body.name));
+        const folder = await activeFolders.rename(id, body.name);
+        json(response, 200, authenticatedRole === 'guest' && folder ? guestPublicFolder(folder) : folder);
         return;
       }
       if (folderRoute && method === 'DELETE') {
@@ -1620,7 +1727,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       if (sessionRoute && method === 'GET') {
         const session = await activeSessions.get(decodeURIComponent(sessionRoute[1]));
         if (!session) json(response, 404, { error: 'Session not found' });
-        else json(response, 200, session);
+        else json(response, 200, authenticatedRole === 'guest' ? guestPublicSession(session) : session);
         return;
       }
       if (sessionRoute && method === 'DELETE') {
@@ -1639,7 +1746,9 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           running: true,
           turnId: pending.turnId,
           answer: pending.answer,
-          toolCalls: pending.toolCalls,
+          toolCalls: authenticatedRole === 'guest'
+            ? pending.toolCalls.map(({ name }) => ({ name, redacted: true }))
+            : pending.toolCalls,
           usage: pending.usage,
         });
         return;
