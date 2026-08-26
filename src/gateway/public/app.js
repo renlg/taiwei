@@ -3165,6 +3165,7 @@ elements.apiKeyForm.addEventListener('submit', async (event) => {
     closeApiKeyForm();
     elements.apiKeyRaw.value = result.key;
     elements.apiKeyReveal.hidden = false;
+    showToast('已生成 sk- API Key，可用于 OpenAI 兼容接口');
     await loadApiKeys();
   } catch (error) { elements.apiKeyFormError.textContent = error.message; }
   finally { elements.apiKeyCreate.disabled = false; elements.apiKeyCreate.textContent = '生成'; }

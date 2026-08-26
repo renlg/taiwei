@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -25,7 +25,8 @@ interface Harness {
   baseUrl: string;
   apiKeys: ApiKeyStore;
   authSessions: AuthSessionStore;
-  calls: Array<{ agentId?: string; providerId?: string; model?: string; skills?: string[]; identity?: string }>;
+  workspace: string;
+  calls: Array<{ agentId?: string; providerId?: string; model?: string; skills?: string[]; identity?: string; workspace?: string }>;
   close(): Promise<void>;
 }
 
@@ -36,8 +37,9 @@ async function harness(): Promise<Harness> {
   const authSessions = new AuthSessionStore(join(directory, 'gateway-sessions.json'));
   const calls: Harness['calls'] = [];
   const chat: ChatBridge = {
-    run: async (_message, sink, _history, _sessionId, _memory, agentId, _role, identity, _runtimeSessionId, providerId, model, _workspace, _content, _tenant, _guestId, skills) => {
-      calls.push({ agentId, providerId, model, skills, identity });
+    run: async (_message, sink, _history, _sessionId, _memory, agentId, _role, identity, _runtimeSessionId, providerId, model, runWorkspace, _content, _tenant, _guestId, skills) => {
+      calls.push({ agentId, providerId, model, skills, identity, workspace: runWorkspace });
+      sink.event({ type: 'token', text: 'ok' });
       sink.event({ type: 'done', text: 'ok' });
     },
     stop: () => false,
@@ -88,7 +90,7 @@ async function harness(): Promise<Harness> {
   });
   const port = await listenGateway(server, '127.0.0.1', 0);
   return {
-    directory, baseUrl: `http://127.0.0.1:${port}`, apiKeys, authSessions, calls,
+    directory, workspace, baseUrl: `http://127.0.0.1:${port}`, apiKeys, authSessions, calls,
     close: async () => { await closeGateway(server); await rm(directory, { recursive: true, force: true }); },
   };
 }
@@ -115,8 +117,8 @@ test('admin creates and lists a masked API key without persisting the raw creden
     const created = await post(app.baseUrl, '/api/keys', { name: 'automation', expiresInDays: 30 }, { authorization: `Bearer ${token}` });
     assert.equal(created.status, 201);
     const body = await created.json() as { key: string; record: Record<string, unknown> };
-    assert.match(body.key, /^twk_[a-f0-9]{48}$/);
-    assert.equal(body.key.length, 52);
+    assert.match(body.key, /^sk-[a-f0-9]{48}$/);
+    assert.equal(body.key.length, 51);
     assert.equal(body.record.prefix, body.key.slice(0, 8));
     assert.equal('hash' in body.record, false);
     const persisted = await readFile(join(app.directory, 'api-keys.json'), 'utf8');
@@ -146,16 +148,16 @@ test('API key revocation removes the record and prevents later verification', as
   } finally { await app.close(); }
 });
 
-test('X-API-Key authenticates chat as admin and invalid keys fail closed', async () => {
+test('Bearer API key authenticates chat as admin and invalid keys fail closed', async () => {
   const app = await harness();
   try {
     const created = await app.apiKeys.create('external-client');
-    const valid = await post(app.baseUrl, '/api/chat', { message: 'hello' }, { ...invalidGatewayAuthHeader, 'x-api-key': created.key });
+    const valid = await post(app.baseUrl, '/api/chat', { message: 'hello' }, { authorization: `Bearer ${created.key}` });
     assert.equal(valid.status, 200);
     assert.match(valid.headers.get('content-type') ?? '', /text\/event-stream/);
     await valid.text();
     assert.equal(app.calls[0]?.identity, 'api:external-client');
-    const invalid = await post(app.baseUrl, '/api/chat', { message: 'hello' }, { ...invalidGatewayAuthHeader, 'x-api-key': 'twk_bogus' });
+    const invalid = await post(app.baseUrl, '/api/chat', { message: 'hello' }, { ...invalidGatewayAuthHeader, 'x-api-key': 'sk-bogus' });
     assert.equal(invalid.status, 401);
     assert.deepEqual(await invalid.json(), { error: 'unauthorized' });
   } finally { await app.close(); }
@@ -190,7 +192,134 @@ test('API chat overrides validate model, agent profile, and skill names', async 
     await valid.text();
     assert.deepEqual(app.calls.at(-1), {
       agentId: 'plan', providerId: 'test-provider', model: 'known-model', skills: ['system-skill'], identity: 'api:validator',
+      workspace: app.workspace,
     });
+  } finally { await app.close(); }
+});
+
+test('OpenAI models endpoint returns a standard authenticated model list', async () => {
+  const app = await harness();
+  try {
+    const key = (await app.apiKeys.create('models-client')).key;
+    const valid = await fetch(`${app.baseUrl}/v1/models`, { headers: { authorization: `Bearer ${key}` } });
+    assert.equal(valid.status, 200);
+    const body = await valid.json() as { object: string; data: Array<{ id: string; object: string; owned_by: string }> };
+    assert.equal(body.object, 'list');
+    assert.deepEqual(body.data, [{ id: 'known-model', object: 'model', created: 0, owned_by: 'test-provider' }]);
+
+    const missing = await fetch(`${app.baseUrl}/v1/models`);
+    assert.equal(missing.status, 401);
+    assert.equal((await missing.json() as { error: { type: string } }).error.type, 'authentication_error');
+    const bad = await fetch(`${app.baseUrl}/v1/models`, { headers: { authorization: 'Bearer sk-bad' } });
+    assert.equal(bad.status, 401);
+    const guestToken = await app.authSessions.create('guest-models', 'guest');
+    const guest = await fetch(`${app.baseUrl}/v1/models`, { headers: { authorization: `Bearer ${guestToken}` } });
+    assert.equal(guest.status, 403);
+    assert.equal((await guest.json() as { error: { type: string } }).error.type, 'forbidden');
+  } finally { await app.close(); }
+});
+
+test('OpenAI chat completions validates requests and returns the standard non-stream shape', async () => {
+  const app = await harness();
+  try {
+    const key = (await app.apiKeys.create('completion-client')).key;
+    const headers = { authorization: `Bearer ${key}` };
+    const valid = await post(app.baseUrl, '/v1/chat/completions', {
+      model: 'known-model', messages: [{ role: 'system', content: 'Be concise.' }, { role: 'user', content: 'hello' }],
+    }, headers);
+    assert.equal(valid.status, 200);
+    const body = await valid.json() as {
+      object: string; choices: Array<{ message: { role: string; content: string } }>;
+      usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    };
+    assert.equal(body.object, 'chat.completion');
+    assert.equal(body.choices[0]?.message.role, 'assistant');
+    assert.equal(body.choices[0]?.message.content, 'ok');
+    assert.equal(typeof body.usage.total_tokens, 'number');
+
+    const invalid = await post(app.baseUrl, '/v1/chat/completions', { messages: [{ role: 'user', content: 'x' }] }, { authorization: 'Bearer sk-invalid' });
+    assert.equal(invalid.status, 401);
+    assert.equal((await invalid.json() as { error: { type: string } }).error.type, 'authentication_error');
+    const missingMessages = await post(app.baseUrl, '/v1/chat/completions', {}, headers);
+    assert.equal(missingMessages.status, 400);
+    assert.equal((await missingMessages.json() as { error: { type: string } }).error.type, 'invalid_request_error');
+    const unknownModel = await post(app.baseUrl, '/v1/chat/completions', {
+      model: 'missing-model', messages: [{ role: 'user', content: 'x' }],
+    }, headers);
+    assert.equal(unknownModel.status, 400);
+    const guestToken = await app.authSessions.create('guest-chat', 'guest');
+    const guest = await post(app.baseUrl, '/v1/chat/completions', {
+      messages: [{ role: 'user', content: 'x' }],
+    }, { authorization: `Bearer ${guestToken}` });
+    assert.equal(guest.status, 403);
+  } finally { await app.close(); }
+});
+
+test('OpenAI streaming chat emits incremental delta chunks and DONE', async () => {
+  const app = await harness();
+  try {
+    const key = (await app.apiKeys.create('stream-client')).key;
+    const response = await post(app.baseUrl, '/v1/chat/completions', {
+      messages: [{ role: 'user', content: 'stream this' }], stream: true,
+    }, { authorization: `Bearer ${key}` });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
+    const body = await response.text();
+    assert.match(body, /data: \{/);
+    assert.match(body, /"delta":\{"content":"ok"\}/);
+    assert.match(body, /data: \[DONE\]/);
+  } finally { await app.close(); }
+});
+
+test('OpenAI extensions require API keys and forced skills reach the chat bridge', async () => {
+  const app = await harness();
+  try {
+    const extensions = {
+      messages: [{ role: 'user', content: 'x' }], mode: 'plan', skills: ['system-skill'],
+      skipDangerous: false, directory: 'extension-workspace',
+    };
+    const loginToken = await login(app.baseUrl);
+    assert.equal((await post(app.baseUrl, '/v1/chat/completions', extensions, { authorization: `Bearer ${loginToken}` })).status, 403);
+    const guestToken = await app.authSessions.create('guest-extensions', 'guest');
+    assert.equal((await post(app.baseUrl, '/v1/chat/completions', extensions, { authorization: `Bearer ${guestToken}` })).status, 403);
+
+    const key = (await app.apiKeys.create('extensions-client')).key;
+    const valid = await post(app.baseUrl, '/v1/chat/completions', extensions, { authorization: `Bearer ${key}` });
+    assert.equal(valid.status, 200);
+    assert.deepEqual(app.calls.at(-1), {
+      agentId: 'plan', providerId: 'test-provider', model: 'known-model', skills: ['system-skill'],
+      identity: 'api:extensions-client', workspace: join(app.workspace, 'extension-workspace'),
+    });
+  } finally { await app.close(); }
+});
+
+test('API-key directory overrides create relative and absolute chat workspaces', async () => {
+  const app = await harness();
+  try {
+    const key = (await app.apiKeys.create('directory-client')).key;
+    const headers = { authorization: `Bearer ${key}` };
+    const relativeDirectory = 'relative-project';
+    assert.equal((await post(app.baseUrl, '/v1/chat/completions', {
+      messages: [{ role: 'user', content: 'x' }], directory: relativeDirectory,
+    }, headers)).status, 200);
+    await access(join(app.workspace, relativeDirectory));
+    assert.equal(app.calls.at(-1)?.workspace, join(app.workspace, relativeDirectory));
+
+    const absoluteDirectory = join(app.directory, 'absolute-project');
+    assert.equal((await post(app.baseUrl, '/v1/chat/completions', {
+      messages: [{ role: 'user', content: 'x' }], directory: absoluteDirectory,
+    }, headers)).status, 200);
+    await access(absoluteDirectory);
+    assert.equal(app.calls.at(-1)?.workspace, absoluteDirectory);
+
+    const legacyChat = await post(app.baseUrl, '/api/chat', { message: 'x', directory: 'legacy-api-project' }, headers);
+    assert.equal(legacyChat.status, 200);
+    await legacyChat.text();
+    await access(join(app.workspace, 'legacy-api-project'));
+    assert.equal(app.calls.at(-1)?.workspace, join(app.workspace, 'legacy-api-project'));
+
+    const loginToken = await login(app.baseUrl);
+    assert.equal((await post(app.baseUrl, '/api/chat', { message: 'x', directory: 'forbidden' }, { authorization: `Bearer ${loginToken}` })).status, 403);
   } finally { await app.close(); }
 });
 

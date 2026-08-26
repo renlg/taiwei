@@ -367,24 +367,45 @@ Open the gateway and use **管理员登录** for the local administrator account
 
 #### API 调用 / HTTP API access
 
-Administrators can open **资源管理 → API Keys → 生成新 Key** to create an external-program credential. Copy the `twk_...` value immediately: taiwei stores only its SHA-256 hash in `~/.taiwei/api-keys.json`, and the raw key is never shown again. The same panel shows its prefix, creation/expiry/last-use times, and can revoke it immediately.
+Administrators can open **资源管理 → API Keys → 生成新 Key** to create an external-program credential. Copy the `sk-...` value immediately: taiwei stores only its SHA-256 hash in `~/.taiwei/api-keys.json`, and the raw key is never shown again. Existing `twk_...` keys remain valid. The same panel shows each key's prefix, creation/expiry/last-use times, and can revoke it immediately.
 
-Browser and session clients may continue to authenticate with `Authorization: Bearer <login-session-token>` (or the `taiwei_token` cookie). External programs should send the administrator API key in `X-API-Key`. API-key-authenticated calls may add four per-call options to `POST /api/chat`: `model` selects a model for this turn, `mode` selects an agent profile, `skills` replaces the normal active user-skill set for this turn, and `skipDangerous` controls non-interactive dangerous-command confirmation. `skipDangerous` defaults to `false`, which rejects dangerous commands; set it to `true` only for a trusted automation context. These options do not modify the saved session settings and are rejected for guest or ordinary login-session requests.
+The external HTTP API is OpenAI Chat Completions compatible. Send API keys with `Authorization: Bearer <sk-key>`; `X-API-Key` remains accepted for compatibility. Browser clients may also use an administrator login-session bearer token or the `taiwei_token` cookie for standard calls. API keys are full administrator credentials, so store and rotate them accordingly.
+
+List models:
 
 ```bash
-curl -N http://127.0.0.1:8688/api/chat \
+curl http://127.0.0.1:8688/v1/models \
+  -H 'Authorization: Bearer sk-REPLACE_WITH_YOUR_KEY'
+```
+
+Create a non-streaming completion:
+
+```bash
+curl http://127.0.0.1:8688/v1/chat/completions \
+  -H 'Authorization: Bearer sk-REPLACE_WITH_YOUR_KEY' \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: twk_REPLACE_WITH_YOUR_KEY' \
   -d '{
-    "message": "Review this workspace and report the highest-risk issue",
     "model": "gpt-4.1-mini",
-    "mode": "research",
-    "skills": ["code-review"],
-    "skipDangerous": false
+    "messages": [{"role":"user","content":"Summarize this workspace"}]
   }'
 ```
 
-The response is the same SSE stream used by the web client (`token`, `tool`, `tool_result`, `done`, and `error` events). API keys are full administrator credentials and can call any authenticated gateway route, so store and rotate them accordingly.
+Set `"stream": true` to receive OpenAI-format SSE chunks followed by `data: [DONE]`:
+
+```bash
+curl -N http://127.0.0.1:8688/v1/chat/completions \
+  -H 'Authorization: Bearer sk-REPLACE_WITH_YOUR_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gpt-4.1-mini",
+    "messages": [{"role":"user","content":"Review the highest-risk issue"}],
+    "stream": true
+  }'
+```
+
+API-key-authenticated requests may add four taiwei-specific top-level fields: `mode` selects an agent profile; `skills` replaces the active user-skill set for the turn and may activate disabled skills by name; `skipDangerous` controls non-interactive dangerous-command confirmation (default `false`, which rejects dangerous commands); and `directory` selects the turn's working directory, resolving relative paths beneath the configured default workspace and creating the directory when needed. Login-session and guest requests that include any extension receive HTTP 403. The internal web endpoint `POST /api/chat` also honors these fields for API-key callers.
+
+HTTP failures use the OpenAI error envelope: `{"error":{"message":"...","type":"invalid_request_error|authentication_error|forbidden|server_error","code":null}}` with the corresponding 400, 401, 403, or 500 status.
 
 #### Sharing and ordinary users
 

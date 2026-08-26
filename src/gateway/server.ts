@@ -105,7 +105,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '68';
+const STATIC_ASSET_VERSION = '69';
 
 function contentWithTurnError(content: string, message: string): string {
   const error = `[错误] ${message || '未知错误'}`;
@@ -216,6 +216,16 @@ function json(response: ServerResponse, status: number, body: unknown, headers: 
   response.end(JSON.stringify(body));
 }
 
+type OpenAiErrorType = 'invalid_request_error' | 'authentication_error' | 'forbidden' | 'server_error';
+
+function openAiError(response: ServerResponse, status: number, message: string, type: OpenAiErrorType): void {
+  json(response, status, { error: { message, type, code: null } });
+}
+
+function openAiSse(response: ServerResponse, data: unknown | '[DONE]'): void {
+  response.write(`data: ${data === '[DONE]' ? data : JSON.stringify(data)}\n\n`);
+}
+
 function constantTimeEqual(actual: string, expected: string): boolean {
   const left = createHash('sha256').update(actual).digest();
   const right = createHash('sha256').update(expected).digest();
@@ -253,7 +263,58 @@ function requestShareToken(request: IncomingMessage): string | undefined {
 function requestApiKey(request: IncomingMessage): string | undefined {
   const header = request.headers['x-api-key'];
   const value = Array.isArray(header) ? header[0] : header;
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  const authorization = request.headers.authorization;
+  return authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() || undefined : undefined;
+}
+
+function openAiMessageText(content: unknown): string | undefined {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return undefined;
+  const texts: string[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== 'object' || Array.isArray(part)) return undefined;
+    const candidate = part as { type?: unknown; text?: unknown };
+    if (candidate.type === 'text' && typeof candidate.text === 'string') texts.push(candidate.text);
+  }
+  return texts.join('');
+}
+
+function joinedOpenAiMessages(value: unknown): { message: string; promptText: string } {
+  if (!Array.isArray(value) || value.length === 0) throw new HttpError(400, 'messages must be a non-empty array');
+  const messages = value.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new HttpError(400, `messages[${index}] must be an object`);
+    const candidate = item as { role?: unknown; content?: unknown };
+    if (candidate.role !== 'system' && candidate.role !== 'user' && candidate.role !== 'assistant') {
+      throw new HttpError(400, `messages[${index}].role must be system, user, or assistant`);
+    }
+    const content = openAiMessageText(candidate.content);
+    if (content === undefined) throw new HttpError(400, `messages[${index}].content must be a string or text content array`);
+    return { role: candidate.role, content };
+  });
+  const last = messages.at(-1)!;
+  const prior = messages.slice(0, -1).map((item) => `[${item.role}]\n${item.content}`).join('\n\n');
+  const message = prior ? `Conversation context:\n${prior}\n\nCurrent instruction:\n${last.content}` : last.content;
+  if (!message.trim()) throw new HttpError(400, 'the final message content must be non-empty');
+  return { message, promptText: messages.map((item) => item.content).join('\n') };
+}
+
+function openAiModels(listed: ModelListResult): Array<{ id: string; object: 'model'; created: number; owned_by: string }> {
+  const seen = new Set<string>();
+  const data: Array<{ id: string; object: 'model'; created: number; owned_by: string }> = [];
+  for (const provider of listed.providers ?? []) {
+    for (const model of provider.models) {
+      if (seen.has(model.id)) continue;
+      seen.add(model.id);
+      data.push({ id: model.id, object: 'model', created: 0, owned_by: provider.id });
+    }
+  }
+  for (const model of listed.models) {
+    if (seen.has(model)) continue;
+    seen.add(model);
+    data.push({ id: model, object: 'model', created: 0, owned_by: listed.currentProvider ?? 'taiwei' });
+  }
+  return data;
 }
 
 function publicApiKeyRecord({ hash: _hash, ...record }: ApiKeyRecord): Omit<ApiKeyRecord, 'hash'> {
@@ -997,7 +1058,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       // All API routes are private unless they are explicitly allow-listed above.
       // This remains fail-closed even when auth/oauth/share are disabled; enabling
       // share only adds another accepted credential and never grants anonymity.
-      const authRequired = pathname.startsWith('/api/') && !publicApiRouteAllowed(method, pathname);
+      const openAiRoute = pathname.startsWith('/v1/');
+      const authRequired = (pathname.startsWith('/api/') && !publicApiRouteAllowed(method, pathname)) || openAiRoute;
       if (authRequired) {
         authenticatedToken = requestToken(request);
         const authenticated = authenticatedToken ? await authSessions.authenticate(authenticatedToken) : undefined;
@@ -1008,31 +1070,37 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             guestId = guestIdForUsername(authenticated.username);
             await migrateLegacyGuestStorage(legacyGuestIdForUsername(authenticated.username), guestId);
           }
-        } else if (requestApiKey(request)) {
-          const apiKey = await apiKeyStore.verify(requestApiKey(request)!);
-          if (!apiKey) {
-            json(response, 401, { error: 'unauthorized' });
-            return;
-          }
-          authenticatedRole = 'admin';
-          authenticatedUsername = `api:${apiKey.name}`;
-          authenticatedViaApiKey = true;
-          authenticatedToken = undefined;
         } else {
-          const shareToken = requestShareToken(request) ?? authenticatedToken;
-          if (accessConfig.share.enabled && shareToken && constantTimeEqual(shareToken, accessConfig.share.token)) {
+          // Bearer credentials reach API-key verification only after login-session authentication fails.
+          // A legacy share token may also use Bearer, so it remains the final fallback for Bearer only;
+          // an explicitly invalid X-API-Key always fails closed.
+          const apiKeyCandidate = requestApiKey(request);
+          const apiKey = apiKeyCandidate ? await apiKeyStore.verify(apiKeyCandidate) : undefined;
+          if (apiKey) {
+            authenticatedRole = 'admin';
+            authenticatedUsername = `api:${apiKey.name}`;
+            authenticatedViaApiKey = true;
+            authenticatedToken = undefined;
+          } else {
+            const explicitApiKeyHeader = request.headers['x-api-key'];
+            const hasExplicitApiKey = (Array.isArray(explicitApiKeyHeader) ? explicitApiKeyHeader[0] : explicitApiKeyHeader)?.trim();
+            const shareToken = hasExplicitApiKey ? undefined : requestShareToken(request) ?? authenticatedToken;
+            if (accessConfig.share.enabled && shareToken && constantTimeEqual(shareToken, accessConfig.share.token)) {
             authenticatedRole = 'guest';
             authenticatedUsername = '访客';
             guestId = guestIdForShareToken(shareToken);
             await migrateLegacyGuestStorage(legacyGuestIdForShareToken(shareToken), guestId);
             authenticatedToken = undefined;
-          } else {
-          json(response, 401, { error: 'unauthorized' });
-          return;
+            } else {
+              if (openAiRoute) openAiError(response, 401, apiKeyCandidate ? 'Invalid authentication credentials' : 'Missing authentication credentials', 'authentication_error');
+              else json(response, 401, { error: 'unauthorized' });
+              return;
+            }
           }
         }
         if (authenticatedRole === 'guest' && !guestRouteAllowed(method, pathname)) {
-          json(response, 403, { error: 'forbidden' });
+          if (openAiRoute) openAiError(response, 403, 'This endpoint requires administrator access', 'forbidden');
+          else json(response, 403, { error: 'forbidden' });
           return;
         }
       }
@@ -1045,6 +1113,147 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           ? authenticatedUsername ?? guestId ?? 'guest'
           : guestId ?? authenticatedUsername ?? 'guest';
       const folderIdentity = { role: authenticatedRole, ...(guestId ? { guestId } : {}), ...(authenticatedUsername ? { username: authenticatedUsername } : {}), config: accessConfig };
+      if (method === 'GET' && pathname === '/v1/models') {
+        json(response, 200, { object: 'list', data: openAiModels(await modelState.resolveModels()) });
+        return;
+      }
+      if (method === 'POST' && pathname === '/v1/chat/completions') {
+        const body = await readJson(request) as {
+          model?: unknown; messages?: unknown; stream?: unknown; mode?: unknown;
+          skills?: unknown; skipDangerous?: unknown; directory?: unknown;
+        };
+        const extensionFields = ['mode', 'skills', 'skipDangerous', 'directory'] as const;
+        const hasExtensions = extensionFields.some((field) => Object.prototype.hasOwnProperty.call(body, field));
+        if (hasExtensions && !authenticatedViaApiKey) {
+          openAiError(response, 403, 'Taiwei extensions require API-key authentication', 'forbidden');
+          return;
+        }
+        if (body.model !== undefined && (typeof body.model !== 'string' || !body.model.trim())) throw new HttpError(400, 'model must be a non-empty string');
+        if (body.stream !== undefined && typeof body.stream !== 'boolean') throw new HttpError(400, 'stream must be a boolean');
+        if (body.mode !== undefined && (typeof body.mode !== 'string' || !body.mode.trim())) throw new HttpError(400, 'mode must be a non-empty string');
+        if (body.skills !== undefined && (!Array.isArray(body.skills) || body.skills.some((name) => typeof name !== 'string' || !name.trim()))) {
+          throw new HttpError(400, 'skills must be an array of non-empty strings');
+        }
+        if (body.skipDangerous !== undefined && typeof body.skipDangerous !== 'boolean') throw new HttpError(400, 'skipDangerous must be a boolean');
+        if (body.directory !== undefined && (typeof body.directory !== 'string' || !body.directory.trim())) throw new HttpError(400, 'directory must be a non-empty string');
+        const input = joinedOpenAiMessages(body.messages);
+        const runAgentId = typeof body.mode === 'string' ? body.mode.trim() : 'build';
+        try { getAgentProfile(runAgentId); }
+        catch (error) { throw new HttpError(400, (error as Error).message); }
+        const activeSkillNames = Array.isArray(body.skills) ? body.skills.map((name) => (name as string).trim()) : undefined;
+        if (activeSkillNames) {
+          const missing: string[] = [];
+          for (const name of activeSkillNames) {
+            try { await userSkillStore.load('admin', name); }
+            catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+              try { await skillLoader.load(name, { includeDisabled: true }); }
+              catch { missing.push(name); }
+            }
+          }
+          if (missing.length) throw new HttpError(400, `Unknown skills: ${[...new Set(missing)].join(', ')}`);
+        }
+        const listedModels = await modelState.resolveModels();
+        const runModel = typeof body.model === 'string' ? body.model.trim() : listedModels.current;
+        const providerMatch = listedModels.providers?.find((provider) => provider.models.some((model) => model.id === runModel));
+        const known = Boolean(providerMatch) || listedModels.models.includes(runModel);
+        if (!known && listedModels.source !== 'fallback') throw new HttpError(400, `Unknown model: ${runModel}`);
+        const runProviderId = providerMatch?.id ?? listedModels.currentProvider;
+        const defaultWorkspace = resolveWorkspaceDir(accessConfig);
+        const workspace = typeof body.directory === 'string'
+          ? resolve(isAbsolute(body.directory.trim()) ? body.directory.trim() : resolve(defaultWorkspace, body.directory.trim()))
+          : defaultWorkspace;
+        await mkdir(workspace, { recursive: true });
+        const completionId = `chatcmpl-${randomUUID().replaceAll('-', '')}`;
+        const created = Math.floor(Date.now() / 1_000);
+        const activeContextWindow = await contextWindowFor(runModel);
+        const streaming = body.stream === true;
+        if (streaming) {
+          response.writeHead(200, {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-cache',
+            connection: 'keep-alive',
+          });
+          response.flushHeaders?.();
+          openAiSse(response, {
+            id: completionId, object: 'chat.completion.chunk', created, model: runModel,
+            choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+          });
+        }
+        let answer = '';
+        let finalText: string | undefined;
+        let turnError: Error | undefined;
+        let usage: SessionUsage | undefined;
+        let streamedText = false;
+        const runtimeSessionId = `openai:${authenticatedUsername ?? 'admin'}:${completionId}`;
+        await options.chat.run(input.message, {
+          event: (event) => {
+            if (event.type === 'token') {
+              answer += event.text;
+              if (streaming) {
+                streamedText = true;
+                openAiSse(response, {
+                  id: completionId, object: 'chat.completion.chunk', created, model: runModel,
+                  choices: [{ index: 0, delta: { content: event.text }, finish_reason: null }],
+                });
+              }
+            } else if (event.type === 'usage') {
+              usage = {
+                promptTokens: event.usage.promptTokens,
+                completionTokens: event.usage.completionTokens,
+                totalTokens: event.usage.totalTokens,
+                contextWindow: event.usage.contextWindow ?? activeContextWindow,
+                model: event.model || runModel,
+              };
+            } else if (event.type === 'done') {
+              finalText = event.text;
+            }
+          },
+          error: (error) => { turnError = error; },
+          confirm: () => Promise.resolve({ approve: authenticatedViaApiKey && body.skipDangerous === true }),
+        }, [], undefined, undefined, runAgentId, 'admin', authenticatedUsername ?? 'admin', runtimeSessionId,
+        runProviderId, runModel, workspace, undefined, undefined, undefined, activeSkillNames);
+        if (turnError) {
+          if (streaming) {
+            openAiSse(response, { error: { message: formatGatewayTurnError(turnError), type: 'server_error', code: null } });
+            openAiSse(response, '[DONE]');
+            response.end();
+            return;
+          }
+          throw new HttpError(500, formatGatewayTurnError(turnError));
+        }
+        const text = finalText ?? answer;
+        const calculatedUsage = usage ?? {
+          promptTokens: Math.ceil(input.promptText.length / 4),
+          completionTokens: Math.ceil(text.length / 4),
+          totalTokens: Math.ceil(input.promptText.length / 4) + Math.ceil(text.length / 4),
+        };
+        if (streaming) {
+          if (!streamedText && text) {
+            openAiSse(response, {
+              id: completionId, object: 'chat.completion.chunk', created, model: runModel,
+              choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+            });
+          }
+          openAiSse(response, {
+            id: completionId, object: 'chat.completion.chunk', created, model: runModel,
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          });
+          openAiSse(response, '[DONE]');
+          response.end();
+          return;
+        }
+        json(response, 200, {
+          id: completionId, object: 'chat.completion', created, model: runModel,
+          choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: calculatedUsage.promptTokens,
+            completion_tokens: calculatedUsage.completionTokens,
+            total_tokens: calculatedUsage.totalTokens,
+          },
+        });
+        return;
+      }
       if (method === 'GET' && pathname === '/api/keys') {
         if (authenticatedRole === 'guest') throw new HttpError(403, 'forbidden');
         json(response, 200, { keys: (await apiKeyStore.list()).map(publicApiKeyRecord) });
@@ -1990,9 +2199,9 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       if (method === 'POST' && pathname === '/api/chat') {
         const body = await readJson(request) as {
           message?: unknown; sessionId?: unknown; files?: unknown; provider?: unknown;
-          model?: unknown; mode?: unknown; skills?: unknown; skipDangerous?: unknown;
+          model?: unknown; mode?: unknown; skills?: unknown; skipDangerous?: unknown; directory?: unknown;
         };
-        const extendedFields = ['provider', 'model', 'mode', 'skills', 'skipDangerous'] as const;
+        const extendedFields = ['provider', 'model', 'mode', 'skills', 'skipDangerous', 'directory'] as const;
         const hasExtendedParameters = extendedFields.some((field) => Object.prototype.hasOwnProperty.call(body, field));
         if (hasExtendedParameters && !authenticatedViaApiKey) {
           json(response, 403, { error: 'Gateway chat overrides require X-API-Key authentication' });
@@ -2020,6 +2229,9 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         }
         if (body.skipDangerous !== undefined && typeof body.skipDangerous !== 'boolean') {
           throw new HttpError(400, 'skipDangerous must be a boolean');
+        }
+        if (body.directory !== undefined && (typeof body.directory !== 'string' || !body.directory.trim())) {
+          throw new HttpError(400, 'directory must be a non-empty string');
         }
         const session = typeof body.sessionId === 'string'
           ? await activeSessions.get(body.sessionId)
@@ -2077,9 +2289,12 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         if (session.folderId && !sessionFolder) throw new HttpError(404, 'Session folder not found');
         // Guest 的工作目录固定为租户根（/home/<guestN>/projects），UI 文件夹只做会话分类，不改变写权限边界；
         // admin 的工作目录跟随会话所在文件夹。
-        const workspace = guestId
-          ? (await activeFolders.defaultFolder()).path
-          : sessionFolder?.path ?? resolveWorkspaceDir(config);
+        const defaultWorkspace = resolveWorkspaceDir(config);
+        const workspace = typeof body.directory === 'string'
+          ? resolve(isAbsolute(body.directory.trim()) ? body.directory.trim() : resolve(defaultWorkspace, body.directory.trim()))
+          : guestId
+            ? (await activeFolders.defaultFolder()).path
+            : sessionFolder?.path ?? defaultWorkspace;
         await mkdir(workspace, { recursive: true });
         if (options.hooks) {
           options.hooks.configure(config.hooks, config.hookTimeoutSeconds, workspace);
@@ -2336,7 +2551,18 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       }
       json(response, 404, { error: 'Not found' });
     } catch (error) {
-      if (!response.headersSent) json(response, error instanceof HttpError ? error.status : 400, { error: (error as Error).message });
+      if (!response.headersSent) {
+        if (pathname.startsWith('/v1/')) {
+          const status = error instanceof HttpError ? error.status : 500;
+          const type: OpenAiErrorType = status === 401 ? 'authentication_error'
+            : status === 403 ? 'forbidden'
+              : status >= 500 ? 'server_error'
+                : 'invalid_request_error';
+          openAiError(response, status, (error as Error).message, type);
+        } else {
+          json(response, error instanceof HttpError ? error.status : 400, { error: (error as Error).message });
+        }
+      }
       else {
         const routeError = error instanceof Error ? error : new Error(String(error));
         if (persistSseRouteError) {
@@ -2345,7 +2571,12 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             log(`[taiwei] failed to persist SSE route error: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
           }
         }
-        sendSse(response, 'error', { message: routeError.message });
+        if (pathname.startsWith('/v1/')) {
+          openAiSse(response, { error: { message: routeError.message, type: 'server_error', code: null } });
+          openAiSse(response, '[DONE]');
+        } else {
+          sendSse(response, 'error', { message: routeError.message });
+        }
         response.end();
       }
     }

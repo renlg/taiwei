@@ -34,7 +34,7 @@ export class ApiKeyStore {
   async create(name?: string, expiresInDays?: number): Promise<{ record: ApiKeyRecord; key: string }> {
     return this.serial(async () => {
       const records = await this.read();
-      const key = `twk_${randomBytes(24).toString('hex')}`;
+      const key = `sk-${randomBytes(24).toString('hex')}`;
       const now = new Date();
       const record: ApiKeyRecord = {
         id: randomUUID(),
