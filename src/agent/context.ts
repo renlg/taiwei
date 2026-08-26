@@ -10,6 +10,7 @@ export class AgentContext {
   readonly messages: ChatMessage[] = [];
   private readonly availableSkills = new Map<string, Skill>();
   private readonly activeSkills = new Map<string, Skill>();
+  private readonly forcedActiveSkills = new Set<string>();
   private readonly availableUserSkills = new Map<string, Skill>();
   private readonly activeUserSkills = new Map<string, Skill>();
   private retrievedContext = '';
@@ -25,7 +26,7 @@ export class AgentContext {
     for (const [name, skill] of this.availableUserSkills) available.set(name, skill);
     const availableSkills = renderSkillIndex([...available.values()]);
     if (availableSkills) sections.push(availableSkills);
-    const active = new Map([...this.activeSkills.entries()].filter(([, skill]) => !this.skillLoader.isDisabled(skill)));
+    const active = new Map([...this.activeSkills.entries()].filter(([name, skill]) => this.forcedActiveSkills.has(name) || !this.skillLoader.isDisabled(skill)));
     for (const [name, skill] of this.activeUserSkills) active.set(name, skill);
     const activeSkills = renderSkills([...active.values()]);
     if (activeSkills) sections.push(activeSkills);
@@ -41,7 +42,11 @@ export class AgentContext {
     return skill;
   }
 
-  activateSkill(skill: Skill): void { this.activeSkills.set(skill.name, skill); }
+  activateSkill(skill: Skill, includeDisabled = false): void {
+    this.activeSkills.set(skill.name, skill);
+    if (includeDisabled) this.forcedActiveSkills.add(skill.name);
+    else this.forcedActiveSkills.delete(skill.name);
+  }
 
   activateUserSkill(skill: Skill): void { this.activeUserSkills.set(skill.name, skill); }
 
@@ -59,6 +64,7 @@ export class AgentContext {
   }
 
   unloadSkill(name: string): boolean {
+    this.forcedActiveSkills.delete(name);
     return this.activeSkills.delete(name) || this.activeUserSkills.delete(name);
   }
 

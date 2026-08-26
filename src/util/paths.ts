@@ -22,6 +22,7 @@ export interface TaiweiPaths {
   historyDb: string;
   stateDb: string;
   gatewaySessions: string;
+  apiKeys: string;
   loginLocks: string;
   uploads: string;
   guests: string;
@@ -52,6 +53,7 @@ export function getPaths(): TaiweiPaths {
     historyDb: join(home, 'history.db'),
     stateDb: join(home, 'state.db'),
     gatewaySessions: join(home, 'gateway-sessions.json'),
+    apiKeys: join(home, 'api-keys.json'),
     loginLocks: join(home, 'login-locks.json'),
     uploads: join(home, 'uploads'),
     guests: join(home, 'guests'),

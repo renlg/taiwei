@@ -365,6 +365,27 @@ On config load/save, taiwei replaces a non-empty plaintext password with a salte
 
 Open the gateway and use **管理员登录** for the local administrator account. Successful login creates a seven-day sliding session in `~/.taiwei/state.db`; the browser keeps both an HttpOnly cookie and a bearer token, and gateway restarts preserve active logins. Login lock state is stored in the same database: five failures for the same account and IP within a sliding ten-minute window trigger a ten-minute cooldown, ten cumulative failures permanently lock that account/IP pair, and ten failures across any accounts from one IP within a sliding ten-minute window lock the IP for ten minutes. A successful login resets the matching account/IP counters. Click the username in the top-right corner and choose **退出登录 / Logout** to invalidate the current token and return to login.
 
+#### API 调用 / HTTP API access
+
+Administrators can open **资源管理 → API Keys → 生成新 Key** to create an external-program credential. Copy the `twk_...` value immediately: taiwei stores only its SHA-256 hash in `~/.taiwei/api-keys.json`, and the raw key is never shown again. The same panel shows its prefix, creation/expiry/last-use times, and can revoke it immediately.
+
+Browser and session clients may continue to authenticate with `Authorization: Bearer <login-session-token>` (or the `taiwei_token` cookie). External programs should send the administrator API key in `X-API-Key`. API-key-authenticated calls may add four per-call options to `POST /api/chat`: `model` selects a model for this turn, `mode` selects an agent profile, `skills` replaces the normal active user-skill set for this turn, and `skipDangerous` controls non-interactive dangerous-command confirmation. `skipDangerous` defaults to `false`, which rejects dangerous commands; set it to `true` only for a trusted automation context. These options do not modify the saved session settings and are rejected for guest or ordinary login-session requests.
+
+```bash
+curl -N http://127.0.0.1:8688/api/chat \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: twk_REPLACE_WITH_YOUR_KEY' \
+  -d '{
+    "message": "Review this workspace and report the highest-risk issue",
+    "model": "gpt-4.1-mini",
+    "mode": "research",
+    "skills": ["code-review"],
+    "skipDangerous": false
+  }'
+```
+
+The response is the same SSE stream used by the web client (`token`, `tool`, `tool_result`, `done`, and `error` events). API keys are full administrator credentials and can call any authenticated gateway route, so store and rotate them accordingly.
+
 #### Sharing and ordinary users
 
 Ordinary users authenticate through ai-connect OAuth2; taiwei no longer stores or manages local guest username/password accounts. Configure the identity provider in `~/.taiwei/config.json`:
@@ -413,6 +434,7 @@ All durable state lives in `~/.taiwei/`:
 ```text
 config.json       model and provider settings
 state.db          authoritative sessions, cron jobs/runs, login sessions and login locks
+api-keys.json     hashed administrator HTTP API keys (raw keys are never persisted)
 history.db        rebuildable conversation search index (separate from authoritative state)
 audit.jsonl       redacted append-only policy and execution audit
 mcp.json          MCP server definitions

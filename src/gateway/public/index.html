@@ -47,6 +47,7 @@
           <button class="sidebar-section-button" id="skills-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">✦</span><span class="sidebar-label">技能</span></button>
           <button class="sidebar-section-button" id="knowledge-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">▤</span><span class="sidebar-label">知识库</span></button>
           <button class="sidebar-section-button" id="mcp-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">⌘</span><span class="sidebar-label">MCP</span></button>
+          <button class="sidebar-section-button admin-only" id="api-keys-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🔑</span><span class="sidebar-label">API Keys</span></button>
           <button class="sidebar-section-button" id="tools-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">🔧</span><span class="sidebar-label">工具</span></button>
           <button class="sidebar-section-button" id="models-admin-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">◉</span><span class="sidebar-label">模型管理</span></button>
           <button class="sidebar-section-button" id="memory-open" type="button"><span class="sidebar-section-icon" aria-hidden="true">📝</span><span class="sidebar-label">持久记忆</span></button>
@@ -390,6 +391,31 @@
         <div class="mcp-form-error" id="mcp-form-error" role="alert"></div>
         <footer><button class="secondary-button" id="mcp-cancel" type="button">取消</button><button class="primary-button" id="mcp-save" type="submit">保存并重载</button></footer>
       </form>
+    </div>
+  </dialog>
+  <dialog class="modal management-modal" id="api-keys-modal">
+    <div class="modal-card management-card api-keys-card">
+      <header>
+        <div><h2>API Keys</h2><p>为外部程序创建管理员网关凭据</p></div>
+        <button class="icon-button" id="api-keys-close" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="api-keys-actions"><button class="primary-button" id="api-key-add" type="button">生成新 Key</button></div>
+      <div class="management-error" id="api-keys-error" role="alert"></div>
+      <form class="mcp-editor" id="api-key-form" hidden>
+        <div class="mcp-editor-heading"><div><h3>生成新 Key</h3><p>名称和有效期均可选。</p></div><button class="icon-button" id="api-key-form-close" type="button" aria-label="关闭表单">×</button></div>
+        <div class="mcp-form-grid">
+          <label>名称<input id="api-key-name" maxlength="100" autocomplete="off" placeholder="例如 CI automation"></label>
+          <label>有效期天数<input id="api-key-expiry" type="number" min="1" step="1" inputmode="numeric" placeholder="留空表示不过期"></label>
+        </div>
+        <div class="mcp-form-error" id="api-key-form-error" role="alert"></div>
+        <footer><button class="secondary-button" id="api-key-cancel" type="button">取消</button><button class="primary-button" id="api-key-create" type="submit">生成</button></footer>
+      </form>
+      <section class="api-key-reveal" id="api-key-reveal" hidden>
+        <p class="api-key-warning">请立即复制保存，关闭后不再显示</p>
+        <div class="api-key-copy-row"><input id="api-key-raw" readonly aria-label="新 API Key"><button class="secondary-button" id="api-key-copy" type="button">复制</button></div>
+        <button class="small-button" id="api-key-reveal-close" type="button">我已保存</button>
+      </section>
+      <div class="resource-list api-key-list" id="api-key-list" aria-label="API Key 列表"></div>
     </div>
   </dialog>
   <dialog class="modal management-modal" id="tools-modal">

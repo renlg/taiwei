@@ -26,6 +26,9 @@ export function createLoadSkillTool(skillLoader: SkillLoader, userSkills = new U
           context.agentContext.activateUserSkill(userSkill);
           return userSkill.body;
         } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ESKILLMISMATCH') {
+            throw new Error(`User skill "${name}" exists but its frontmatter is invalid (${(error as Error).message}). Fix or delete it before loading a system skill with the same name.`);
+          }
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
           // ENOENT means the user skill does not exist; fall through to the system skill loader.
         }

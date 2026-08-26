@@ -17,7 +17,7 @@ export interface ChatSink {
 }
 
 export interface ChatBridge {
-  run(message: string, sink: ChatSink, history?: ChatMessage[], sessionId?: string, memory?: MemoryStore, agentId?: string, role?: 'admin' | 'guest', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string, userContent?: ContentBlock[], tenantIdentity?: TenantIdentity, guestId?: string): Promise<void>;
+  run(message: string, sink: ChatSink, history?: ChatMessage[], sessionId?: string, memory?: MemoryStore, agentId?: string, role?: 'admin' | 'guest', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string, userContent?: ContentBlock[], tenantIdentity?: TenantIdentity, guestId?: string, activeSkillNames?: string[]): Promise<void>;
   stop(sessionId?: string): boolean;
 }
 
@@ -26,13 +26,15 @@ export class AgentChatBridge implements ChatBridge {
 
   constructor(private readonly app: TaiweiApp) {}
 
-  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], sessionId?: string, memory?: MemoryStore, agentId = 'build', role: 'admin' | 'guest' = 'admin', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string, userContent?: ContentBlock[], tenantIdentity?: TenantIdentity, guestId?: string): Promise<void> {
+  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], sessionId?: string, memory?: MemoryStore, agentId = 'build', role: 'admin' | 'guest' = 'admin', identity?: string, runtimeSessionId?: string, providerId?: string, model?: string, workspaceRoot?: string, userContent?: ContentBlock[], tenantIdentity?: TenantIdentity, guestId?: string, activeSkillNames?: string[]): Promise<void> {
     const context = new AgentContext(memory ?? this.app.memory, this.app.skills, !memory);
     context.setMessages(history);
     for (const skill of this.app.context.listActiveSkills()) context.activateSkill(skill);
     const owner = role === 'guest' ? guestId ?? 'guest' : 'admin';
     const guestActivationKey = role === 'guest' ? runtimeSessionId ?? `${owner}:${sessionId ?? 'local'}` : undefined;
-    if (role === 'admin') for (const skill of this.app.context.listActiveUserSkills()) context.activateUserSkill(skill);
+    if (role === 'admin' && activeSkillNames === undefined) {
+      for (const skill of this.app.context.listActiveUserSkills()) context.activateUserSkill(skill);
+    }
     if (this.app.config.autoLoadSkills !== false) {
       try {
         context.setAvailableSkills(await this.app.skills.list());
@@ -41,6 +43,15 @@ export class AgentChatBridge implements ChatBridge {
         const activeGuestSkills = guestActivationKey ? this.activeGuestUserSkills.get(guestActivationKey) : undefined;
         if (activeGuestSkills) for (const skill of userSkills) if (activeGuestSkills.has(skill.name)) context.activateUserSkill(skill);
       } catch { /* Missing or unreadable skills must never block a web chat turn. */ }
+    }
+    if (role === 'admin' && activeSkillNames !== undefined) {
+      for (const name of activeSkillNames) {
+        try { context.activateUserSkill(await this.app.userSkills.load('admin', name)); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          context.activateSkill(await this.app.skills.load(name, { includeDisabled: true }), true);
+        }
+      }
     }
     try {
       try { context.setRetrievedContext(renderRetrievedContext(await retrieve(message))); }

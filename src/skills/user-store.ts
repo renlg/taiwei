@@ -56,7 +56,11 @@ export class UserSkillStore {
   async load(owner: string, name: string): Promise<Skill> {
     const path = this.skillPath(owner, name);
     const skill = parseSkill(await readFile(path, 'utf8'), path);
-    if (skill.name !== validateUserSkillName(name)) throw new Error(`Skill frontmatter name must equal "${name}"`);
+    if (skill.name !== validateUserSkillName(name)) {
+      const error = new Error(`Skill frontmatter name must equal "${name}"`) as NodeJS.ErrnoException;
+      error.code = 'ESKILLMISMATCH';
+      throw error;
+    }
     return skill;
   }
 

@@ -115,6 +115,23 @@ const elements = {
   mcpEnabled: $('#mcp-enabled'),
   mcpCancel: $('#mcp-cancel'),
   mcpSave: $('#mcp-save'),
+  apiKeysOpen: $('#api-keys-open'),
+  apiKeysModal: $('#api-keys-modal'),
+  apiKeysClose: $('#api-keys-close'),
+  apiKeysError: $('#api-keys-error'),
+  apiKeyAdd: $('#api-key-add'),
+  apiKeyList: $('#api-key-list'),
+  apiKeyForm: $('#api-key-form'),
+  apiKeyFormClose: $('#api-key-form-close'),
+  apiKeyFormError: $('#api-key-form-error'),
+  apiKeyName: $('#api-key-name'),
+  apiKeyExpiry: $('#api-key-expiry'),
+  apiKeyCancel: $('#api-key-cancel'),
+  apiKeyCreate: $('#api-key-create'),
+  apiKeyReveal: $('#api-key-reveal'),
+  apiKeyRaw: $('#api-key-raw'),
+  apiKeyCopy: $('#api-key-copy'),
+  apiKeyRevealClose: $('#api-key-reveal-close'),
   toolsOpen: $('#tools-open'),
   toolsModal: $('#tools-modal'),
   toolsClose: $('#tools-close'),
@@ -708,7 +725,7 @@ async function openSettings() {
 }
 
 function closeResourcePanels(except) {
-  for (const modal of [elements.skillsModal, elements.skillStoreModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
+  for (const modal of [elements.skillsModal, elements.skillStoreModal, elements.knowledgeModal, elements.mcpModal, elements.apiKeysModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
     if (modal !== except && modal.open) modal.close();
   }
 }
@@ -937,6 +954,7 @@ async function openSkills() {
 
 const skillStoreState = { page: 1, pageSize: 20, totalPages: 0, query: '' };
 let skillStoreSearchTimer = null;
+let skillStoreRequestSeq = 0;
 
 async function updateStoreSkill(name, action, enabled) {
   elements.skillStoreError.textContent = '';
@@ -989,12 +1007,14 @@ function renderSkillStoreItem(skill) {
 }
 
 async function loadSkillStore() {
+  const requestSeq = ++skillStoreRequestSeq;
   elements.skillStoreError.textContent = '';
   renderResourceEmpty(elements.skillStoreList, '加载中…');
   const params = new URLSearchParams({ page: String(skillStoreState.page), pageSize: String(skillStoreState.pageSize) });
   if (skillStoreState.query) params.set('q', skillStoreState.query);
   try {
     const result = await requestJson(`/api/skill-store?${params}`);
+    if (requestSeq !== skillStoreRequestSeq) return; // stale response — a newer request superseded this one
     skillStoreState.page = result.page;
     skillStoreState.totalPages = result.totalPages;
     elements.skillStorePage.textContent = `第 ${result.page}/${Math.max(1, result.totalPages)} 页 · 共 ${result.total} 项`;
@@ -1308,6 +1328,61 @@ async function openMcp() {
   if (!elements.mcpModal.open) elements.mcpModal.showModal();
   elements.body.classList.remove('sidebar-open');
   await loadMcp();
+}
+
+function closeApiKeyForm() {
+  elements.apiKeyForm.hidden = true;
+  elements.apiKeyForm.reset();
+  elements.apiKeyFormError.textContent = '';
+}
+
+function hideRevealedApiKey() {
+  elements.apiKeyRaw.value = '';
+  elements.apiKeyReveal.hidden = true;
+}
+
+function apiKeyDate(value, fallback = '从不过期') {
+  return value ? new Date(value).toLocaleString() : fallback;
+}
+
+function renderApiKeys(keys) {
+  if (!keys.length) { renderResourceEmpty(elements.apiKeyList, '暂无 API Key'); return; }
+  elements.apiKeyList.replaceChildren();
+  for (const key of keys) {
+    const card = document.createElement('article'); card.className = 'api-key-card';
+    const top = document.createElement('div'); top.className = 'api-key-card-top';
+    const title = document.createElement('strong'); title.textContent = key.name;
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'mcp-action danger'; remove.textContent = '删除';
+    const masked = document.createElement('code'); masked.textContent = `${key.prefix}…`;
+    const meta = document.createElement('div'); meta.className = 'api-key-meta';
+    const created = document.createElement('span'); created.textContent = `创建：${apiKeyDate(key.createdAt, '未知')}`;
+    const expires = document.createElement('span'); expires.textContent = `过期：${apiKeyDate(key.expiresAt)}`;
+    const used = document.createElement('span'); used.textContent = `最后使用：${apiKeyDate(key.lastUsedAt, '尚未使用')}`;
+    top.append(title, remove); meta.append(created, expires, used); card.append(top, masked, meta); elements.apiKeyList.append(card);
+    remove.addEventListener('click', async () => {
+      const ok = await confirmDialog({ title: '删除 API Key', desc: '删除后，使用此 Key 的程序将立即失去访问权限。', object: key.name, okText: '删除', danger: true });
+      if (!ok) return;
+      remove.disabled = true; elements.apiKeysError.textContent = '';
+      try {
+        await requestJson(`/api/keys/${encodeURIComponent(key.id)}`, { method: 'DELETE' });
+        showToast(`已删除 ${key.name}`); await loadApiKeys();
+      } catch (error) { remove.disabled = false; elements.apiKeysError.textContent = error.message; }
+    });
+  }
+}
+
+async function loadApiKeys() {
+  elements.apiKeysError.textContent = '';
+  renderResourceEmpty(elements.apiKeyList, '加载中…');
+  try { renderApiKeys((await requestJson('/api/keys')).keys || []); }
+  catch (error) { elements.apiKeysError.textContent = error.message; renderResourceEmpty(elements.apiKeyList, 'API Key 加载失败'); }
+}
+
+async function openApiKeys() {
+  closeResourcePanels(elements.apiKeysModal); closeApiKeyForm(); hideRevealedApiKey();
+  if (!elements.apiKeysModal.open) elements.apiKeysModal.showModal();
+  elements.body.classList.remove('sidebar-open');
+  await loadApiKeys();
 }
 
 function updateMcpTransportFields() {
@@ -3063,6 +3138,37 @@ elements.knowledgeOpen.addEventListener('click', openKnowledge);
 elements.knowledgeClose.addEventListener('click', () => elements.knowledgeModal.close());
 elements.mcpOpen.addEventListener('click', openMcp);
 elements.mcpClose.addEventListener('click', () => elements.mcpModal.close());
+elements.apiKeysOpen.addEventListener('click', openApiKeys);
+elements.apiKeysClose.addEventListener('click', () => { hideRevealedApiKey(); elements.apiKeysModal.close(); });
+elements.apiKeysModal.addEventListener('close', hideRevealedApiKey);
+elements.apiKeyAdd.addEventListener('click', () => {
+  hideRevealedApiKey(); elements.apiKeyForm.hidden = false; elements.apiKeyName.focus();
+});
+elements.apiKeyFormClose.addEventListener('click', closeApiKeyForm);
+elements.apiKeyCancel.addEventListener('click', closeApiKeyForm);
+elements.apiKeyRevealClose.addEventListener('click', hideRevealedApiKey);
+elements.apiKeyCopy.addEventListener('click', () => copyText(elements.apiKeyRaw.value, elements.apiKeyCopy));
+elements.apiKeyForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  elements.apiKeyFormError.textContent = '';
+  if (!elements.apiKeyForm.reportValidity()) return;
+  const expiry = elements.apiKeyExpiry.value.trim();
+  elements.apiKeyCreate.disabled = true; elements.apiKeyCreate.textContent = '生成中…';
+  try {
+    const result = await requestJson('/api/keys', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...(elements.apiKeyName.value.trim() ? { name: elements.apiKeyName.value.trim() } : {}),
+        ...(expiry ? { expiresInDays: Number(expiry) } : {}),
+      }),
+    });
+    closeApiKeyForm();
+    elements.apiKeyRaw.value = result.key;
+    elements.apiKeyReveal.hidden = false;
+    await loadApiKeys();
+  } catch (error) { elements.apiKeyFormError.textContent = error.message; }
+  finally { elements.apiKeyCreate.disabled = false; elements.apiKeyCreate.textContent = '生成'; }
+});
 elements.toolsOpen.addEventListener('click', openTools);
 elements.toolsClose.addEventListener('click', () => elements.toolsModal.close());
 elements.modelsAdminOpen.addEventListener('click', openModelsAdmin);
@@ -3076,8 +3182,10 @@ elements.guestGitea.addEventListener('click', openDeployments);
 elements.deploymentsClose.addEventListener('click', () => elements.deploymentsModal.close());
 elements.deploymentsRefresh.addEventListener('click', loadDeployments);
 elements.deploymentsDoctor.addEventListener('click', () => loadDeployDoctor());
-for (const modal of [elements.skillsModal, elements.skillStoreModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
-  modal.addEventListener('click', (event) => { if (event.target === modal) modal.close(); });
+for (const modal of [elements.skillsModal, elements.skillStoreModal, elements.knowledgeModal, elements.mcpModal, elements.apiKeysModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) { if (modal === elements.apiKeysModal) hideRevealedApiKey(); modal.close(); }
+  });
 }
 elements.memoryContent.addEventListener('input', updateMemoryControls);
 elements.memoryRefresh.addEventListener('click', loadMemory);

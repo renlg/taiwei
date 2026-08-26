@@ -5,6 +5,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path
 import { fileURLToPath } from 'node:url';
 import type { ChatBridge } from './chat.js';
 import { AUTH_SESSION_TTL_MS, AuthSessionStore } from './auth.js';
+import { ApiKeyStore, type ApiKeyRecord } from './api-keys.js';
 import { LoginLockStore, type LoginLock } from './login-locks.js';
 import { sanitizeContextMessages, SessionStore, type GatewaySession, type SessionAttachment, type SessionIdentity, type SessionMessage, type SessionToolCall, type SessionUsage } from './sessions.js';
 import { FolderStore, guestFolderName, workspaceFolderMetadata, type GatewayFolder } from './folders.js';
@@ -67,6 +68,7 @@ export interface GatewayServerOptions {
   auth?: { enabled: boolean; username: string; password: string };
   authPasswordFromEnvironment?: boolean;
   authSessions?: AuthSessionStore;
+  apiKeys?: ApiKeyStore;
   loginLocks?: LoginLockStore;
   uploadsDirectory?: string;
   ossUpload?: typeof uploadToOss;
@@ -103,7 +105,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '67';
+const STATIC_ASSET_VERSION = '68';
 
 function contentWithTurnError(content: string, message: string): string {
   const error = `[错误] ${message || '未知错误'}`;
@@ -246,6 +248,16 @@ function requestShareToken(request: IncomingMessage): string | undefined {
     }
   }
   return undefined;
+}
+
+function requestApiKey(request: IncomingMessage): string | undefined {
+  const header = request.headers['x-api-key'];
+  const value = Array.isArray(header) ? header[0] : header;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function publicApiKeyRecord({ hash: _hash, ...record }: ApiKeyRecord): Omit<ApiKeyRecord, 'hash'> {
+  return record;
 }
 
 function legacyGuestIdForUsername(username: string): string {
@@ -682,6 +694,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
     appendMessage: appendHistoryMessage,
   });
   const authSessions = options.authSessions ?? new AuthSessionStore();
+  const apiKeyStore = options.apiKeys ?? new ApiKeyStore();
   const loginLocks = options.loginLocks ?? new LoginLockStore();
   const confirmations = options.confirmations ?? new ConfirmationBroker();
   const configState = options.configState ?? { load: loadConfig, save: saveConfig };
@@ -979,6 +992,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       let authenticatedToken: string | undefined;
       let authenticatedUsername: string | undefined;
       let authenticatedRole: 'admin' | 'guest' = 'admin';
+      let authenticatedViaApiKey = false;
       let guestId: string | undefined;
       // All API routes are private unless they are explicitly allow-listed above.
       // This remains fail-closed even when auth/oauth/share are disabled; enabling
@@ -994,6 +1008,16 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
             guestId = guestIdForUsername(authenticated.username);
             await migrateLegacyGuestStorage(legacyGuestIdForUsername(authenticated.username), guestId);
           }
+        } else if (requestApiKey(request)) {
+          const apiKey = await apiKeyStore.verify(requestApiKey(request)!);
+          if (!apiKey) {
+            json(response, 401, { error: 'unauthorized' });
+            return;
+          }
+          authenticatedRole = 'admin';
+          authenticatedUsername = `api:${apiKey.name}`;
+          authenticatedViaApiKey = true;
+          authenticatedToken = undefined;
         } else {
           const shareToken = requestShareToken(request) ?? authenticatedToken;
           if (accessConfig.share.enabled && shareToken && constantTimeEqual(shareToken, accessConfig.share.token)) {
@@ -1021,6 +1045,37 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           ? authenticatedUsername ?? guestId ?? 'guest'
           : guestId ?? authenticatedUsername ?? 'guest';
       const folderIdentity = { role: authenticatedRole, ...(guestId ? { guestId } : {}), ...(authenticatedUsername ? { username: authenticatedUsername } : {}), config: accessConfig };
+      if (method === 'GET' && pathname === '/api/keys') {
+        if (authenticatedRole === 'guest') throw new HttpError(403, 'forbidden');
+        json(response, 200, { keys: (await apiKeyStore.list()).map(publicApiKeyRecord) });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/keys') {
+        if (authenticatedRole === 'guest') throw new HttpError(403, 'forbidden');
+        const body = await readJson(request) as { name?: unknown; expiresInDays?: unknown };
+        if (body.name !== undefined && typeof body.name !== 'string') throw new HttpError(400, 'name must be a string');
+        if (body.expiresInDays !== undefined && (!Number.isInteger(body.expiresInDays) || (body.expiresInDays as number) <= 0)) {
+          throw new HttpError(400, 'expiresInDays must be a positive integer');
+        }
+        const created = await apiKeyStore.create(body.name as string | undefined, body.expiresInDays as number | undefined);
+        json(response, 201, { ok: true, record: publicApiKeyRecord(created.record), key: created.key });
+        return;
+      }
+      const apiKeyRoute = pathname.match(/^\/api\/keys\/([^/]+)$/);
+      if (method === 'DELETE' && (apiKeyRoute || pathname === '/api/keys')) {
+        if (authenticatedRole === 'guest') throw new HttpError(403, 'forbidden');
+        let id = new URL(request.url ?? '/', 'http://localhost').searchParams.get('id')?.trim() ?? '';
+        if (apiKeyRoute) {
+          try { id = decodeURIComponent(apiKeyRoute[1]); }
+          catch { throw new HttpError(400, 'Invalid API key id'); }
+        } else if (!id) {
+          const body = await readJson(request).catch(() => ({})) as { id?: unknown };
+          if (typeof body.id === 'string') id = body.id.trim();
+        }
+        if (!id) throw new HttpError(400, 'id is required');
+        json(response, 200, { ok: true, revoked: await apiKeyStore.revoke(id) });
+        return;
+      }
       const legacyGuestWorkspace = guestId ? join(taiweiPaths.guests, guestId, 'workspace') : undefined;
       const guestFoldersFile = guestId ? join(taiweiPaths.guests, guestId, 'folders.json') : undefined;
       const guestWorkspace = guestId && authenticatedToken && authenticatedUsername && tenantAccounts && legacyGuestWorkspace
@@ -1933,7 +1988,16 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'POST' && pathname === '/api/chat') {
-        const body = await readJson(request) as { message?: unknown; sessionId?: unknown; files?: unknown };
+        const body = await readJson(request) as {
+          message?: unknown; sessionId?: unknown; files?: unknown; provider?: unknown;
+          model?: unknown; mode?: unknown; skills?: unknown; skipDangerous?: unknown;
+        };
+        const extendedFields = ['provider', 'model', 'mode', 'skills', 'skipDangerous'] as const;
+        const hasExtendedParameters = extendedFields.some((field) => Object.prototype.hasOwnProperty.call(body, field));
+        if (hasExtendedParameters && !authenticatedViaApiKey) {
+          json(response, 403, { error: 'Gateway chat overrides require X-API-Key authentication' });
+          return;
+        }
         if (typeof body?.message !== 'string' || !body.message.trim()) {
           json(response, 400, { error: 'message must be a non-empty string' });
           return;
@@ -1941,6 +2005,21 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         if (body.sessionId !== undefined && typeof body.sessionId !== 'string') {
           json(response, 400, { error: 'sessionId must be a string' });
           return;
+        }
+        if (body.provider !== undefined && (typeof body.provider !== 'string' || !body.provider.trim())) {
+          throw new HttpError(400, 'provider must be a non-empty string');
+        }
+        if (body.model !== undefined && (typeof body.model !== 'string' || !body.model.trim())) {
+          throw new HttpError(400, 'model must be a non-empty string');
+        }
+        if (body.mode !== undefined && (typeof body.mode !== 'string' || !body.mode.trim())) {
+          throw new HttpError(400, 'mode must be a non-empty string');
+        }
+        if (body.skills !== undefined && (!Array.isArray(body.skills) || body.skills.some((name) => typeof name !== 'string' || !name.trim()))) {
+          throw new HttpError(400, 'skills must be an array of non-empty strings');
+        }
+        if (body.skipDangerous !== undefined && typeof body.skipDangerous !== 'boolean') {
+          throw new HttpError(400, 'skipDangerous must be a boolean');
         }
         const session = typeof body.sessionId === 'string'
           ? await activeSessions.get(body.sessionId)
@@ -1958,7 +2037,40 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           return;
         }
         const chatRole = session.identity?.role ?? authenticatedRole;
-        const chatIdentity = session.identity?.username ?? authenticatedUsername ?? authenticatedRole;
+        const chatIdentity = authenticatedViaApiKey
+          ? authenticatedUsername!
+          : session.identity?.username ?? authenticatedUsername ?? authenticatedRole;
+        const runAgentId = typeof body.mode === 'string' ? body.mode.trim() : session.agentId ?? 'build';
+        try { getAgentProfile(runAgentId); }
+        catch (error) { throw new HttpError(400, (error as Error).message); }
+        const activeSkillNames = Array.isArray(body.skills) ? body.skills.map((name) => (name as string).trim()) : undefined;
+        if (activeSkillNames) {
+          const missing: string[] = [];
+          for (const name of activeSkillNames) {
+            try { await userSkillStore.load('admin', name); }
+            catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+              try { await skillLoader.load(name, { includeDisabled: true }); }
+              catch { missing.push(name); }
+            }
+          }
+          if (missing.length) throw new HttpError(400, `Unknown skills: ${[...new Set(missing)].join(', ')}`);
+        }
+        let runProviderId = session.providerId;
+        const runModel = typeof body.model === 'string'
+          ? body.model.trim()
+          : session.currentModel ?? await modelState.getCurrentModel();
+        if (body.model !== undefined || body.provider !== undefined) {
+          const listedModels = await modelState.resolveModels();
+          runProviderId = typeof body.provider === 'string' ? body.provider.trim() : session.providerId ?? listedModels.currentProvider;
+          const selectedProvider = listedModels.providers?.find((item) => item.id === runProviderId);
+          const selectedModel = modelForSelection(listedModels, runProviderId, runModel);
+          const known = selectedProvider ? Boolean(selectedModel) : listedModels.models.includes(runModel);
+          if (!known && listedModels.source !== 'fallback') {
+            json(response, 400, { error: `Unknown model: ${runModel}`, models: listedModels.models });
+            return;
+          }
+        }
         const message = body.message.trim();
         const config = await configState.load();
         const sessionFolder = session.folderId ? await activeFolders.get(session.folderId) : undefined;
@@ -1986,9 +2098,9 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           }))
           : undefined;
         const history = activeSessions.toChatHistory(session);
-        const activeModel = session.currentModel ?? await modelState.getCurrentModel();
+        const activeModel = runModel;
         const activeContextWindow = await contextWindowFor(activeModel);
-        const activeProviderId = session.providerId;
+        const activeProviderId = runProviderId;
         let visionEnabled = false;
         try {
           const providers = config.providers ?? [];
@@ -2164,15 +2276,16 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           error: (error) => { turnError = error; sendSse(response, 'error', { message: formatGatewayTurnError(error) }); },
           context: (messages) => { contextMessages = messages; },
           confirm: (request) => {
+            if (authenticatedViaApiKey) return Promise.resolve({ approve: body.skipDangerous === true });
             sendSse(response, 'confirm', request);
             return confirmations.wait(request);
           },
-        }, history, session.id, turnMemory, session.agentId ?? 'build', chatRole, chatIdentity, runtimeSessionId, session.providerId, session.currentModel, workspace, userContent,
+        }, history, session.id, turnMemory, runAgentId, chatRole, chatIdentity, runtimeSessionId, runProviderId, runModel, workspace, userContent,
         session.identity ? {
           osUsername: session.identity.osUsername,
           giteaUsername: session.identity.giteaUsername,
           giteaOrgName: session.identity.giteaOrgName,
-        } : undefined, guestId);
+        } : undefined, guestId, activeSkillNames);
         if (contextMessages) session.contextMessages = sanitizeContextMessages(contextMessages);
         const stopped = turnError?.message === 'Turn cancelled';
         if (pendingFinalization) await pendingFinalization;
