@@ -965,7 +965,7 @@ async function loadSkills() {
       item.append(top, description);
       item.addEventListener('click', (event) => {
         if (event.target.closest('.mcp-switch')) return;
-        if (event.target.closest('button')) return;
+        if (event.target.closest('.skill-item-actions')) return;
         void showSkillDetail(skill.name, item);
       });
       elements.skillList.append(item);
