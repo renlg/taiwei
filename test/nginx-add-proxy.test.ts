@@ -179,7 +179,7 @@ test('nginx_add_proxy invokes the fixed script with validated positional argumen
     assert.equal(result.url, 'http://203.0.113.10/taiwei/8c6976e5/weather-app/');
     assert.equal(invocation?.file, 'python3');
     assert.deepEqual(invocation?.args, [
-      join(temporaryHome, 'skills', 'taiwei-编程部署', 'scripts', 'nginx_deploy.py'), '8c6976e5', 'weather-app', '8085',
+      join(temporaryHome, 'skills', 'taiwei-web-deploy', 'scripts', 'nginx_deploy.py'), '8c6976e5', 'weather-app', '8085',
     ]);
     assert.equal(invocation?.options.shell, false);
   } finally {

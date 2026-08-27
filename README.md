@@ -279,7 +279,7 @@ The **部署管理** panel reads deployment records from the `deployments` table
 
 `GET /api/deployments` lists records and accepts an optional `ownerHash` filter. `GET /api/deployments/doctor` performs a read-only comparison of the database's desired state with the observed listening port, nginx location, and project directory. `DELETE /api/deployments/:name?ownerHash=...` performs the cleanup described below; the owner hash is required to disambiguate duplicate project names.
 
-The panel's **清理** action stops the process listening on the recorded port, recursively deletes the recorded project directory after verifying that it is either an exact registered workspace or inside the legacy `~/.taiwei/projects/` root, and invokes `~/.taiwei/skills/taiwei-编程部署/scripts/nginx_deploy.py <ownerHash> <name> --remove`. Each step reports its own result and the deployment row is retained with status `cleaned` for audit history. The same operation can be run directly with [`scripts/cleanup_deployment.sh`](scripts/cleanup_deployment.sh):
+The panel's **清理** action stops the process listening on the recorded port, recursively deletes the recorded project directory after verifying that it is either an exact registered workspace or inside the legacy `~/.taiwei/projects/` root, and invokes `~/.taiwei/skills/taiwei-web-deploy/scripts/nginx_deploy.py <ownerHash> <name> --remove`. Each step reports its own result and the deployment row is retained with status `cleaned` for audit history. The same operation can be run directly with [`scripts/cleanup_deployment.sh`](scripts/cleanup_deployment.sh):
 
 ```bash
 bash scripts/cleanup_deployment.sh 8c6976e5 myapp 8801 /root/workspace/current-session-project

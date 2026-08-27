@@ -412,7 +412,7 @@ export async function cleanupDeployment(record: DeploymentRecord, options: { pro
     steps.push({ step: 'delete_files', status: 'failed', message: (error as Error).message });
   }
   try {
-    const helper = join(skillsRoot, 'taiwei-编程部署', 'scripts', 'nginx_deploy.py');
+    const helper = join(skillsRoot, 'taiwei-web-deploy', 'scripts', 'nginx_deploy.py');
     const { stdout, stderr } = await executableResult('python3', [helper, record.ownerHash, record.name, '--remove']);
     steps.push({ step: 'remove_nginx', status: 'ok', message: (stdout || stderr || `Removed nginx proxy for ${record.path}`).trim() });
   } catch (error) {

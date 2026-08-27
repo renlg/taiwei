@@ -251,7 +251,7 @@ export function createNginxAddProxyTool(dependencies: NginxAddProxyDependencies 
         return finish({ ok: true, message: `反代已存在: ${path},无需重复配置`, alreadyExists: true, url }, details);
       }
 
-      const scriptPath = join(getPaths().skills, 'taiwei-编程部署', 'scripts', 'nginx_deploy.py');
+      const scriptPath = join(getPaths().skills, 'taiwei-web-deploy', 'scripts', 'nginx_deploy.py');
       const result = await execute('python3', [scriptPath, ownerHash, name, String(port)], { shell: false, signal: context.signal });
       const timestamp = now();
       const logDirectory = join(getPaths().home, 'logs');
