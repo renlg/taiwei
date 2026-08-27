@@ -106,9 +106,6 @@ const elements = {
   mcpEnabled: $('#mcp-enabled'),
   mcpCancel: $('#mcp-cancel'),
   mcpSave: $('#mcp-save'),
-  apiKeysOpen: $('#api-keys-open'),
-  apiKeysModal: $('#api-keys-modal'),
-  apiKeysClose: $('#api-keys-close'),
   apiKeysError: $('#api-keys-error'),
   apiKeyAdd: $('#api-key-add'),
   apiKeyList: $('#api-key-list'),
@@ -194,6 +191,7 @@ const elements = {
   hookTestResult: $('#hook-test-result'),
   auditSettings: $('.audit-settings'), auditToggle: $('#audit-toggle'), auditStatus: $('#audit-status'), auditFilter: $('#audit-filter'), auditList: $('#audit-list'),
   tenantAccountsSettings: $('.tenant-accounts-settings'), tenantAccountsToggle: $('#tenant-accounts-toggle'), tenantAccountsStatus: $('#tenant-accounts-status'), tenantAccountsList: $('#tenant-accounts-list'),
+  apiKeysSettings: $('.api-keys-settings'), apiKeysToggle: $('#api-keys-toggle'), apiKeysStatus: $('#api-keys-status'),
   sidebarToggle: $('#sidebar-toggle'),
   sidebarClose: $('#sidebar-close'),
   resourceToggle: $('#resource-toggle'),
@@ -250,6 +248,7 @@ const HOOKS_OPEN_STORAGE_KEY = 'taiwei-settings-hooks-open';
 const CUSTOM_PROMPT_OPEN_STORAGE_KEY = 'taiwei-settings-customprompt-open';
 const AUDIT_OPEN_STORAGE_KEY = 'taiwei-settings-audit-open';
 const TENANT_ACCOUNTS_OPEN_STORAGE_KEY = 'taiwei-settings-tenantaccounts-open';
+const API_KEYS_OPEN_STORAGE_KEY = 'taiwei-settings-apikeys-open';
 const LAST_MODEL_STORAGE_PREFIX = 'taiwei-last-model:';
 
 function lastModelStorageKey() {
@@ -708,15 +707,17 @@ async function openSettings() {
     setSettingsCollapseOpen(elements.hooksSettings, elements.hooksToggle, HOOKS_OPEN_STORAGE_KEY, localStorage.getItem(HOOKS_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.auditSettings, elements.auditToggle, AUDIT_OPEN_STORAGE_KEY, localStorage.getItem(AUDIT_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.tenantAccountsSettings, elements.tenantAccountsToggle, TENANT_ACCOUNTS_OPEN_STORAGE_KEY, localStorage.getItem(TENANT_ACCOUNTS_OPEN_STORAGE_KEY) === 'true');
+    setSettingsCollapseOpen(elements.apiKeysSettings, elements.apiKeysToggle, API_KEYS_OPEN_STORAGE_KEY, localStorage.getItem(API_KEYS_OPEN_STORAGE_KEY) === 'true');
     if (elements.auditToggle.getAttribute('aria-expanded') === 'true') await loadAudit();
     if (elements.tenantAccountsToggle.getAttribute('aria-expanded') === 'true') await loadTenantAccounts();
+    if (elements.apiKeysToggle.getAttribute('aria-expanded') === 'true') await loadApiKeys();
     elements.settingsModal.showModal();
     elements.workspaceToggle.focus();
   } catch (error) { showToast(error.message); }
 }
 
 function closeResourcePanels(except) {
-  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.apiKeysModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
+  for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
     if (modal !== except && modal.open) modal.close();
   }
 }
@@ -1323,13 +1324,6 @@ async function loadApiKeys() {
   renderResourceEmpty(elements.apiKeyList, '加载中…');
   try { renderApiKeys((await requestJson('/api/keys')).keys || []); }
   catch (error) { elements.apiKeysError.textContent = error.message; renderResourceEmpty(elements.apiKeyList, 'API Key 加载失败'); }
-}
-
-async function openApiKeys() {
-  closeResourcePanels(elements.apiKeysModal); closeApiKeyForm(); hideRevealedApiKey();
-  if (!elements.apiKeysModal.open) elements.apiKeysModal.showModal();
-  elements.body.classList.remove('sidebar-open');
-  await loadApiKeys();
 }
 
 function updateMcpTransportFields() {
@@ -3073,9 +3067,11 @@ elements.knowledgeOpen.addEventListener('click', openKnowledge);
 elements.knowledgeClose.addEventListener('click', () => elements.knowledgeModal.close());
 elements.mcpOpen.addEventListener('click', openMcp);
 elements.mcpClose.addEventListener('click', () => elements.mcpModal.close());
-elements.apiKeysOpen.addEventListener('click', openApiKeys);
-elements.apiKeysClose.addEventListener('click', () => { hideRevealedApiKey(); elements.apiKeysModal.close(); });
-elements.apiKeysModal.addEventListener('close', hideRevealedApiKey);
+elements.apiKeysToggle.addEventListener('click', async () => {
+  const open = elements.apiKeysToggle.getAttribute('aria-expanded') !== 'true';
+  setSettingsCollapseOpen(elements.apiKeysSettings, elements.apiKeysToggle, API_KEYS_OPEN_STORAGE_KEY, open, true);
+  if (open) { closeApiKeyForm(); hideRevealedApiKey(); await loadApiKeys(); }
+});
 elements.apiKeyAdd.addEventListener('click', () => {
   hideRevealedApiKey(); elements.apiKeyForm.hidden = false; elements.apiKeyName.focus();
 });
@@ -3118,9 +3114,9 @@ elements.guestGitea.addEventListener('click', openDeployments);
 elements.deploymentsClose.addEventListener('click', () => elements.deploymentsModal.close());
 elements.deploymentsRefresh.addEventListener('click', loadDeployments);
 elements.deploymentsDoctor.addEventListener('click', () => loadDeployDoctor());
-for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.apiKeysModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
+for (const modal of [elements.skillsModal, elements.knowledgeModal, elements.mcpModal, elements.toolsModal, elements.modelsAdminModal, elements.memoryModal, elements.cronModal, elements.deploymentsModal]) {
   modal.addEventListener('click', (event) => {
-    if (event.target === modal) { if (modal === elements.apiKeysModal) hideRevealedApiKey(); modal.close(); }
+    if (event.target === modal) modal.close();
   });
 }
 elements.memoryContent.addEventListener('input', updateMemoryControls);
