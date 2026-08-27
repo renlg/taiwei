@@ -41,6 +41,8 @@ const elements = {
   input: $('#input'),
   send: $('#send'),
   stop: $('#stop'),
+  skillMenu: $('#skill-menu'),
+  skillMenuList: $('#skill-menu-list'),
   attachmentButton: $('#attachment-button'),
   fileInput: $('#file-input'),
   attachmentList: $('#attachment-list'),
@@ -227,6 +229,10 @@ const state = {
   contextWindow: 256000,
   usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, contextWindow: 256000, model: '' },
   attachments: [],
+  pendingSkills: [],
+  skillMenuOpen: false,
+  skillMenuItems: [],
+  skillMenuIndex: 0,
   workspace: '',
   settingsRemember: 'off',
   confirmations: new Map(),
@@ -1708,7 +1714,7 @@ function setStreaming(streaming) {
   elements.body.classList.toggle('streaming', streaming);
   elements.input.disabled = streaming;
   elements.attachmentButton.disabled = streaming || state.attachments.length >= 5;
-  elements.send.disabled = streaming || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
+  updateSendEnabled();
   elements.attachmentList.querySelectorAll('button').forEach((button) => { button.disabled = streaming; });
   document.querySelectorAll('.session-item').forEach((item) => item.setAttribute('aria-disabled', String(streaming)));
   if (streaming) setStatus('streaming', '思考中');
@@ -1770,6 +1776,146 @@ function updateAttachmentTextHint() {
   elements.attachmentTextHint.hidden = !state.attachments.length || Boolean(elements.input.value.trim());
 }
 
+// ---- 技能选择菜单（输入 / 触发）----
+
+let skillMenuCache = null; // { name, description }[] 已加载技能缓存
+
+function textWithoutSkills(value) {
+  // 去掉 @技能名 标签和斜杠命令触发符 / 后剩余的用户文本
+  return value
+    .replace(/@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\s*/g, '')
+    .replace(/(^|\s)\/\s*/g, '$1')
+    .trim();
+}
+
+function extractPendingSkills(value) {
+  // 从输入框内容提取 @技能名 -> string[]，并同步 state.pendingSkills
+  const names = [];
+  const re = /@([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})/g;
+  let m;
+  while ((m = re.exec(value)) !== null) {
+    if (!names.includes(m[1])) names.push(m[1]);
+  }
+  state.pendingSkills = names;
+  return names;
+}
+
+function updateSendEnabled() {
+  const value = elements.input.value;
+  const userText = textWithoutSkills(value);
+  const hasUserText = userText.length > 0;
+  elements.send.disabled = state.streaming
+    || state.attachments.some((file) => file.uploading)
+    || !hasUserText;
+  elements.attachmentTextHint.hidden = !state.attachments.length || hasUserText;
+}
+
+async function openSkillMenu() {
+  if (state.skillMenuOpen) return;
+  try {
+    if (!skillMenuCache) {
+      const { skills } = await requestJson('/api/skills');
+      skillMenuCache = skills.filter((skill) => skill.enabled).map((skill) => ({ name: skill.name, description: skill.description }));
+    }
+    state.skillMenuItems = skillMenuCache;
+    state.skillMenuIndex = 0;
+    renderSkillMenu();
+    elements.skillMenu.hidden = false;
+    state.skillMenuOpen = true;
+  } catch (error) {
+    closeSkillMenu();
+  }
+}
+
+function closeSkillMenu() {
+  elements.skillMenu.hidden = true;
+  state.skillMenuOpen = false;
+}
+
+function renderSkillMenu() {
+  const list = elements.skillMenuList;
+  list.replaceChildren();
+  if (!state.skillMenuItems.length) {
+    const empty = document.createElement('div');
+    empty.className = 'skill-menu-empty';
+    empty.textContent = '没有已加载的技能';
+    list.append(empty);
+    return;
+  }
+  state.skillMenuItems.forEach((skill, index) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `skill-menu-item${index === state.skillMenuIndex ? ' active' : ''}`;
+    const name = document.createElement('strong');
+    name.textContent = skill.name;
+    const desc = document.createElement('small');
+    desc.textContent = skill.description || '';
+    item.append(name, desc);
+    item.addEventListener('mousedown', (event) => { event.preventDefault(); selectSkill(skill.name); });
+    item.addEventListener('mouseenter', () => { state.skillMenuIndex = index; renderSkillMenu(); });
+    list.append(item);
+  });
+}
+
+function selectSkill(name) {
+  const value = elements.input.value;
+  const userText = textWithoutSkills(value);
+  // 把 @技能名 追加到输入框（若已引用该技能则不重复）
+  const already = new Set(extractPendingSkills(value));
+  if (!already.has(name)) {
+    const prefix = userText ? `${userText} ` : '';
+    elements.input.value = `${prefix}@${name} `;
+    state.pendingSkills.push(name);
+  } else {
+    // 已引用则只清掉触发符 / 与多余空白
+    elements.input.value = value.replace(/@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\s*/g, '').replace(/(^|\s)\/\s*/g, '$1').trim();
+  }
+  closeSkillMenu();
+  resizeInput();
+  updateSendEnabled();
+  elements.input.focus();
+  const len = elements.input.value.length;
+  elements.input.setSelectionRange(len, len);
+}
+
+function handleSkillMenuKeydown(event) {
+  if (!state.skillMenuOpen) return false;
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    state.skillMenuIndex = Math.min(state.skillMenuIndex + 1, state.skillMenuItems.length - 1);
+    renderSkillMenu();
+    return true;
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    state.skillMenuIndex = Math.max(state.skillMenuIndex - 1, 0);
+    renderSkillMenu();
+    return true;
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    if (state.skillMenuItems[state.skillMenuIndex]) selectSkill(state.skillMenuItems[state.skillMenuIndex].name);
+    return true;
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeSkillMenu();
+    return true;
+  }
+  return false;
+}
+
+function maybeOpenSkillMenu() {
+  // 光标处是否刚输入了 "/" （且前面是空格或行首）
+  const value = elements.input.value;
+  const caret = elements.input.selectionStart ?? value.length;
+  if (caret > 0 && value[caret - 1] === '/' && (caret === 1 || /\s/.test(value[caret - 2]))) {
+    void openSkillMenu();
+  } else if (state.skillMenuOpen && !value.includes('/')) {
+    closeSkillMenu();
+  }
+}
+
 function renderAttachments() {
   elements.attachmentList.replaceChildren();
   for (const attachment of state.attachments) {
@@ -1814,7 +1960,7 @@ function renderAttachments() {
     elements.attachmentList.append(chip);
   }
   elements.attachmentButton.disabled = state.streaming || state.attachments.length >= 5;
-  elements.send.disabled = state.streaming || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
+  updateSendEnabled();
   updateAttachmentTextHint();
 }
 
@@ -2810,7 +2956,7 @@ function parseEvent(block) {
   try { return { event, data: JSON.parse(data.join('\n')) }; } catch { return null; }
 }
 
-async function submit(message, files = []) {
+async function submit(message, files = [], skills = []) {
   if (state.streaming) return;
   if (!state.current && !await createSession()) return;
   const sessionId = state.current.id;
@@ -2847,6 +2993,7 @@ async function submit(message, files = []) {
       body: JSON.stringify({
         message,
         sessionId,
+        ...(skills.length ? { skills } : {}),
         files: files.map(({ name, path, url, size, type, content, contentTruncated }) => ({
           name, path, ...(url ? { url } : {}), size, type,
           ...(content !== undefined ? { content } : {}),
@@ -3002,13 +3149,15 @@ async function submit(message, files = []) {
 function resizeInput() {
   elements.input.style.height = 'auto';
   elements.input.style.height = `${Math.min(elements.input.scrollHeight, 170)}px`;
-  elements.send.disabled = state.streaming || state.attachments.some((file) => file.uploading) || !elements.input.value.trim();
+  updateSendEnabled();
   updateAttachmentTextHint();
 }
 
 elements.composer.addEventListener('submit', (event) => {
   event.preventDefault();
-  const message = elements.input.value.trim();
+  const raw = elements.input.value;
+  const skills = extractPendingSkills(raw);
+  const message = raw.replace(/@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\s*/g, '').trim();
   if (!message || state.streaming || state.attachments.some((file) => file.uploading)) return;
   const files = state.attachments.filter((file) => file.path);
   state.attachments.forEach(releaseAttachment);
@@ -3016,7 +3165,7 @@ elements.composer.addEventListener('submit', (event) => {
   renderAttachments();
   elements.input.value = '';
   resizeInput();
-  submit(message, files);
+  submit(message, files, skills);
 });
 
 elements.agentSelector.addEventListener('change', async () => {
@@ -3045,8 +3194,9 @@ elements.fileInput.addEventListener('change', async () => {
   await Promise.all(selected.slice(0, available).map(uploadFile));
 });
 
-elements.input.addEventListener('input', resizeInput);
+elements.input.addEventListener('input', () => { resizeInput(); maybeOpenSkillMenu(); });
 elements.input.addEventListener('keydown', (event) => {
+  if (handleSkillMenuKeydown(event)) return;
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     elements.composer.requestSubmit();

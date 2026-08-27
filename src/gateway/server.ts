@@ -105,7 +105,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '74';
+const STATIC_ASSET_VERSION = '75';
 
 function contentWithTurnError(content: string, message: string): string {
   const error = `[错误] ${message || '未知错误'}`;
@@ -387,6 +387,7 @@ export function guestRouteAllowed(method: string, pathname: string): boolean {
   if (method === 'GET' && pathname === '/api/skills') return true;
   if (method === 'POST' && pathname === '/api/skills/install') return true;
   if ((method === 'POST' || method === 'DELETE') && /^\/api\/skills\/[^/]+$/.test(pathname)) return true;
+  if (method === 'GET' && /^\/api\/skills\/[^/]+$/.test(pathname)) return true;
   if (method === 'GET' && pathname === '/api/auth/gitea-user') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/deployments') return true;
   if (method === 'GET' && pathname === '/api/deployments/doctor') return true;
@@ -2157,7 +2158,10 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         };
         const extendedFields = ['provider', 'model', 'mode', 'skills', 'skipDangerous', 'directory'] as const;
         const hasExtendedParameters = extendedFields.some((field) => Object.prototype.hasOwnProperty.call(body, field));
-        if (hasExtendedParameters && !authenticatedViaApiKey) {
+        // skills（技能注入）允许 admin 登录会话使用（UI 技能选择）；其余扩展覆盖仍仅限 API-key
+        const isAdminSession = authenticatedRole === 'admin' && Boolean(authenticatedToken);
+        const hasOnlySkillsOverride = Object.keys(body).every((key) => key === 'message' || key === 'sessionId' || key === 'files' || key === 'skills');
+        if (hasExtendedParameters && !authenticatedViaApiKey && !(isAdminSession && hasOnlySkillsOverride)) {
           json(response, 403, { error: 'Gateway chat overrides require X-API-Key authentication' });
           return;
         }

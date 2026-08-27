@@ -519,7 +519,7 @@ a.message-attachment-file:hover { background: rgba(255,255,255,.25); text-decora
 .prompt-chip small { color: var(--faint); font-size: 11px; }
 
 .composer-dock { z-index: 8; padding: 11px max(18px, calc((100% - 900px) / 2)) 10px; background: linear-gradient(180deg, transparent, var(--panel) 24%); }
-.composer { padding: 11px 11px 9px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--surface-soft); box-shadow: 0 11px 35px rgba(0,0,0,.14); backdrop-filter: blur(18px); transition: border-color .18s, box-shadow .18s; }
+.composer { padding: 11px 11px 9px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--surface-soft); box-shadow: 0 11px 35px rgba(0,0,0,.14); backdrop-filter: blur(18px); transition: border-color .18s, box-shadow .18s; position: relative; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 48%, transparent); box-shadow: 0 12px 38px rgba(0,0,0,.17), 0 0 0 3px var(--accent-soft); }
 .composer-main { display: grid; grid-template-columns: 38px minmax(0, 1fr) 52px; gap: 9px; align-items: center; }
 .composer-content { min-width: 0; }
@@ -726,3 +726,16 @@ body.sidebar-collapsed .sidebar-footer { flex-direction: column; justify-content
 .confirm-card .btn.btn-danger:hover { filter: brightness(1.08); }
 .confirm-card .btn.btn-ok { border-color: transparent; color: #fff; background: var(--accent); box-shadow: 0 4px 14px rgba(124, 108, 242, .28); }
 .confirm-card .btn.btn-ok:hover { filter: brightness(1.08); }
+
+/* 技能选择菜单（输入 / 触发） */
+.skill-menu { position: absolute; left: 8px; right: 8px; bottom: calc(100% + 8px); z-index: 30; max-height: 300px; overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--panel); box-shadow: 0 14px 40px rgba(0,0,0,.22); }
+.skill-menu[hidden] { display: none; }
+.skill-menu-heading { padding: 8px 12px 6px; color: var(--faint); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; border-bottom: 1px solid var(--border-weak); }
+.skill-menu-list { max-height: 230px; overflow-y: auto; }
+.skill-menu-item { display: block; width: 100%; padding: 8px 12px; text-align: left; background: transparent; border: 0; border-bottom: 1px solid var(--border-weak); color: var(--text); cursor: pointer; }
+.skill-menu-item:last-child { border-bottom: 0; }
+.skill-menu-item strong { display: block; font-size: 13px; }
+.skill-menu-item small { display: block; margin-top: 2px; color: var(--faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skill-menu-item.active, .skill-menu-item:hover { background: var(--accent-soft); }
+.skill-menu-empty { padding: 14px 12px; color: var(--faint); font-size: 12px; text-align: center; }
+.skill-menu-hint { padding: 6px 12px; color: var(--faint); font-size: 10px; border-top: 1px solid var(--border-weak); }
