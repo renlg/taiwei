@@ -33,6 +33,17 @@
       <button class="login-button" id="login-submit" type="submit">登录</button>
     </form>
   </section>
+  <script>
+    // 刷新时避免先闪登录页：已有有效 token 则立即隐藏登录页（app.js 初始化会接管；token 失效时 showLogin 会重新显示）
+    (function () {
+      try {
+        if (localStorage.getItem('taiwei-token') || localStorage.getItem('taiwei_share_token')) {
+          var loginScreen = document.getElementById('login-screen');
+          if (loginScreen) loginScreen.hidden = true;
+        }
+      } catch (e) { /* localStorage 不可用时忽略 */ }
+    })();
+  </script>
   <div class="app-shell" id="app-shell" hidden>
     <aside class="sidebar" id="sidebar">
       <div class="brand-row">
@@ -285,15 +296,15 @@
         <div class="settings-collapse-content" id="api-keys-content"><div class="settings-collapse-content-inner">
           <div class="api-keys-actions"><button class="primary-button" id="api-key-add" type="button">生成新 Key</button></div>
           <div class="management-error" id="api-keys-error" role="alert"></div>
-          <form class="mcp-editor" id="api-key-form" hidden>
+          <div class="mcp-editor" id="api-key-form" hidden>
             <div class="mcp-editor-heading"><div><h3>生成新 Key</h3><p>名称和有效期均可选。</p></div><button class="icon-button" id="api-key-form-close" type="button" aria-label="关闭表单">×</button></div>
             <div class="mcp-form-grid">
               <label>名称<input id="api-key-name" maxlength="100" autocomplete="off" placeholder="例如 CI automation"></label>
               <label>有效期天数<input id="api-key-expiry" type="number" min="1" step="1" inputmode="numeric" placeholder="留空表示不过期"></label>
             </div>
             <div class="mcp-form-error" id="api-key-form-error" role="alert"></div>
-            <footer><button class="secondary-button" id="api-key-cancel" type="button">取消</button><button class="primary-button" id="api-key-create" type="submit">生成</button></footer>
-          </form>
+            <footer><button class="secondary-button" id="api-key-cancel" type="button">取消</button><button class="primary-button" id="api-key-create" type="button">生成</button></footer>
+          </div>
           <section class="api-key-reveal" id="api-key-reveal" hidden>
             <p class="api-key-warning">请立即复制保存，关闭后不再显示</p>
             <div class="api-key-copy-row"><input id="api-key-raw" readonly aria-label="新 API Key"><button class="secondary-button" id="api-key-copy" type="button">复制</button></div>

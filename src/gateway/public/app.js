@@ -1280,7 +1280,8 @@ async function openMcp() {
 
 function closeApiKeyForm() {
   elements.apiKeyForm.hidden = true;
-  elements.apiKeyForm.reset();
+  elements.apiKeyName.value = '';
+  elements.apiKeyExpiry.value = '';
   elements.apiKeyFormError.textContent = '';
 }
 
@@ -3079,11 +3080,13 @@ elements.apiKeyFormClose.addEventListener('click', closeApiKeyForm);
 elements.apiKeyCancel.addEventListener('click', closeApiKeyForm);
 elements.apiKeyRevealClose.addEventListener('click', hideRevealedApiKey);
 elements.apiKeyCopy.addEventListener('click', () => copyText(elements.apiKeyRaw.value, elements.apiKeyCopy));
-elements.apiKeyForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
+elements.apiKeyCreate.addEventListener('click', async () => {
   elements.apiKeyFormError.textContent = '';
-  if (!elements.apiKeyForm.reportValidity()) return;
   const expiry = elements.apiKeyExpiry.value.trim();
+  if (expiry && (!Number.isInteger(Number(expiry)) || Number(expiry) < 1)) {
+    elements.apiKeyFormError.textContent = '有效期天数必须是不小于 1 的整数';
+    return;
+  }
   elements.apiKeyCreate.disabled = true; elements.apiKeyCreate.textContent = '生成中…';
   try {
     const result = await requestJson('/api/keys', {
