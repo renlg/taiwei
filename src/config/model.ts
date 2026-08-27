@@ -8,7 +8,7 @@ export interface ModelListResult {
   models: string[];
   current: string;
   source: ModelListSource;
-  providers?: Array<{ id: string; name: string; models: ReturnType<typeof providerModels> }>;
+  providers?: Array<{ id: string; name: string; modality?: ProviderConfig['modality']; models: ReturnType<typeof providerModels> }>;
   currentProvider?: string;
 }
 
@@ -72,6 +72,10 @@ export function managedProvider(value: unknown, existing?: ProviderConfig): Prov
   if (!models.some((model) => model.id === defaultModel)) throw new Error('defaultModel must reference a configured model');
   const suppliedKey = typeof candidate.apiKey === 'string' ? candidate.apiKey.trim() : '';
   const keepExistingKey = !suppliedKey || (existing && suppliedKey === maskApiKey(existing.apiKey));
+  const modality = candidate.modality ?? existing?.modality;
+  if (modality !== undefined && !['text', 'image', 'video'].includes(modality)) {
+    throw new Error('modality must be text, image, or video');
+  }
   return {
     id,
     name: requiredString(candidate.name, 'name'),
@@ -80,7 +84,7 @@ export function managedProvider(value: unknown, existing?: ProviderConfig): Prov
     apiKey: keepExistingKey ? existing?.apiKey ?? '' : suppliedKey,
     defaultModel,
     models,
-    ...(candidate.modality ?? existing?.modality ? { modality: candidate.modality ?? existing?.modality } : {}),
+    ...(modality ? { modality } : {}),
   };
 }
 
@@ -123,7 +127,7 @@ export async function resolveModelCatalog(): Promise<ModelListResult> {
   const textProviders = config.providers.filter((provider) => (provider.modality ?? 'text') === 'text');
   return { ...legacy, source: config.providers.length ? 'config' : legacy.source, currentProvider: config.defaultProvider,
     models: config.providers.length ? [] : legacy.models,
-    providers: textProviders.map((provider) => ({ id: provider.id, name: provider.name, models: providerModels(provider) })) };
+    providers: textProviders.map((provider) => ({ id: provider.id, name: provider.name, modality: provider.modality, models: providerModels(provider) })) };
 }
 
 export async function listModels(): Promise<string[]> {

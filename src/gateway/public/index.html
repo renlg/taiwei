@@ -170,7 +170,7 @@
               <div class="model-switcher" id="model-switcher">
                 <button class="model-trigger" id="model-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
                   <span class="model-spark" aria-hidden="true">✦</span>
-                  <span class="model-name" id="model-name">OpenAI compatible</span>
+                  <span class="model-name" id="model-name">模型加载中…</span>
                   <span class="model-chevron" aria-hidden="true">⌄</span>
                 </button>
                 <div class="model-menu" id="model-menu" role="listbox" aria-label="选择模型" hidden>
@@ -376,6 +376,7 @@
         <div class="mcp-form-grid">
           <label>标识 ID<input id="provider-id" maxlength="64" pattern="[a-z0-9-]{1,64}" autocomplete="off" required placeholder="openai"></label>
           <label>类型<select id="provider-type"><option value="openai-compatible">openai-compatible</option></select></label>
+          <label>模态<select id="provider-modality"><option value="text">text</option><option value="image">image</option><option value="video">video</option></select></label>
           <label>显示名称<input id="provider-name" maxlength="100" autocomplete="off" required placeholder="OpenAI"></label>
           <label>默认模型<select id="provider-default-model" required></select></label>
           <label class="mcp-wide">Base URL<input id="provider-base-url" type="url" autocomplete="off" required placeholder="https://api.openai.com/v1"></label>

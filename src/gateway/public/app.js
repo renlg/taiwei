@@ -142,6 +142,7 @@ const elements = {
   providerFormError: $('#provider-form-error'),
   providerId: $('#provider-id'),
   providerType: $('#provider-type'),
+  providerModality: $('#provider-modality'),
   providerName: $('#provider-name'),
   providerBaseUrl: $('#provider-base-url'),
   providerApiKey: $('#provider-api-key'),
@@ -223,7 +224,8 @@ const state = {
   models: [],
   providers: [],
   currentProvider: 'default',
-  currentModel: 'OpenAI compatible',
+  currentModel: '',
+  modelCatalogError: '',
   currentAgent: 'build',
   switchingModel: false,
   contextWindow: 256000,
@@ -1088,6 +1090,7 @@ function openProviderForm(provider) {
   elements.providerId.value = provider?.id || '';
   elements.providerId.readOnly = Boolean(provider);
   elements.providerType.value = 'openai-compatible';
+  elements.providerModality.value = provider?.modality || 'text';
   elements.providerName.value = provider?.name || '';
   elements.providerBaseUrl.value = provider?.baseUrl || '';
   elements.providerApiKey.value = provider?.apiKey || '';
@@ -1105,6 +1108,13 @@ async function refreshModelCatalog() {
   const models = await requestJson('/api/models');
   state.providers = models.providers || [];
   state.models = models.models?.length ? models.models : [];
+  state.modelCatalogError = '';
+  if (!state.providers.some((provider) => provider.models?.length) && !state.models.length) {
+    state.currentModel = '';
+    state.currentProvider = '';
+    renderModels();
+    return;
+  }
   const currentExists = state.providers.some((provider) => provider.id === state.currentProvider
     && provider.models.some((model) => model.id === state.currentModel));
   if (!currentExists) {
@@ -2611,9 +2621,14 @@ function closeUserMenu() {
 }
 
 function renderModels() {
-  elements.model.textContent = state.currentModel;
-  elements.modelTrigger.title = `当前模型：${state.currentModel}`;
+  const hasModels = state.providers.some((provider) => provider.models?.length) || state.models.length > 0;
+  const diagnostic = state.modelCatalogError || (!hasModels ? '当前账号没有可用模型' : '');
+  elements.model.textContent = diagnostic || state.currentModel;
+  elements.modelTrigger.title = diagnostic || `当前模型：${state.currentModel}`;
+  elements.modelError.textContent = diagnostic;
+  elements.modelTrigger.disabled = Boolean(diagnostic);
   elements.modelOptions.replaceChildren();
+  if (diagnostic) return;
   const groups = state.providers.length ? state.providers : [{ id: state.currentProvider, name: 'Default', models: state.models.map((id) => ({ id, displayName: id })) }];
   for (const provider of groups) {
     const models = provider.models.filter((model) => state.role !== 'guest' || model.adminOnly !== true);
@@ -3361,6 +3376,7 @@ elements.providerForm.addEventListener('submit', async (event) => {
   if (!models.length) { elements.providerFormError.textContent = '请至少添加一个模型'; return; }
   const provider = {
     id: elements.providerId.value.trim(), name: elements.providerName.value.trim(), type: elements.providerType.value,
+    modality: elements.providerModality.value,
     baseUrl: elements.providerBaseUrl.value.trim(), apiKey: elements.providerApiKey.value.trim(),
     defaultModel: elements.providerDefaultModel.value, models,
   };
@@ -3726,7 +3742,13 @@ async function loadChat() {
     return;
   }
   try {
-    const modelsRequest = requestJson('/api/models').catch(() => null);
+    const info = state.shareToken ? null : await requestJson('/api/info');
+    if (info) applyRole(info.role || 'admin', info.username || '');
+    const modelsRequest = requestJson('/api/models').catch((error) => {
+      state.modelCatalogError = '模型列表加载失败，请检查配置或刷新';
+      renderModels();
+      throw error;
+    });
     if (state.role === 'guest' || state.shareToken) {
       applyRole('guest', state.username);
       const [sessions, folders, models] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/folders'), modelsRequest]);
@@ -3735,9 +3757,10 @@ async function loadChat() {
       state.folders = folders;
       if (!state.shareToken) {
         state.providers = models?.providers || [];
-        state.models = models?.models?.length ? models.models : [state.currentModel];
-        state.currentModel = models?.current || state.currentModel;
-        state.currentProvider = models?.currentProvider || state.currentProvider;
+        state.models = models?.models || [];
+        state.modelCatalogError = '';
+        state.currentModel = models?.current || '';
+        state.currentProvider = models?.currentProvider || '';
         renderModels();
       } else {
         elements.modelSwitcher.hidden = true;
@@ -3753,7 +3776,7 @@ async function loadChat() {
       elements.input.focus();
       return;
     }
-    const [sessions, folders, info, models] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/folders'), requestJson('/api/info'), modelsRequest]);
+    const [sessions, folders, models] = await Promise.all([requestJson('/api/sessions'), requestJson('/api/folders'), modelsRequest]);
     showChat();
     state.sessions = sessions;
     state.folders = folders;
@@ -3767,12 +3790,12 @@ async function loadChat() {
     state.currentModel = savedModelIsKnown ? lastModel.model : models?.current || info.model || state.currentModel;
     state.currentProvider = savedModelIsKnown ? lastModel.provider || models?.currentProvider || state.currentProvider : models?.currentProvider || state.currentProvider;
     state.providers = models?.providers || [];
+    state.modelCatalogError = '';
     state.contextWindow = info.contextWindow || state.contextWindow;
     state.workspace = info.workspace || '';
     elements.workspaceLabel.textContent = state.workspace;
     elements.workspaceLabel.title = `当前工作区：${state.workspace}`;
-    state.models = models?.models?.length ? models.models : [state.currentModel];
-    if (!state.models.includes(state.currentModel)) state.models.unshift(state.currentModel);
+    state.models = models?.models || [];
     renderModels();
     elements.usernameLabels.forEach((element) => { element.textContent = username; });
     elements.userAvatar.textContent = Array.from(username)[0]?.toUpperCase() || 'U';

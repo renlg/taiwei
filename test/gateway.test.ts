@@ -60,12 +60,14 @@ class MockChat implements ChatBridge {
   messages: string[] = [];
   workspaceRoots: Array<string | undefined> = [];
   guestIds: Array<string | undefined> = [];
+  models: Array<string | undefined> = [];
 
   async run(message: string, sink: ChatSink, history: ChatMessage[] = [], _sessionId?: string, _memory?: MemoryStore, _agentId?: string, _role?: 'admin' | 'guest', _identity?: string, _runtimeSessionId?: string, _providerId?: string, _model?: string, workspaceRoot?: string, _userContent?: import('../src/llm/client.js').ContentBlock[], _tenantIdentity?: import('../src/tools/registry.js').TenantIdentity, guestId?: string): Promise<void> {
     this.messages.push(message);
     this.histories.push(history);
     this.workspaceRoots.push(workspaceRoot);
     this.guestIds.push(guestId);
+    this.models.push(_model);
     for (const event of [
       { type: 'token', text: 'Hello ' },
       { type: 'tool', name: 'read', args: { path: 'README.md' } },
@@ -326,30 +328,38 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
   }
 });
 
-test('gateway hides admin-only models from guests and rejects guest selection', async () => {
+test('gateway enforces role model catalog and repairs a guest session saved with grok', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-admin-only-model-test-'));
   const previousHome = process.env.TAIWEI_HOME;
   process.env.TAIWEI_HOME = directory;
   const config = structuredClone(DEFAULT_CONFIG);
   config.auth = { enabled: true, username: 'admin', password: 'secret' };
   const capabilities = { tools: true, vision: false, reasoning: false, streaming: true, contextWindow: 32_000 };
-  const models = [
-    { id: 'premium', provider: 'main', displayName: 'Premium', capabilities, adminOnly: true },
-    { id: 'public', provider: 'main', displayName: 'Public', capabilities },
+  const textModels = [
+    { id: 'grok', provider: 'main', displayName: 'Grok', capabilities },
+    { id: 'free', provider: 'main', displayName: 'Free', capabilities },
+    { id: 'good', provider: 'main', displayName: 'Good', capabilities },
   ];
+  const imageModels = [{ id: 'image-free', provider: 'images', displayName: 'Image Free', capabilities }];
+  const videoModels = [{ id: 'video-pro', provider: 'videos', displayName: 'Video Pro', capabilities }];
   const modelState: GatewayModelState = {
-    getCurrentModel: async () => 'premium',
+    getCurrentModel: async () => 'grok',
     resolveModels: async () => ({
-      models: ['premium', 'public'], current: 'premium', currentProvider: 'main', source: 'config',
-      providers: [{ id: 'main', name: 'Main', models }],
+      models: ['grok', 'free', 'good', 'image-free', 'video-pro'], current: 'grok', currentProvider: 'main', source: 'config',
+      providers: [
+        { id: 'main', name: 'Main', modality: 'text', models: textModels },
+        { id: 'images', name: 'Images', modality: 'image', models: imageModels },
+        { id: 'videos', name: 'Videos', modality: 'video', models: videoModels },
+      ],
     }),
     setCurrentModel: async () => {},
   };
   const authSessions = new AuthSessionStore(join(directory, 'gateway-sessions.json'));
   const guestToken = await authSessions.create('guest-user', 'guest');
   const adminToken = await authSessions.create('admin', 'admin');
+  const chat = new MockChat();
   const server = createGatewayServer({
-    chat: new MockChat(), auth: config.auth, authSessions, modelState,
+    chat, auth: config.auth, authSessions, modelState,
     configState: { load: async () => structuredClone(config), save: async () => {} },
     log: () => {},
   });
@@ -361,25 +371,46 @@ test('gateway hides admin-only models from guests and rejects guest selection', 
     const guestCatalog = await (await fetch(`${baseUrl}/api/models`, { headers: guestHeaders })).json() as {
       models: string[]; current: string; currentProvider: string; providers: Array<{ models: Array<{ id: string; adminOnly?: boolean }> }>;
     };
-    assert.deepEqual(guestCatalog.models, ['public']);
-    assert.equal(guestCatalog.current, 'public');
+    assert.deepEqual(guestCatalog.models, ['free', 'good']);
+    assert.equal(guestCatalog.current, 'free');
     assert.equal(guestCatalog.currentProvider, 'main');
-    assert.deepEqual(guestCatalog.providers[0].models.map((model) => model.id), ['public']);
-    assert.doesNotMatch(JSON.stringify(guestCatalog), /premium/);
+    assert.deepEqual(guestCatalog.providers.flatMap((provider) => provider.models.map((model) => model.id)), ['free', 'good']);
+    assert.doesNotMatch(JSON.stringify(guestCatalog), /grok|image-free|video-pro/);
 
     const adminCatalog = await (await fetch(`${baseUrl}/api/models`, { headers: adminHeaders })).json() as {
-      providers: Array<{ models: Array<{ id: string }> }>;
+      models: string[]; providers: Array<{ models: Array<{ id: string }> }>;
     };
-    assert.deepEqual(adminCatalog.providers[0].models.map((model) => model.id), ['premium', 'public']);
+    assert.deepEqual(adminCatalog.models, ['grok', 'free', 'good']);
+    assert.deepEqual(adminCatalog.providers.flatMap((provider) => provider.models.map((model) => model.id)), ['grok', 'free', 'good']);
+    assert.doesNotMatch(JSON.stringify(adminCatalog), /image-free|video-pro/);
 
     for (const path of ['/api/model', '/api/sessions']) {
       const denied = await fetch(`${baseUrl}${path}`, {
         method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'main', model: 'premium' }),
+        body: JSON.stringify({ provider: 'main', model: 'grok' }),
       });
       assert.equal(denied.status, 403, path);
       assert.deepEqual(await denied.json(), { error: 'Guest cannot select this model' });
     }
+
+    const created = await (await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'main', model: 'free' }),
+    })).json() as { id: string };
+    const guestStore = SessionStore.forGuest(guestIdForUsername('guest-user'));
+    const saved = await guestStore.get(created.id);
+    assert.ok(saved);
+    saved.currentModel = 'grok';
+    saved.providerId = 'main';
+    await guestStore.save(saved);
+    const turn = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: created.id, message: 'hello' }),
+    });
+    assert.equal(turn.status, 200);
+    await turn.text();
+    assert.equal(chat.models.at(-1), 'free');
+    assert.equal((await guestStore.get(created.id))?.currentModel, 'free');
   } finally {
     await closeGateway(server);
     if (previousHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = previousHome;

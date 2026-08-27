@@ -138,27 +138,46 @@ function modelForSelection(listed: ModelListResult, providerId: string | undefin
   return listed.providers?.find((provider) => provider.id === providerId)?.models.find((model) => model.id === modelId);
 }
 
+type CatalogProvider = NonNullable<ModelListResult['providers']>[number];
+const GUEST_MODEL_IDS = new Set(['free', 'good']);
+
+export function modelAllowedForRole(role: 'admin' | 'guest', provider: CatalogProvider | undefined, modelId: string): boolean {
+  if (provider && (provider.modality ?? 'text') !== 'text') return false;
+  if (role === 'guest' && !GUEST_MODEL_IDS.has(modelId)) return false;
+  return provider ? provider.models.some((model) => model.id === modelId) : true;
+}
+
+function firstAllowedModel(listed: ModelListResult, role: 'admin' | 'guest'): { model: string; provider?: string } | undefined {
+  for (const provider of listed.providers ?? []) {
+    const model = provider.models.find((candidate) => modelAllowedForRole(role, provider, candidate.id));
+    if (model) return { model: model.id, provider: provider.id };
+  }
+  const model = listed.models.find((candidate) => modelAllowedForRole(role, undefined, candidate));
+  return model ? { model } : undefined;
+}
+
 function catalogForRole(listed: ModelListResult, role: 'admin' | 'guest'): ModelListResult {
-  if (role === 'admin') return listed;
-  const adminOnlyIds = new Set(listed.providers?.flatMap((provider) => provider.models
-    .filter((model) => model.adminOnly === true).map((model) => model.id)) ?? []);
-  const models = listed.models.filter((model) => !adminOnlyIds.has(model));
+  const providerModelIds = new Set(listed.providers?.flatMap((provider) => provider.models.map((model) => model.id)) ?? []);
+  const models = listed.models.filter((model) => modelAllowedForRole(role, undefined, model)
+    && (!providerModelIds.has(model) || listed.providers?.some((provider) => modelAllowedForRole(role, provider, model))));
   const providers = listed.providers?.map((provider) => ({
     ...provider,
-    models: provider.models.filter((model) => model.adminOnly !== true),
+    models: provider.models.filter((model) => modelAllowedForRole(role, provider, model.id)),
   })).filter((provider) => provider.models.length > 0);
-  if (!listed.providers) return { ...listed, models };
+  if (!listed.providers) {
+    return { ...listed, models, current: models.includes(listed.current) ? listed.current : models[0] ?? '' };
+  }
 
   const currentProvider = providers?.find((provider) => provider.id === listed.currentProvider);
   if (currentProvider?.models.some((model) => model.id === listed.current)) return { ...listed, models, providers };
 
-  const fallbackProvider = providers?.[0];
+  const fallback = firstAllowedModel({ ...listed, models, providers }, role);
   return {
     ...listed,
     models,
     providers,
-    current: fallbackProvider?.models[0]?.id ?? models[0] ?? '',
-    currentProvider: fallbackProvider?.id,
+    current: fallback?.model ?? '',
+    currentProvider: fallback?.provider,
   };
 }
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
@@ -374,6 +393,7 @@ function guestPublicFolder({ path: _path, dirName: _dirName, ...folder }: Gatewa
 }
 
 export function guestRouteAllowed(method: string, pathname: string): boolean {
+  if (method === 'GET' && pathname === '/api/info') return true;
   if (method === 'POST' && pathname === '/api/chat') return true;
   if (method === 'POST' && pathname === '/api/upload') return true;
   if (method === 'POST' && pathname === '/api/stop') return true;
@@ -1982,8 +2002,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const selectedProvider = listed.providers?.find((item) => item.id === provider);
         const selectedModel = modelForSelection(listed, provider, model);
         const known = selectedProvider ? Boolean(selectedModel) : listed.models.includes(model);
-        if (authenticatedRole === 'guest' && selectedModel?.adminOnly === true) {
-          throw new HttpError(403, 'Guest cannot select this model');
+        if (!modelAllowedForRole(authenticatedRole, selectedProvider, model)) {
+          throw new HttpError(403, `${authenticatedRole === 'guest' ? 'Guest' : 'This account'} cannot select this model`);
         }
         if (!known && listed.source !== 'fallback') {
           json(response, 400, { error: `Unknown model: ${model}`, models: listed.models });
@@ -2022,8 +2042,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           const selectedProvider = listed.providers?.find((item) => item.id === provider);
           const selectedModel = modelForSelection(listed, provider, model);
           const known = selectedProvider ? Boolean(selectedModel) : listed.models.includes(model);
-          if (authenticatedRole === 'guest' && selectedModel?.adminOnly === true) {
-            throw new HttpError(403, 'Guest cannot select this model');
+          if (!modelAllowedForRole(authenticatedRole, selectedProvider, model)) {
+            throw new HttpError(403, `${authenticatedRole === 'guest' ? 'Guest' : 'This account'} cannot select this model`);
           }
           if (!known && listed.source !== 'fallback') throw new HttpError(400, `Unknown model: ${model}`);
         } else if (body.provider !== undefined) throw new HttpError(400, 'provider requires model');
@@ -2226,20 +2246,30 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           }
           if (missing.length) throw new HttpError(400, `Unknown skills: ${[...new Set(missing)].join(', ')}`);
         }
-        let runProviderId = session.providerId;
-        const runModel = typeof body.model === 'string'
+        const listedModels = await modelState.resolveModels();
+        let runProviderId = typeof body.provider === 'string' ? body.provider.trim() : session.providerId ?? listedModels.currentProvider;
+        let runModel = typeof body.model === 'string'
           ? body.model.trim()
           : session.currentModel ?? await modelState.getCurrentModel();
-        if (body.model !== undefined || body.provider !== undefined) {
-          const listedModels = await modelState.resolveModels();
-          runProviderId = typeof body.provider === 'string' ? body.provider.trim() : session.providerId ?? listedModels.currentProvider;
-          const selectedProvider = listedModels.providers?.find((item) => item.id === runProviderId);
-          const selectedModel = modelForSelection(listedModels, runProviderId, runModel);
-          const known = selectedProvider ? Boolean(selectedModel) : listedModels.models.includes(runModel);
-          if (!known && listedModels.source !== 'fallback') {
-            json(response, 400, { error: `Unknown model: ${runModel}`, models: listedModels.models });
-            return;
+        const selectedProvider = listedModels.providers?.find((item) => item.id === runProviderId);
+        const selectedModel = modelForSelection(listedModels, runProviderId, runModel);
+        const known = selectedProvider ? Boolean(selectedModel) : listedModels.models.includes(runModel);
+        if (!known && listedModels.source !== 'fallback') {
+          json(response, 400, { error: `Unknown model: ${runModel}`, models: listedModels.models });
+          return;
+        }
+        if (!modelAllowedForRole(chatRole, selectedProvider, runModel)) {
+          if (body.model !== undefined || body.provider !== undefined) {
+            throw new HttpError(403, `${chatRole === 'guest' ? 'Guest' : 'This account'} cannot select this model`);
           }
+          const fallback = firstAllowedModel(listedModels, chatRole);
+          if (!fallback) throw new HttpError(403, '当前账号没有可用模型');
+          runModel = fallback.model;
+          runProviderId = fallback.provider;
+          session.currentModel = runModel;
+          session.providerId = runProviderId;
+          session.updatedAt = new Date().toISOString();
+          await activeSessions.save(session);
         }
         const message = body.message.trim();
         const config = await configState.load();

@@ -129,6 +129,11 @@ test('gateway routes an authenticated tenant workspace to the OS account home', 
     const token = await authSessions.create('alice', 'guest');
     server = createGatewayServer({
       chat, auth: config.auth, authSessions, tenantAccounts: service, tenantHomeRoot: homeRoot,
+      modelState: {
+        getCurrentModel: async () => 'free',
+        resolveModels: async () => ({ models: ['free'], current: 'free', source: 'config' }),
+        setCurrentModel: async () => {},
+      },
       configState: { load: async () => structuredClone(config), save: async () => {} }, log: () => {},
     });
     const port = await listenGateway(server, '127.0.0.1', 0);
