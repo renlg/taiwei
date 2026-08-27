@@ -13,11 +13,6 @@ interface MediaResponse {
   message?: unknown;
 }
 
-interface SearchResult {
-  title: string;
-  snippet: string;
-}
-
 class MediaHttpError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -101,75 +96,38 @@ async function configuredVideoModels(): Promise<string[]> {
   }
 }
 
-async function searchSerper(query: string, apiKey: string): Promise<SearchResult[]> {
-  const response = await fetch('https://google.serper.dev/search', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
-    body: JSON.stringify({ q: query, num: 3 }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`Serper search failed: HTTP ${response.status}`);
-  const data = await response.json() as { organic?: Array<{ title?: string; snippet?: string }> };
-  return (data.organic ?? []).slice(0, 3).map((item) => ({ title: item.title ?? '', snippet: item.snippet ?? '' }));
-}
-
-async function searchTavily(query: string, apiKey: string): Promise<SearchResult[]> {
-  const response = await fetch('https://api.tavily.com/search', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ api_key: apiKey, query, max_results: 3 }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`Tavily search failed: HTTP ${response.status}`);
-  const data = await response.json() as { results?: Array<{ title?: string; content?: string }> };
-  return (data.results ?? []).slice(0, 3).map((item) => ({ title: item.title ?? '', snippet: item.content ?? '' }));
-}
-
-function searchKeywords(errorText: string): string {
-  return errorText
-    .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/[{}\[\]"'`,:;]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 180);
-}
-
-async function searchModelUsage(model: string, errorText: string, context?: ToolContext): Promise<string> {
-  const config = await loadConfig();
-  const webSearchConfig = config.tools?.web_search ?? {};
-  const providerValue = context?.toolConfig?.provider ?? webSearchConfig.provider;
-  const provider = typeof providerValue === 'string' ? providerValue : 'serper';
-  const contextKey = context?.toolConfig?.apiKey;
-  const configuredKey = typeof contextKey === 'string' && contextKey.trim()
-    ? contextKey.trim()
-    : typeof webSearchConfig.apiKey === 'string' ? webSearchConfig.apiKey.trim() : '';
-  const apiKey = configuredKey || process.env.TAIWEI_WEB_SEARCH_API_KEY || '';
-  if (!apiKey) return '';
-  const query = `${model} ${searchKeywords(errorText)} API parameters 用法`;
-  const results = provider === 'tavily'
-    ? await searchTavily(query, apiKey)
-    : await searchSerper(query, apiKey);
-  return results
-    .filter((item) => item.title.trim() || item.snippet.trim())
-    .map((item, index) => `${index + 1}. ${item.title.trim()}\n${item.snippet.trim()}`.trim())
-    .join('\n');
-}
-
 function isUpstream4xx(error: unknown): boolean {
   if (error instanceof MediaHttpError) return error.status >= 400 && error.status < 500;
   const message = error instanceof Error ? error.message : String(error);
   return /上游服务返回 HTTP 4\d\d|(?:^|\D)(?:400|401|402|403|404|405|406|407|408|409|410|411|412|413|414|415|416|417|418|421|422|423|424|425|426|428|429|431|451)(?:\D|$)/.test(message);
 }
 
+// 各图片/视频模型支持的样式（参数规格），失败提示时直接展示给用户，无需联网查询。
+const MODEL_STYLES: Array<{ match: (model: string) => boolean; hint: string }> = [
+  {
+    match: (model) => model.startsWith('grok-imagine'),
+    hint: 'grok-imagine 样式：用 aspect_ratio（2:1 / 20:9 / 19.5:9 / 16:9 / 4:3 / 3:2 / 1:1 / 2:3 / 3:4 / 9:16 / 9:19.5 / 9:20 / 1:2）+ resolution（1k 标准 / 2k 高清）控制尺寸，不用 size；quality 仅支持 low / medium。',
+  },
+  {
+    match: (model) => model.startsWith('agnes-image') || model === 'image-free' || model.startsWith('nano-banana'),
+    hint: '该图片模型样式：OpenAI 兼容 size 指定尺寸（如 1024x1024，宽高须为 32 的整数倍、长边不超过 2048、总像素约 400 万内）；quality 支持 low / medium / high；n 一次最多 4 张；可选 image 参考图。',
+  },
+  {
+    match: (model) => model.startsWith('agnes-video') || model === 'video-free' || model === 'free-video',
+    hint: '该视频模型样式：duration 1-15 秒；size 支持 480p / 720p / 1080p / 4k 或 WxH（如 1280x720）；quality 别名 low→480p、medium→720p、high→1080p（同时给 size 时以 size 为准）；可选 image 首帧/参考图做图生视频。',
+  },
+];
+
+function modelStyleHint(model: string): string | null {
+  const entry = MODEL_STYLES.find((item) => item.match(model));
+  return entry ? entry.hint : null;
+}
+
 async function mediaFailure(prefix: string, model: string, error: unknown, context: ToolContext): Promise<string> {
   const message = error instanceof Error ? error.message : String(error);
   if (!isUpstream4xx(error)) return `${prefix}: ${message}`;
-  try {
-    const usage = await searchModelUsage(model, message, context);
-    return usage ? `${prefix}: ${message}\n\n[模型用法参考（自动搜索）]\n${usage}` : `${prefix}: ${message}`;
-  } catch {
-    return `${prefix}: ${message}`;
-  }
+  const hint = modelStyleHint(model);
+  return hint ? `${prefix}: ${message}\n\n${hint}` : `${prefix}: ${message}`;
 }
 
 function extraPayload(args: Record<string, unknown>, standardFields: ReadonlySet<string>): Record<string, unknown> {
