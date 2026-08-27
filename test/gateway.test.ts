@@ -505,8 +505,9 @@ test('guest uploads are allowed, size-limited, and use identity-isolated OSS key
   try {
     assert.equal(guestRouteAllowed('POST', '/api/upload'), true);
     assert.equal(guestRouteAllowed('GET', '/api/skills'), true);
-    assert.equal(guestRouteAllowed('GET', '/api/user-skills'), true);
-    assert.equal(guestRouteAllowed('DELETE', '/api/user-skills/guest-alice/skill-name'), true);
+    assert.equal(guestRouteAllowed('POST', '/api/skills/install'), true);
+    assert.equal(guestRouteAllowed('POST', '/api/skills/alpha'), true);
+    assert.equal(guestRouteAllowed('DELETE', '/api/skills/alpha'), true);
     assert.equal(guestRouteAllowed('POST', '/api/skills'), false);
 
     const guestUpload = await fetch(`${baseUrl}/api/upload`, {
@@ -596,7 +597,7 @@ test('gateway lists skills and safely manages knowledge files', async () => {
   const baseUrl = `http://127.0.0.1:${port}`;
   try {
     const skills = await (await fetch(`${baseUrl}/api/skills`)).json();
-    assert.deepEqual(skills, { skills: [{ name: 'review', description: 'Review code', enabled: true }] });
+    assert.deepEqual(skills, { skills: [{ name: 'review', description: 'Review code', enabled: true, installed: false, source: 'system' }] });
     const detail = await (await fetch(`${baseUrl}/api/skills/review`)).json() as { content: string };
     assert.match(detail.content, /name: review/);
     assert.equal((await fetch(`${baseUrl}/api/skills/missing`)).status, 404);
@@ -725,7 +726,7 @@ test('gateway skill and tool APIs validate and persist merged enable/config upda
     assert.deepEqual(await disabledSkill.json(), { ok: true, enabled: false });
     assert.deepEqual(config.skillsDisabled, ['review']);
     assert.deepEqual(await (await fetch(`${baseUrl}/api/skills`)).json(), {
-      skills: [{ name: 'review', description: 'Review code', enabled: false }],
+      skills: [{ name: 'review', description: 'Review code', enabled: false, installed: false, source: 'system' }],
     });
 
     const listed = await (await fetch(`${baseUrl}/api/tools`)).json() as { tools: Array<{ name: string; enabled: boolean; configurable: boolean; config: { limit: number } }> };

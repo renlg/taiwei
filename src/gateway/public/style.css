@@ -212,23 +212,9 @@ body.guest-mode .admin-only { display: none !important; }
 .skill-item-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .skill-store-sidebar { margin-top: 4px; }
 .resource-section.skill-store-sidebar .sidebar-sections { display: grid; }
-.skill-store-card { width: min(780px, calc(100vw - 28px)); }
-.skill-store-toolbar { margin: 12px 0; }
-.skill-store-toolbar input { width: 100%; min-height: 40px; padding: 9px 12px; border: 1px solid var(--border-strong); border-radius: 9px; color: var(--text); background: var(--bg); outline: 0; }
-.skill-store-toolbar input:focus { border-color: var(--accent); }
-.skill-store-list { min-height: 180px; max-height: min(56vh, 560px); overflow: auto; }
-.skill-store-item { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-soft); }
-.skill-store-item + .skill-store-item { margin-top: 8px; }
-.skill-store-item.disabled { opacity: .65; }
-.skill-store-item-content { min-width: 0; }
-.skill-store-item-content p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
-.skill-store-item-heading { display: flex; align-items: center; gap: 8px; }
-.skill-store-badge { padding: 2px 7px; border-radius: 999px; color: var(--muted); background: var(--surface); font-size: 11px; }
-.skill-store-badge.installed { color: var(--accent); background: var(--accent-soft); }
-.skill-store-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
-.skill-store-actions button { min-height: 34px; padding: 6px 11px; }
-.skill-store-pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
-.skill-store-pagination span { min-width: 140px; text-align: center; color: var(--muted); font-size: 13px; }
+.skill-item-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.skill-item-actions button { min-height: 32px; padding: 5px 10px; font-size: 12px; }
+.skill-item.installed { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
 .skill-select { min-width: 0; flex: 1; padding: 0; border: 0; color: inherit; background: transparent; cursor: pointer; text-align: left; }
 .skill-select strong { display: block; font-size: 13px; }
 .skill-status { display: block; margin-top: 3px; color: var(--faint); font-size: 9.5px; font-weight: 500; }

@@ -36,7 +36,7 @@ async function catalog(directory: string): Promise<Skill[]> {
   return skills;
 }
 
-test('skill store catalogs with server pagination/filtering and installs idempotently per user', async () => {
+test('merged skill API: role-aware list with installed flag, install, toggle, and delete for guests', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-skill-store-'));
   const skills = await catalog(directory);
   const userSkills = new UserSkillStore(join(directory, 'user-skills'));
@@ -71,35 +71,39 @@ test('skill store catalogs with server pagination/filtering and installs idempot
   const post = (path: string, body: unknown, headers: Record<string, string> = {}) => fetch(`${baseUrl}${path}`, {
     method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
+  const guestHeaders = { authorization: `Bearer ${guestToken}` };
   try {
-    const first = await (await fetch(`${baseUrl}/api/skill-store?page=1&pageSize=2`)).json() as { items: Array<{ name: string }>; total: number; totalPages: number };
-    assert.deepEqual(first.items.map((item) => item.name), ['alpha', 'beta']);
-    assert.equal(first.total, 3);
-    assert.equal(first.totalPages, 2);
-    const filtered = await (await fetch(`${baseUrl}/api/skill-store?q=NEEDLE&pageSize=1000`)).json() as { items: Array<{ name: string }>; pageSize: number };
-    assert.deepEqual(filtered.items.map((item) => item.name), ['beta']);
-    assert.equal(filtered.pageSize, 100);
+    // admin sees full list without installed flags
+    const adminList = await (await fetch(`${baseUrl}/api/skills`)).json() as { skills: Array<{ name: string; installed: boolean }> };
+    assert.deepEqual(adminList.skills.map((skill) => skill.name), ['alpha', 'beta', 'gamma']);
+    assert.equal(adminList.skills.every((skill) => skill.installed === false), true);
 
-    assert.deepEqual(await (await post('/api/skill-store/install', { name: 'alpha' })).json(), { ok: true, installed: true, created: true });
-    assert.deepEqual(await (await post('/api/skill-store/install', { name: 'alpha' })).json(), { ok: true, installed: true, created: false });
-    assert.equal((await userSkills.list('admin')).length, 1);
-
-    const guestHeaders = { authorization: `Bearer ${guestToken}` };
-    const guestInstall = await post('/api/skill-store/install', { name: 'alpha' }, guestHeaders);
-    assert.equal(guestInstall.status, 200);
+    // guest installs alpha idempotently
+    assert.deepEqual(await (await post('/api/skills/install', { name: 'alpha' }, guestHeaders)).json(), { ok: true, installed: true, created: true });
+    assert.deepEqual(await (await post('/api/skills/install', { name: 'alpha' }, guestHeaders)).json(), { ok: true, installed: true, created: false });
     assert.equal((await userSkills.list(guestOwner)).length, 1);
-    assert.equal((await userSkills.list('admin')).length, 1);
-    const guestList = await (await fetch(`${baseUrl}/api/skill-store?q=alpha`, { headers: guestHeaders })).json() as { items: Array<{ installed: boolean }> };
-    assert.equal(guestList.items[0]?.installed, true);
-    const disabled = await post('/api/skill-store/alpha/state', { enabled: false }, guestHeaders);
-    assert.deepEqual(await disabled.json(), { ok: true, enabled: false });
-    assert.equal(await new UserSkillStateStore(join(directory, 'skill-states')).isEnabled(guestOwner, 'alpha'), false);
+    // admin cannot install (no personal dir concept)
+    assert.equal((await post('/api/skills/install', { name: 'alpha' })).status, 403);
+
+    // guest list shows installed flag
+    const guestList = await (await fetch(`${baseUrl}/api/skills`, { headers: guestHeaders })).json() as { skills: Array<{ name: string; installed: boolean; enabled: boolean }> };
+    const alpha = guestList.skills.find((skill) => skill.name === 'alpha');
+    assert.equal(alpha?.installed, true);
+    assert.equal(alpha?.enabled, true);
+
+    // guest toggles own installed skill
+    assert.deepEqual(await (await post('/api/skills/alpha', { enabled: false }, guestHeaders)).json(), { ok: true, enabled: false });
+    assert.equal(await states.isEnabled(guestOwner, 'alpha'), false);
     assert.equal(await states.isEnabled('admin', 'alpha'), true);
-    assert.equal((await post('/api/skill-store/beta/state', { enabled: false }, guestHeaders)).status, 404);
-    const removed = await fetch(`${baseUrl}/api/skill-store/alpha`, { method: 'DELETE', headers: guestHeaders });
+    // guest cannot toggle a non-installed skill
+    assert.equal((await post('/api/skills/beta', { enabled: false }, guestHeaders)).status, 404);
+
+    // guest deletes own installed skill
+    const removed = await fetch(`${baseUrl}/api/skills/alpha`, { method: 'DELETE', headers: guestHeaders });
     assert.deepEqual(await removed.json(), { ok: true, deleted: true });
     assert.equal((await userSkills.list(guestOwner)).length, 0);
-    assert.equal((await userSkills.list('admin')).length, 1);
+    // admin cannot delete (no personal dir concept)
+    assert.equal((await fetch(`${baseUrl}/api/skills/alpha`, { method: 'DELETE' })).status, 403);
   } finally {
     await closeGateway(server);
     await rm(directory, { recursive: true, force: true });
