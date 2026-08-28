@@ -13,7 +13,7 @@ import { openSse, sendSse } from './sse.js';
 import { applyDefaultProvider, getCurrentModel, managedProvider, publicProvider, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
 import { DEFAULT_CONFIG, expandHome, loadConfig, resolveContextWindow, resolveToolSettings, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
 import { hashPassword, isScryptPassword, verifyPassword } from '../config/password.js';
-import { getPaths, guestIdForUsername } from '../util/paths.js';
+import { getPaths, guestIdForUsername, validateUserSkillOwner } from '../util/paths.js';
 import { DEFAULT_DANGER_PATTERNS } from '../security/commands.js';
 import { ConfirmationBroker } from './confirmations.js';
 import { HOOK_EVENTS, HookRunner, type HookCommands, type HookEvent } from '../hooks/runner.js';
@@ -105,7 +105,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '75';
+const STATIC_ASSET_VERSION = '77';
 
 function contentWithTurnError(content: string, message: string): string {
   const error = `[错误] ${message || '未知错误'}`;
@@ -408,6 +408,7 @@ export function guestRouteAllowed(method: string, pathname: string): boolean {
   if (method === 'POST' && pathname === '/api/skills/install') return true;
   if ((method === 'POST' || method === 'DELETE') && /^\/api\/skills\/[^/]+$/.test(pathname)) return true;
   if (method === 'GET' && /^\/api\/skills\/[^/]+$/.test(pathname)) return true;
+  if ((method === 'GET' || method === 'POST' || method === 'DELETE') && /^\/api\/user-skills(\/[^/]+(\/[^/]+)?)?$/.test(pathname)) return true;
   if (method === 'GET' && pathname === '/api/auth/gitea-user') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/deployments') return true;
   if (method === 'GET' && pathname === '/api/deployments/doctor') return true;
@@ -1732,6 +1733,52 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         catch { throw new HttpError(404, `Skill not found: ${name}`); }
         const saved = await userSkillStore.save(skillStoreOwner, name, await readFile(skill.path, 'utf8'));
         json(response, 200, { ok: true, installed: true, created: saved.created });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/user-skills') {
+        const owner = authenticatedRole === 'guest' ? guestId : 'admin';
+        if (!owner) throw new HttpError(403, 'Guest skill owner is unavailable');
+        const skills = await userSkillStore.list(owner);
+        const disabled = await userSkillStateStore.disabled(owner);
+        json(response, 200, { skills: skills
+          .map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            owner: skill.owner,
+            enabled: !disabled.has(skill.name),
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name)) });
+        return;
+      }
+      const userSkillRoute = pathname.match(/^\/api\/user-skills\/([^/]+)\/([^/]+)$/);
+      if (userSkillRoute && (method === 'POST' || method === 'DELETE')) {
+        const myOwner = authenticatedRole === 'guest' ? guestId : 'admin';
+        if (!myOwner) throw new HttpError(403, 'Guest skill owner is unavailable');
+        let owner: string;
+        let name: string;
+        try {
+          owner = validateUserSkillOwner(decodeURIComponent(userSkillRoute[1]));
+          name = validateUserSkillName(decodeURIComponent(userSkillRoute[2]));
+        } catch (error) {
+          throw new HttpError(400, error instanceof URIError ? '蒸馏技能路径编码无效' : (error as Error).message);
+        }
+        if (owner !== myOwner) throw new HttpError(403, '无权操作其他用户的蒸馏技能');
+        if (method === 'DELETE') {
+          const deleted = await userSkillStore.delete(owner, name);
+          if (!deleted) throw new HttpError(404, '蒸馏技能不存在');
+          await userSkillStateStore.remove(owner, name);
+          json(response, 200, { ok: true, deleted: true });
+          return;
+        }
+        const body = await readJson(request) as { enabled?: unknown };
+        if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be boolean');
+        try { await userSkillStore.read(owner, name); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new HttpError(404, '蒸馏技能不存在');
+          throw error;
+        }
+        await userSkillStateStore.setEnabled(owner, name, body.enabled);
+        json(response, 200, { ok: true, enabled: body.enabled });
         return;
       }
       const skillRoute = pathname.match(/^\/api\/skills\/([^/]+)$/);

@@ -71,6 +71,7 @@ const elements = {
   skillsModal: $('#skills-modal'),
   skillsClose: $('#skills-close'),
   skillsError: $('#skills-error'),
+  skillTabs: document.querySelectorAll('[data-skill-tab]'),
   skillList: $('#skill-list'),
   skillDetail: $('#skill-detail'),
   knowledgeOpen: $('#knowledge-open'),
@@ -233,6 +234,7 @@ const state = {
   attachments: [],
   pendingSkills: [],
   skillMenuOpen: false,
+  skillTab: 'system',
   skillMenuItems: [],
   skillMenuIndex: 0,
   workspace: '',
@@ -895,15 +897,10 @@ async function showSkillDetail(name, button) {
   }
 }
 
-async function loadSkills() {
-  skillDetailRequest += 1;
-  skillDetailController?.abort();
-  skillDetailController = null;
-  elements.skillsError.textContent = '';
-  renderResourceEmpty(elements.skillList, '加载中…');
-  renderResourceEmpty(elements.skillDetail, '选择一个技能查看详情');
+async function loadSystemSkills() {
   try {
     const { skills } = await requestJson('/api/skills');
+    if (state.skillTab !== 'system') return;
     if (!skills.length) {
       renderResourceEmpty(elements.skillList, '暂无技能, 将 SKILL.md 放入 ~/.taiwei/skills/<name>/ 目录');
       return;
@@ -979,9 +976,76 @@ async function loadSkills() {
       elements.skillList.append(item);
     });
   } catch (error) {
+    if (state.skillTab !== 'system') return;
     elements.skillsError.textContent = error.message;
     renderResourceEmpty(elements.skillList, '技能加载失败');
   }
+}
+
+async function loadDistilledSkills() {
+  try {
+    const { skills } = await requestJson('/api/user-skills');
+    if (state.skillTab !== 'distilled') return;
+    if (!skills.length) {
+      renderResourceEmpty(elements.skillList, '暂无蒸馏技能');
+      return;
+    }
+    elements.skillList.replaceChildren();
+    skills.forEach((skill) => {
+      const item = document.createElement('article');
+      item.className = `skill-item${skill.enabled ? '' : ' disabled'}`;
+      const top = document.createElement('div'); top.className = 'skill-item-top';
+      const summary = document.createElement('div'); summary.className = 'skill-select';
+      const name = document.createElement('strong'); name.textContent = skill.name;
+      const owner = document.createElement('small'); owner.className = 'skill-status'; owner.textContent = `owner: ${skill.owner}`;
+      summary.append(name, owner);
+      const actions = document.createElement('div'); actions.className = 'skill-item-actions';
+      const toggleLabel = document.createElement('label'); toggleLabel.className = 'mcp-switch'; toggleLabel.title = skill.enabled ? '点击禁用' : '点击启用';
+      const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = skill.enabled;
+      toggle.setAttribute('aria-label', `${skill.enabled ? '禁用' : '启用'} ${skill.owner}/${skill.name}`);
+      const track = document.createElement('span'); toggleLabel.append(toggle, track);
+      toggle.addEventListener('change', async () => {
+        toggle.disabled = true; elements.skillsError.textContent = '';
+        try {
+          await requestJson(`/api/user-skills/${encodeURIComponent(skill.owner)}/${encodeURIComponent(skill.name)}`, {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: toggle.checked }),
+          });
+          showToast(`${skill.name} 已${toggle.checked ? '启用' : '禁用'}`);
+          await loadDistilledSkills();
+        } catch (error) { toggle.checked = !toggle.checked; toggle.disabled = false; elements.skillsError.textContent = error.message; }
+      });
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'secondary-button danger-button'; remove.textContent = '删除';
+      remove.addEventListener('click', async () => {
+        if (!window.confirm(`确定删除蒸馏技能“${skill.owner}/${skill.name}”及其磁盘文件吗？`)) return;
+        remove.disabled = true; elements.skillsError.textContent = '';
+        try {
+          await requestJson(`/api/user-skills/${encodeURIComponent(skill.owner)}/${encodeURIComponent(skill.name)}`, { method: 'DELETE' });
+          showToast(`${skill.name} 已删除`);
+          await loadDistilledSkills();
+        } catch (error) { remove.disabled = false; elements.skillsError.textContent = error.message; }
+      });
+      actions.append(toggleLabel, remove);
+      top.append(summary, actions);
+      const description = document.createElement('p'); description.className = 'skill-description'; description.textContent = skill.description;
+      item.append(top, description);
+      elements.skillList.append(item);
+    });
+  } catch (error) {
+    if (state.skillTab !== 'distilled') return;
+    elements.skillsError.textContent = error.message;
+    renderResourceEmpty(elements.skillList, '蒸馏技能加载失败');
+  }
+}
+
+async function loadSkills() {
+  skillDetailRequest += 1;
+  skillDetailController?.abort();
+  skillDetailController = null;
+  elements.skillsError.textContent = '';
+  renderResourceEmpty(elements.skillList, '加载中…');
+  renderResourceEmpty(elements.skillDetail, state.skillTab === 'system' ? '选择一个技能查看详情' : '在左侧管理蒸馏技能');
+  if (state.skillTab === 'distilled') await loadDistilledSkills();
+  else await loadSystemSkills();
 }
 
 async function openSkills() {
@@ -3229,6 +3293,17 @@ elements.settingsOpen.addEventListener('click', openSettings);
 elements.settingsClose.addEventListener('click', () => elements.settingsModal.close());
 elements.skillsOpen.addEventListener('click', openSkills);
 elements.skillsClose.addEventListener('click', () => elements.skillsModal.close());
+elements.skillTabs.forEach((tab) => tab.addEventListener('click', async () => {
+  const nextTab = tab.dataset.skillTab;
+  if (!nextTab || nextTab === state.skillTab) return;
+  state.skillTab = nextTab;
+  elements.skillTabs.forEach((item) => {
+    const selected = item === tab;
+    item.classList.toggle('active', selected);
+    item.setAttribute('aria-selected', String(selected));
+  });
+  await loadSkills();
+}));
 elements.knowledgeOpen.addEventListener('click', openKnowledge);
 elements.knowledgeClose.addEventListener('click', () => elements.knowledgeModal.close());
 elements.mcpOpen.addEventListener('click', openMcp);

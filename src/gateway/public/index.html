@@ -324,8 +324,12 @@
   </dialog>
   <dialog class="modal management-modal" id="skills-modal">
     <div class="modal-card management-card">
-      <header><div><h2>技能</h2><p>浏览 taiwei 技能 · 管理员启停系统技能 · 访客可安装到个人目录</p></div><button class="icon-button" id="skills-close" type="button" aria-label="关闭">×</button></header>
+      <header><div><h2>技能</h2><p>浏览 taiwei 技能 · 系统技能与蒸馏技能分开管理</p></div><button class="icon-button" id="skills-close" type="button" aria-label="关闭">×</button></header>
       <div class="management-error" id="skills-error" role="alert"></div>
+      <div class="skill-tabs" role="tablist">
+        <button class="skill-tab active" type="button" data-skill-tab="system" role="tab" aria-selected="true">系统技能</button>
+        <button class="skill-tab" type="button" data-skill-tab="distilled" role="tab" aria-selected="false">蒸馏技能</button>
+      </div>
       <div class="skills-layout">
         <div class="resource-list skill-list" id="skill-list" aria-label="技能列表"></div>
         <article class="skill-detail markdown-view" id="skill-detail"><div class="resource-empty">选择一个技能查看详情</div></article>

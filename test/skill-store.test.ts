@@ -110,6 +110,98 @@ test('merged skill API: role-aware list with installed flag, install, toggle, an
   }
 });
 
+test('distilled skill API isolates admin and guest owners while preserving validation and state cleanup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-user-skill-admin-'));
+  const userSkills = new UserSkillStore(join(directory, 'user-skills'));
+  const states = new UserSkillStateStore(join(directory, 'skill-states'));
+  const authSessions = new AuthSessionStore(join(directory, 'auth.json'));
+  const guestToken = await authSessions.create('Distilled Guest', 'guest');
+  const guestOwner = guestIdForUsername('Distilled Guest');
+  await userSkills.save('zeta', 'later', source('later', 'Later workflow'));
+  await userSkills.save('admin', 'second', source('second', 'Second workflow'));
+  await userSkills.save('admin', 'first', source('first', 'First workflow'));
+  await userSkills.save(guestOwner, 'guest-second', source('guest-second', 'Guest second workflow'));
+  await userSkills.save(guestOwner, 'guest-first', source('guest-first', 'Guest first workflow'));
+  await states.setEnabled('admin', 'second', false);
+  await states.setEnabled(guestOwner, 'guest-second', false);
+  const server = createGatewayServer({
+    chat: { run: async () => {}, stop: () => false },
+    sessions: new SessionStore(join(directory, 'sessions')),
+    uploadsDirectory: join(directory, 'uploads'),
+    userSkillStore: userSkills,
+    userSkillStateStore: states,
+    authSessions,
+    configState: { load: async () => structuredClone(DEFAULT_CONFIG), save: async () => {} },
+    history: false,
+    log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const post = (path: string, body: unknown, headers: Record<string, string> = {}) => fetch(`${baseUrl}${path}`, {
+    method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  try {
+    const listed = await (await fetch(`${baseUrl}/api/user-skills`)).json() as {
+      skills: Array<{ name: string; description: string; owner: string; enabled: boolean }>;
+    };
+    assert.deepEqual(listed.skills, [
+      { name: 'first', description: 'First workflow', owner: 'admin', enabled: true },
+      { name: 'second', description: 'Second workflow', owner: 'admin', enabled: false },
+    ]);
+
+    assert.deepEqual(await (await post('/api/user-skills/admin/second', { enabled: true })).json(), { ok: true, enabled: true });
+    assert.equal(await states.isEnabled('admin', 'second'), true);
+    assert.equal((await post('/api/user-skills/zeta/later', { enabled: false })).status, 403);
+    assert.equal((await post('/api/user-skills/Bad!/first', { enabled: false })).status, 400);
+    assert.equal((await post('/api/user-skills/admin/Bad!', { enabled: false })).status, 400);
+    assert.equal((await post('/api/user-skills/admin/missing', { enabled: false })).status, 404);
+
+    await states.setEnabled('admin', 'first', false);
+    const deleted = await fetch(`${baseUrl}/api/user-skills/admin/first`, { method: 'DELETE' });
+    assert.deepEqual(await deleted.json(), { ok: true, deleted: true });
+    await assert.rejects(userSkills.read('admin', 'first'), { code: 'ENOENT' });
+    assert.equal(await states.isEnabled('admin', 'first'), true);
+    assert.equal((await fetch(`${baseUrl}/api/user-skills/admin/first`, { method: 'DELETE' })).status, 404);
+    assert.equal((await fetch(`${baseUrl}/api/user-skills/Bad!/first`, { method: 'DELETE' })).status, 400);
+    assert.equal((await fetch(`${baseUrl}/api/user-skills/admin/Bad!`, { method: 'DELETE' })).status, 400);
+    assert.equal((await fetch(`${baseUrl}/api/user-skills/zeta/later`, { method: 'DELETE' })).status, 403);
+
+    const guestHeaders = { authorization: `Bearer ${guestToken}` };
+    const guestListedResponse = await fetch(`${baseUrl}/api/user-skills`, { headers: guestHeaders });
+    assert.equal(guestListedResponse.status, 200);
+    const guestListed = await guestListedResponse.json() as {
+      skills: Array<{ name: string; description: string; owner: string; enabled: boolean }>;
+    };
+    assert.deepEqual(guestListed.skills, [
+      { name: 'guest-first', description: 'Guest first workflow', owner: guestOwner, enabled: true },
+      { name: 'guest-second', description: 'Guest second workflow', owner: guestOwner, enabled: false },
+    ]);
+    assert.deepEqual(
+      await (await post(`/api/user-skills/${guestOwner}/guest-second`, { enabled: true }, guestHeaders)).json(),
+      { ok: true, enabled: true },
+    );
+    assert.equal(await states.isEnabled(guestOwner, 'guest-second'), true);
+    assert.equal((await post(`/api/user-skills/${guestOwner}/missing`, { enabled: false }, guestHeaders)).status, 404);
+    assert.equal((await post('/api/user-skills/Bad!/guest-first', { enabled: false }, guestHeaders)).status, 400);
+    assert.equal((await post(`/api/user-skills/${guestOwner}/Bad!`, { enabled: false }, guestHeaders)).status, 400);
+    assert.equal((await post('/api/user-skills/admin/second', { enabled: false }, guestHeaders)).status, 403);
+    assert.equal((await post('/api/user-skills/zeta/later', { enabled: false }, guestHeaders)).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/user-skills/admin/second`, { method: 'DELETE', headers: guestHeaders })).status, 403);
+    await states.setEnabled(guestOwner, 'guest-first', false);
+    const guestDeleted = await fetch(`${baseUrl}/api/user-skills/${guestOwner}/guest-first`, { method: 'DELETE', headers: guestHeaders });
+    assert.deepEqual(await guestDeleted.json(), { ok: true, deleted: true });
+    await assert.rejects(userSkills.read(guestOwner, 'guest-first'), { code: 'ENOENT' });
+    assert.equal(await states.isEnabled(guestOwner, 'guest-first'), true);
+    assert.equal((await fetch(`${baseUrl}/api/user-skills/${guestOwner}/guest-first`, { method: 'DELETE', headers: guestHeaders })).status, 404);
+    assert.equal((await fetch(`${baseUrl}/api/user-skills/Bad!/guest-second`, { method: 'DELETE', headers: guestHeaders })).status, 400);
+    assert.equal((await fetch(`${baseUrl}/api/user-skills/${guestOwner}/Bad!`, { method: 'DELETE', headers: guestHeaders })).status, 400);
+    assert.equal((await fetch(`${baseUrl}/api/user-skills/zeta/later`, { method: 'DELETE', headers: guestHeaders })).status, 403);
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('per-user skill state persists and gateway context reflects disable, enable, and delete on the next turn', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-skill-context-'));
   const userSkills = new UserSkillStore(join(directory, 'user-skills'));

@@ -540,6 +540,9 @@ test('guest uploads are allowed, size-limited, and use identity-isolated OSS key
     assert.equal(guestRouteAllowed('POST', '/api/skills/alpha'), true);
     assert.equal(guestRouteAllowed('DELETE', '/api/skills/alpha'), true);
     assert.equal(guestRouteAllowed('POST', '/api/skills'), false);
+    assert.equal(guestRouteAllowed('GET', '/api/user-skills'), true);
+    assert.equal(guestRouteAllowed('POST', '/api/user-skills/guest-alice/alpha'), true);
+    assert.equal(guestRouteAllowed('DELETE', '/api/user-skills/guest-alice/alpha'), true);
 
     const guestUpload = await fetch(`${baseUrl}/api/upload`, {
       method: 'POST', headers: { authorization: `Bearer ${guestToken}`, 'x-file-name': 'guest.txt', 'content-type': 'text/plain' }, body: 'guest',
