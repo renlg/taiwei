@@ -8,7 +8,13 @@ export interface ModelListResult {
   models: string[];
   current: string;
   source: ModelListSource;
-  providers?: Array<{ id: string; name: string; modality?: ProviderConfig['modality']; models: ReturnType<typeof providerModels> }>;
+  providers?: Array<{
+    id: string;
+    name: string;
+    modality?: ProviderConfig['modality'];
+    defaultModel?: string;
+    models: ReturnType<typeof providerModels>;
+  }>;
   currentProvider?: string;
 }
 
@@ -127,7 +133,10 @@ export async function resolveModelCatalog(): Promise<ModelListResult> {
   const textProviders = config.providers.filter((provider) => (provider.modality ?? 'text') === 'text');
   return { ...legacy, source: config.providers.length ? 'config' : legacy.source, currentProvider: config.defaultProvider,
     models: config.providers.length ? [] : legacy.models,
-    providers: textProviders.map((provider) => ({ id: provider.id, name: provider.name, modality: provider.modality, models: providerModels(provider) })) };
+    providers: textProviders.map((provider) => ({
+      id: provider.id, name: provider.name, modality: provider.modality,
+      defaultModel: provider.defaultModel, models: providerModels(provider),
+    })) };
 }
 
 export async function listModels(): Promise<string[]> {

@@ -336,26 +336,27 @@ test('gateway enforces role model catalog and repairs a guest session saved with
   config.auth = { enabled: true, username: 'admin', password: 'secret' };
   const capabilities = { tools: true, vision: false, reasoning: false, streaming: true, contextWindow: 32_000 };
   const textModels = [
-    { id: 'grok', provider: 'main', displayName: 'Grok', capabilities },
-    { id: 'free', provider: 'main', displayName: 'Free', capabilities },
     { id: 'good', provider: 'main', displayName: 'Good', capabilities },
+    { id: 'free', provider: 'main', displayName: 'Free', capabilities },
+    { id: 'grok', provider: 'main', displayName: 'Grok', capabilities },
   ];
   const imageModels = [{ id: 'image-free', provider: 'images', displayName: 'Image Free', capabilities }];
   const videoModels = [{ id: 'video-pro', provider: 'videos', displayName: 'Video Pro', capabilities }];
   const modelState: GatewayModelState = {
     getCurrentModel: async () => 'grok',
     resolveModels: async () => ({
-      models: ['grok', 'free', 'good', 'image-free', 'video-pro'], current: 'grok', currentProvider: 'main', source: 'config',
+      models: ['good', 'free', 'grok', 'image-free', 'video-pro'], current: 'grok', currentProvider: 'main', source: 'config',
       providers: [
-        { id: 'main', name: 'Main', modality: 'text', models: textModels },
+        { id: 'main', name: 'Main', modality: 'text', defaultModel: 'free', models: textModels },
         { id: 'images', name: 'Images', modality: 'image', models: imageModels },
         { id: 'videos', name: 'Videos', modality: 'video', models: videoModels },
       ],
     }),
-    setCurrentModel: async () => {},
+    setCurrentModel: async () => { assert.fail('guest model selection must not mutate global model state'); },
   };
   const authSessions = new AuthSessionStore(join(directory, 'gateway-sessions.json'));
   const guestToken = await authSessions.create('guest-user', 'guest');
+  const otherGuestToken = await authSessions.create('other-guest', 'guest');
   const adminToken = await authSessions.create('admin', 'admin');
   const chat = new MockChat();
   const server = createGatewayServer({
@@ -371,17 +372,17 @@ test('gateway enforces role model catalog and repairs a guest session saved with
     const guestCatalog = await (await fetch(`${baseUrl}/api/models`, { headers: guestHeaders })).json() as {
       models: string[]; current: string; currentProvider: string; providers: Array<{ models: Array<{ id: string; adminOnly?: boolean }> }>;
     };
-    assert.deepEqual(guestCatalog.models, ['free', 'good']);
+    assert.deepEqual(guestCatalog.models, ['good', 'free']);
     assert.equal(guestCatalog.current, 'free');
     assert.equal(guestCatalog.currentProvider, 'main');
-    assert.deepEqual(guestCatalog.providers.flatMap((provider) => provider.models.map((model) => model.id)), ['free', 'good']);
+    assert.deepEqual(guestCatalog.providers.flatMap((provider) => provider.models.map((model) => model.id)), ['good', 'free']);
     assert.doesNotMatch(JSON.stringify(guestCatalog), /grok|image-free|video-pro/);
 
     const adminCatalog = await (await fetch(`${baseUrl}/api/models`, { headers: adminHeaders })).json() as {
       models: string[]; providers: Array<{ models: Array<{ id: string }> }>;
     };
-    assert.deepEqual(adminCatalog.models, ['grok', 'free', 'good']);
-    assert.deepEqual(adminCatalog.providers.flatMap((provider) => provider.models.map((model) => model.id)), ['grok', 'free', 'good']);
+    assert.deepEqual(adminCatalog.models, ['good', 'free', 'grok']);
+    assert.deepEqual(adminCatalog.providers.flatMap((provider) => provider.models.map((model) => model.id)), ['good', 'free', 'grok']);
     assert.doesNotMatch(JSON.stringify(adminCatalog), /image-free|video-pro/);
 
     for (const path of ['/api/model', '/api/sessions']) {
@@ -393,24 +394,53 @@ test('gateway enforces role model catalog and repairs a guest session saved with
       assert.deepEqual(await denied.json(), { error: 'Guest cannot select this model' });
     }
 
-    const created = await (await fetch(`${baseUrl}/api/sessions`, {
+    const withoutSession = await fetch(`${baseUrl}/api/model`, {
       method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' },
-      body: JSON.stringify({ provider: 'main', model: 'free' }),
-    })).json() as { id: string };
+      body: JSON.stringify({ provider: 'main', model: 'good' }),
+    });
+    assert.equal(withoutSession.status, 200);
+    const selected = await withoutSession.json() as { sessionId: string; current: string };
+    assert.equal(selected.current, 'good');
+    assert.ok(selected.sessionId);
     const guestStore = SessionStore.forGuest(guestIdForUsername('guest-user'));
-    const saved = await guestStore.get(created.id);
+    assert.equal((await guestStore.get(selected.sessionId))?.currentModel, 'good');
+
+    const withOwnSession = await fetch(`${baseUrl}/api/model`, {
+      method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: selected.sessionId, provider: 'main', model: 'free' }),
+    });
+    assert.equal(withOwnSession.status, 200);
+    assert.equal((await guestStore.get(selected.sessionId))?.currentModel, 'free');
+
+    const missing = await fetch(`${baseUrl}/api/model`, {
+      method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'missing-session', provider: 'main', model: 'good' }),
+    });
+    assert.equal(missing.status, 404);
+
+    const otherSelection = await (await fetch(`${baseUrl}/api/model`, {
+      method: 'POST', headers: { authorization: `Bearer ${otherGuestToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'main', model: 'good' }),
+    })).json() as { sessionId: string };
+    const crossGuest = await fetch(`${baseUrl}/api/model`, {
+      method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: otherSelection.sessionId, provider: 'main', model: 'good' }),
+    });
+    assert.equal(crossGuest.status, 404);
+
+    const saved = await guestStore.get(selected.sessionId);
     assert.ok(saved);
     saved.currentModel = 'grok';
     saved.providerId = 'main';
     await guestStore.save(saved);
     const turn = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: created.id, message: 'hello' }),
+      body: JSON.stringify({ sessionId: selected.sessionId, message: 'hello' }),
     });
     assert.equal(turn.status, 200);
     await turn.text();
     assert.equal(chat.models.at(-1), 'free');
-    assert.equal((await guestStore.get(created.id))?.currentModel, 'free');
+    assert.equal((await guestStore.get(selected.sessionId))?.currentModel, 'free');
   } finally {
     await closeGateway(server);
     if (previousHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = previousHome;

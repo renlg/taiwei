@@ -12,7 +12,7 @@ import { PluginLoader } from '../src/plugins/loader.js';
 import { buildIndex, chunkText, type RagIndexData } from '../src/rag/index.js';
 import { retrieve, searchIndex, searchIndexHybrid } from '../src/rag/retrieve.js';
 import { OpenAICompatibleEmbedder } from '../src/rag/embedding.js';
-import { getCurrentModel, resolveModels, setCurrentModel } from '../src/config/model.js';
+import { getCurrentModel, resolveModelCatalog, resolveModels, setCurrentModel } from '../src/config/model.js';
 import { handleModelCommand } from '../src/cli/repl.js';
 import type { TaiweiApp } from '../src/app.js';
 import { detectDanger, CommandSecurity } from '../src/security/commands.js';
@@ -213,6 +213,19 @@ test('model state uses configured models in order and falls back only to current
       current: 'current',
       source: 'config',
     });
+
+    const capabilities = { tools: true, vision: false, reasoning: false, streaming: true, contextWindow: 32_000 };
+    await writeFile(join(directory, 'config.json'), JSON.stringify({
+      model: 'grok', defaultProvider: 'ai-connect',
+      providers: [{
+        id: 'ai-connect', name: 'ai-connect', type: 'openai-compatible', baseUrl: 'https://example.test/v1',
+        defaultModel: 'free', models: ['good', 'free', 'grok'].map((id) => ({ id, provider: 'ai-connect', displayName: id, capabilities })),
+      }],
+    }));
+    const catalog = await resolveModelCatalog();
+    assert.equal(catalog.current, 'grok');
+    assert.equal(catalog.currentProvider, 'ai-connect');
+    assert.equal(catalog.providers?.[0]?.defaultModel, 'free');
 
     await writeFile(join(directory, 'config.json'), JSON.stringify({ model: 'empty-current', models: [] }));
     assert.deepEqual(await resolveModels(), { models: ['empty-current'], current: 'empty-current', source: 'fallback' });

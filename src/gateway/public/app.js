@@ -2737,7 +2737,13 @@ async function selectModel(name, provider = state.currentProvider) {
     state.currentModel = result.current;
     state.currentProvider = result.provider || provider;
     saveLastModel(state.currentModel, state.currentProvider);
-    if (state.current) { state.current.currentModel = result.current; state.current.providerId = state.currentProvider; }
+    if (!state.current && result.sessionId) {
+      await refreshSessions();
+      await loadSession(result.sessionId);
+    } else if (state.current) {
+      state.current.currentModel = result.current;
+      state.current.providerId = state.currentProvider;
+    }
     state.contextWindow = result.contextWindow || state.contextWindow;
     state.usage = { ...state.usage, contextWindow: state.contextWindow, model: state.currentModel };
     if (state.current) state.current.usage = state.usage;

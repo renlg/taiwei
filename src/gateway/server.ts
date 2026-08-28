@@ -105,7 +105,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '77';
+const STATIC_ASSET_VERSION = '78';
 
 function contentWithTurnError(content: string, message: string): string {
   const error = `[错误] ${message || '未知错误'}`;
@@ -149,6 +149,11 @@ export function modelAllowedForRole(role: 'admin' | 'guest', provider: CatalogPr
 
 function firstAllowedModel(listed: ModelListResult, role: 'admin' | 'guest'): { model: string; provider?: string } | undefined {
   for (const provider of listed.providers ?? []) {
+    const defaultModel = provider.defaultModel
+      ? provider.models.find((candidate) => candidate.id === provider.defaultModel
+        && modelAllowedForRole(role, provider, candidate.id))
+      : undefined;
+    if (defaultModel) return { model: defaultModel.id, provider: provider.id };
     const model = provider.models.find((candidate) => modelAllowedForRole(role, provider, candidate.id));
     if (model) return { model: model.id, provider: provider.id };
   }
@@ -160,10 +165,14 @@ function catalogForRole(listed: ModelListResult, role: 'admin' | 'guest'): Model
   const providerModelIds = new Set(listed.providers?.flatMap((provider) => provider.models.map((model) => model.id)) ?? []);
   const models = listed.models.filter((model) => modelAllowedForRole(role, undefined, model)
     && (!providerModelIds.has(model) || listed.providers?.some((provider) => modelAllowedForRole(role, provider, model))));
-  const providers = listed.providers?.map((provider) => ({
-    ...provider,
-    models: provider.models.filter((model) => modelAllowedForRole(role, provider, model.id)),
-  })).filter((provider) => provider.models.length > 0);
+  const providers = listed.providers?.map((provider) => {
+    const allowedModels = provider.models.filter((model) => modelAllowedForRole(role, provider, model.id));
+    return {
+      ...provider,
+      defaultModel: allowedModels.some((model) => model.id === provider.defaultModel) ? provider.defaultModel : undefined,
+      models: allowedModels,
+    };
+  }).filter((provider) => provider.models.length > 0);
   if (!listed.providers) {
     return { ...listed, models, current: models.includes(listed.current) ? listed.current : models[0] ?? '' };
   }
@@ -2056,17 +2065,30 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           json(response, 400, { error: `Unknown model: ${model}`, models: listed.models });
           return;
         }
-        if (authenticatedRole === 'guest' && body.sessionId === undefined) {
-          throw new HttpError(403, 'Guest model selection must target a guest session');
+        let targetSessionId = body.sessionId;
+        if (authenticatedRole === 'guest' && targetSessionId === undefined) {
+          const latest = (await activeSessions.list()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+          if (latest) targetSessionId = latest.id;
+          else {
+            const created = await activeSessions.create(
+              'build', (await activeFolders.defaultFolder()).id, undefined, undefined,
+              await sessionIdentity(authenticatedRole, requestIdentityUsername),
+            );
+            targetSessionId = created.id;
+          }
         }
-        if (body.sessionId !== undefined) {
-          if (typeof body.sessionId !== 'string') throw new HttpError(400, 'sessionId must be a string');
-          const session = await activeSessions.get(body.sessionId);
+        if (targetSessionId !== undefined) {
+          if (typeof targetSessionId !== 'string') throw new HttpError(400, 'sessionId must be a string');
+          const session = await activeSessions.get(targetSessionId);
           if (!session) throw new HttpError(404, 'Session not found');
           session.currentModel = model; session.providerId = provider; session.updatedAt = new Date().toISOString();
           await activeSessions.save(session);
         } else await modelState.setCurrentModel(model);
-        json(response, 200, { ok: true, current: model, provider, contextWindow: selectedProvider?.models.find((item) => item.id === model)?.capabilities.contextWindow ?? await contextWindowFor(model) });
+        json(response, 200, {
+          ok: true, current: model, provider,
+          ...(authenticatedRole === 'guest' && targetSessionId ? { sessionId: targetSessionId } : {}),
+          contextWindow: selectedProvider?.models.find((item) => item.id === model)?.capabilities.contextWindow ?? await contextWindowFor(model),
+        });
         return;
       }
       if (method === 'GET' && pathname === '/api/sessions') {
