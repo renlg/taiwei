@@ -2305,10 +2305,16 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const activeSkillNames = Array.isArray(body.skills) ? body.skills.map((name) => (name as string).trim()) : undefined;
         if (activeSkillNames) {
           const missing: string[] = [];
+          const skillOwner = chatRole === 'guest' ? guestId : 'admin';
+          if (!skillOwner) throw new HttpError(403, 'Guest skill owner is unavailable');
           for (const name of activeSkillNames) {
-            try { await userSkillStore.load('admin', name); }
+            try { await userSkillStore.load(skillOwner, name); }
             catch (error) {
               if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+              if (chatRole === 'guest') {
+                missing.push(name);
+                continue;
+              }
               try { await skillLoader.load(name, { includeDisabled: true }); }
               catch { missing.push(name); }
             }

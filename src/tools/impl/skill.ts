@@ -30,6 +30,7 @@ export function createLoadSkillTool(skillLoader: SkillLoader, userSkills = new U
             throw new Error(`User skill "${name}" exists but its frontmatter is invalid (${(error as Error).message}). Fix or delete it before loading a system skill with the same name.`);
           }
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          if (context.role === 'guest') return `Skill not found: ${name}`;
           // ENOENT means the user skill does not exist; fall through to the system skill loader.
         }
         // includeDisabled lets us distinguish a disabled skill from one that does not exist.
