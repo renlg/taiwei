@@ -293,6 +293,26 @@
           </div>
         </div></div>
       </section>
+      <section class="settings-collapse model-grants-settings admin-only">
+        <button class="settings-collapse-toggle" id="model-grants-toggle" type="button" aria-expanded="false" aria-controls="model-grants-content">
+          <span class="settings-collapse-title"><span class="settings-collapse-chevron" aria-hidden="true">▸</span><span class="settings-collapse-heading">模型授权</span></span>
+          <small class="settings-collapse-status" id="model-grants-status">未加载</small>
+        </button>
+        <div class="settings-collapse-content" id="model-grants-content"><div class="settings-collapse-content-inner">
+          <small>授权指定 guest 用户使用仅管理员可用的模型，包括图片和视频模型。</small>
+          <div class="model-grants-add">
+            <input id="model-grants-username" autocomplete="off" placeholder="输入 guest username">
+            <button class="small-button" id="model-grants-add" type="button">添加用户</button>
+          </div>
+          <div class="tenant-accounts-table-wrap">
+            <table class="tenant-accounts-table model-grants-table">
+              <thead id="model-grants-head"><tr><th>用户名</th><th>授权模型</th></tr></thead>
+              <tbody id="model-grants-list"><tr><td colspan="2">展开以加载授权</td></tr></tbody>
+            </table>
+          </div>
+          <div class="model-grants-actions"><button class="primary-button" id="model-grants-save" type="button">保存授权</button></div>
+        </div></div>
+      </section>
       <section class="settings-collapse api-keys-settings admin-only">
         <button class="settings-collapse-toggle" id="api-keys-toggle" type="button" aria-expanded="false" aria-controls="api-keys-content">
           <span class="settings-collapse-title"><span class="settings-collapse-chevron" aria-hidden="true">▸</span><span class="settings-collapse-heading">API Keys</span></span>

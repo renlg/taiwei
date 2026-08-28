@@ -41,6 +41,8 @@ export interface ToolContext {
   delegationDepth?: number;
   role?: 'admin' | 'guest';
   identity?: string;
+  /** 当前身份获准使用的 adminOnly 模型 id；仅由受信任的运行入口注入。 */
+  grantedModels?: ReadonlySet<string>;
   /** Validated per-request guest storage id; avoids re-hashing share identities. */
   guestId?: string;
   /** 会话落盘的用户账号快照（来自 session.identity，不含密钥）；工具应以此为准，不实时查库。 */

@@ -24,6 +24,8 @@ export interface BashConfig {
 
 export interface TaiweiConfig {
   model: string;
+  /** 用户模型授权：username -> 被授权可用的 adminOnly 模型 id 列表。 */
+  modelGrants?: Record<string, string[]>;
   embedModel: string;
   models?: string[];
   contextWindow?: number;

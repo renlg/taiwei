@@ -199,6 +199,12 @@ body.guest-mode .admin-only { display: none !important; }
 .tenant-accounts-table th, .tenant-accounts-table td { padding: 9px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
 .tenant-accounts-table th { color: var(--muted); font-weight: 700; }
 .tenant-accounts-table td:first-child { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
+.model-grants-add { display: flex; gap: 8px; margin: 12px 0; }
+.model-grants-add input { flex: 1; min-width: 0; }
+.model-grants-table { min-width: 520px; }
+.model-grants-table th:not(:first-child), .model-grants-table td:not(:first-child) { text-align: center; }
+.model-grants-table input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+.model-grants-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
 
 .management-card { width: min(900px, calc(100vw - 28px)); min-height: min(610px, calc(100dvh - 32px)); display: flex; flex-direction: column; overflow: hidden; }
 .management-error { min-height: 18px; margin: -8px 0 8px; color: var(--danger); font-size: 11px; }

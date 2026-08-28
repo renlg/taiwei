@@ -408,6 +408,12 @@ test('load_skill activates full instructions and rejects disabled or missing ski
     assert.equal(await registry.dispatch('load_skill', { name: 'disabled-dir' }, toolContext), 'Skill "disabled-dir" is disabled');
     assert.equal(await registry.dispatch('load_skill', { name: 'missing' }, toolContext), 'Skill not found: missing');
     assert.doesNotMatch(await context.systemPrompt(), /DISABLED_BODY_SENTINEL/);
+
+    const guestContext = new AgentContext(new MemoryStore(), loader);
+    assert.equal(await registry.dispatch('load_skill', { name: 'weather-dir' }, {
+      cwd: directory, agentContext: guestContext, role: 'guest', guestId: 'guest-load-skill-test',
+    }), 'Skill not found: weather-dir');
+    assert.doesNotMatch(await guestContext.systemPrompt(), /WEATHER_BODY_SENTINEL/);
   } finally {
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
     await rm(directory, { recursive: true, force: true });

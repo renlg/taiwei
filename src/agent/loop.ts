@@ -36,6 +36,7 @@ export interface RunTurnOptions {
   delegationDepth?: number;
   role?: 'admin' | 'guest';
   identity?: string;
+  grantedModels?: ReadonlySet<string>;
   guestId?: string;
   tenantIdentity?: TenantIdentity;
   workspaceRoot?: string;
@@ -420,6 +421,7 @@ export async function runAgentTurn(
         delegationDepth: options.delegationDepth ?? 0,
         role: options.role,
         identity: options.identity,
+        grantedModels: options.grantedModels,
         guestId: options.guestId,
         tenantIdentity: options.tenantIdentity,
         workspaceRoot: options.workspaceRoot ?? cwd,

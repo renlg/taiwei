@@ -195,6 +195,7 @@ const elements = {
   hookTestResult: $('#hook-test-result'),
   auditSettings: $('.audit-settings'), auditToggle: $('#audit-toggle'), auditStatus: $('#audit-status'), auditFilter: $('#audit-filter'), auditList: $('#audit-list'),
   tenantAccountsSettings: $('.tenant-accounts-settings'), tenantAccountsToggle: $('#tenant-accounts-toggle'), tenantAccountsStatus: $('#tenant-accounts-status'), tenantAccountsList: $('#tenant-accounts-list'),
+  modelGrantsSettings: $('.model-grants-settings'), modelGrantsToggle: $('#model-grants-toggle'), modelGrantsStatus: $('#model-grants-status'), modelGrantsHead: $('#model-grants-head'), modelGrantsList: $('#model-grants-list'), modelGrantsUsername: $('#model-grants-username'), modelGrantsAdd: $('#model-grants-add'), modelGrantsSave: $('#model-grants-save'),
   apiKeysSettings: $('.api-keys-settings'), apiKeysToggle: $('#api-keys-toggle'), apiKeysStatus: $('#api-keys-status'),
   sidebarToggle: $('#sidebar-toggle'),
   sidebarClose: $('#sidebar-close'),
@@ -248,6 +249,9 @@ const state = {
   managedProviders: [],
   defaultProvider: '',
   editingProvider: null,
+  modelGrants: {},
+  modelGrantUsers: [],
+  adminOnlyModels: [],
   savedMemory: '',
   memoryFeedbackTimer: 0,
 };
@@ -258,6 +262,7 @@ const HOOKS_OPEN_STORAGE_KEY = 'taiwei-settings-hooks-open';
 const CUSTOM_PROMPT_OPEN_STORAGE_KEY = 'taiwei-settings-customprompt-open';
 const AUDIT_OPEN_STORAGE_KEY = 'taiwei-settings-audit-open';
 const TENANT_ACCOUNTS_OPEN_STORAGE_KEY = 'taiwei-settings-tenantaccounts-open';
+const MODEL_GRANTS_OPEN_STORAGE_KEY = 'taiwei-settings-modelgrants-open';
 const API_KEYS_OPEN_STORAGE_KEY = 'taiwei-settings-apikeys-open';
 const LAST_MODEL_STORAGE_PREFIX = 'taiwei-last-model:';
 
@@ -707,6 +712,69 @@ async function loadTenantAccounts() {
   renderTenantAccounts(accounts || []);
 }
 
+function renderModelGrants() {
+  const users = [...new Set([...state.modelGrantUsers, ...Object.keys(state.modelGrants)])].sort((a, b) => a.localeCompare(b));
+  const models = state.adminOnlyModels;
+  elements.modelGrantsHead.replaceChildren();
+  const header = document.createElement('tr');
+  const usernameHeading = document.createElement('th'); usernameHeading.textContent = '用户名'; header.append(usernameHeading);
+  for (const model of models) {
+    const cell = document.createElement('th'); cell.textContent = model.displayName || model.id; cell.title = model.id; header.append(cell);
+  }
+  elements.modelGrantsHead.append(header);
+  elements.modelGrantsList.replaceChildren();
+  if (!models.length) {
+    const row = document.createElement('tr'); row.innerHTML = '<td>暂无 adminOnly 模型</td>'; elements.modelGrantsList.append(row);
+  } else if (!users.length) {
+    const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = models.length + 1; cell.textContent = '暂无用户，请手动添加 username'; row.append(cell); elements.modelGrantsList.append(row);
+  } else {
+    for (const username of users) {
+      const row = document.createElement('tr'); row.dataset.username = username;
+      const name = document.createElement('td'); name.textContent = username; row.append(name);
+      const granted = new Set(state.modelGrants[username] || []);
+      for (const model of models) {
+        const cell = document.createElement('td');
+        const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.dataset.modelId = model.id; checkbox.checked = granted.has(model.id); checkbox.setAttribute('aria-label', `授权 ${username} 使用 ${model.id}`);
+        cell.append(checkbox); row.append(cell);
+      }
+      elements.modelGrantsList.append(row);
+    }
+  }
+  const grantCount = Object.values(state.modelGrants).reduce((count, ids) => count + ids.length, 0);
+  elements.modelGrantsStatus.textContent = `${users.length} 个用户 · ${grantCount} 项授权`;
+}
+
+async function loadModelGrants() {
+  const [grantsResult, modelsResult, accountsResult] = await Promise.allSettled([
+    requestJson('/api/model-grants'),
+    requestJson('/api/admin/models'),
+    requestJson('/api/tenant-accounts'),
+  ]);
+  if (grantsResult.status === 'rejected') throw grantsResult.reason;
+  if (modelsResult.status === 'rejected') throw modelsResult.reason;
+  state.modelGrants = grantsResult.value.grants || {};
+  state.adminOnlyModels = (modelsResult.value.providers || []).flatMap((provider) => (provider.models || [])
+    .filter((model) => model.adminOnly === true).map((model) => ({ ...model, providerName: provider.name })));
+  const accounts = accountsResult.status === 'fulfilled' ? accountsResult.value.accounts || [] : [];
+  state.modelGrantUsers = [...new Set([...state.modelGrantUsers, ...accounts.map((account) => account.username).filter(Boolean)])];
+  renderModelGrants();
+}
+
+async function saveModelGrants() {
+  const grants = {};
+  for (const row of elements.modelGrantsList.querySelectorAll('tr[data-username]')) {
+    const selected = [...row.querySelectorAll('input[data-model-id]:checked')].map((input) => input.dataset.modelId);
+    if (selected.length) grants[row.dataset.username] = selected;
+  }
+  const result = await requestJson('/api/model-grants', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ grants }),
+  });
+  state.modelGrants = result.grants || {};
+  renderModelGrants();
+  await refreshModelCatalog();
+  showToast('模型授权已保存');
+}
+
 async function openSettings() {
   elements.settingsError.textContent = '';
   try {
@@ -717,9 +785,11 @@ async function openSettings() {
     setSettingsCollapseOpen(elements.hooksSettings, elements.hooksToggle, HOOKS_OPEN_STORAGE_KEY, localStorage.getItem(HOOKS_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.auditSettings, elements.auditToggle, AUDIT_OPEN_STORAGE_KEY, localStorage.getItem(AUDIT_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.tenantAccountsSettings, elements.tenantAccountsToggle, TENANT_ACCOUNTS_OPEN_STORAGE_KEY, localStorage.getItem(TENANT_ACCOUNTS_OPEN_STORAGE_KEY) === 'true');
+    setSettingsCollapseOpen(elements.modelGrantsSettings, elements.modelGrantsToggle, MODEL_GRANTS_OPEN_STORAGE_KEY, localStorage.getItem(MODEL_GRANTS_OPEN_STORAGE_KEY) === 'true');
     setSettingsCollapseOpen(elements.apiKeysSettings, elements.apiKeysToggle, API_KEYS_OPEN_STORAGE_KEY, localStorage.getItem(API_KEYS_OPEN_STORAGE_KEY) === 'true');
     if (elements.auditToggle.getAttribute('aria-expanded') === 'true') await loadAudit();
     if (elements.tenantAccountsToggle.getAttribute('aria-expanded') === 'true') await loadTenantAccounts();
+    if (elements.modelGrantsToggle.getAttribute('aria-expanded') === 'true') await loadModelGrants();
     if (elements.apiKeysToggle.getAttribute('aria-expanded') === 'true') await loadApiKeys();
     elements.settingsModal.showModal();
     elements.workspaceToggle.focus();
@@ -2695,7 +2765,7 @@ function renderModels() {
   if (diagnostic) return;
   const groups = state.providers.length ? state.providers : [{ id: state.currentProvider, name: 'Default', models: state.models.map((id) => ({ id, displayName: id })) }];
   for (const provider of groups) {
-    const models = provider.models.filter((model) => state.role !== 'guest' || model.adminOnly !== true);
+    const models = provider.models;
     if (!models.length) continue;
     const heading = document.createElement('div');
     heading.className = 'model-provider-label'; heading.textContent = provider.name;
@@ -2718,11 +2788,6 @@ function renderModels() {
 
 async function selectModel(name, provider = state.currentProvider) {
   if (state.switchingModel || (name === state.currentModel && provider === state.currentProvider)) { closeModelMenu(); return; }
-  const targetModel = state.providers.find((item) => item.id === provider)?.models.find((model) => model.id === name);
-  if (state.role === 'guest' && targetModel?.adminOnly === true) {
-    elements.modelError.textContent = 'Guest cannot select this model';
-    return;
-  }
   const previous = state.currentModel;
   const previousProvider = state.currentProvider;
   state.switchingModel = true;
@@ -3561,6 +3626,31 @@ elements.tenantAccountsToggle.addEventListener('click', async () => {
   if (open) {
     try { await loadTenantAccounts(); } catch (error) { elements.settingsError.textContent = error.message; }
   }
+});
+elements.modelGrantsToggle.addEventListener('click', async () => {
+  const open = elements.modelGrantsToggle.getAttribute('aria-expanded') !== 'true';
+  setSettingsCollapseOpen(elements.modelGrantsSettings, elements.modelGrantsToggle, MODEL_GRANTS_OPEN_STORAGE_KEY, open, true);
+  if (open) {
+    try { await loadModelGrants(); } catch (error) { elements.settingsError.textContent = error.message; }
+  }
+});
+elements.modelGrantsAdd.addEventListener('click', () => {
+  const username = elements.modelGrantsUsername.value.trim();
+  if (!username) { elements.settingsError.textContent = '请输入 guest username'; return; }
+  state.modelGrantUsers = [...new Set([...state.modelGrantUsers, username])];
+  elements.modelGrantsUsername.value = '';
+  elements.settingsError.textContent = '';
+  renderModelGrants();
+});
+elements.modelGrantsUsername.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') { event.preventDefault(); elements.modelGrantsAdd.click(); }
+});
+elements.modelGrantsSave.addEventListener('click', async () => {
+  elements.settingsError.textContent = '';
+  elements.modelGrantsSave.disabled = true;
+  try { await saveModelGrants(); }
+  catch (error) { elements.settingsError.textContent = error.message; }
+  finally { elements.modelGrantsSave.disabled = false; }
 });
 elements.auditFilter.addEventListener('input', () => { void loadAudit(); });
 elements.workspaceInput.addEventListener('input', updateWorkspaceStatus);

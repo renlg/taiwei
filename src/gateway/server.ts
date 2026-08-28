@@ -105,7 +105,7 @@ export interface GatewayServerOptions {
 }
 
 const DEFAULT_PUBLIC_DIRECTORY = fileURLToPath(new URL('./public/', import.meta.url));
-const STATIC_ASSET_VERSION = '78';
+const STATIC_ASSET_VERSION = '79';
 
 function contentWithTurnError(content: string, message: string): string {
   const error = `[错误] ${message || '未知错误'}`;
@@ -141,32 +141,32 @@ function modelForSelection(listed: ModelListResult, providerId: string | undefin
 type CatalogProvider = NonNullable<ModelListResult['providers']>[number];
 const GUEST_MODEL_IDS = new Set(['free', 'good']);
 
-export function modelAllowedForRole(role: 'admin' | 'guest', provider: CatalogProvider | undefined, modelId: string): boolean {
+export function modelAllowedForRole(role: 'admin' | 'guest', provider: CatalogProvider | undefined, modelId: string, grantedModelIds: ReadonlySet<string> = new Set()): boolean {
   if (provider && (provider.modality ?? 'text') !== 'text') return false;
-  if (role === 'guest' && !GUEST_MODEL_IDS.has(modelId)) return false;
+  if (role === 'guest' && !GUEST_MODEL_IDS.has(modelId) && !grantedModelIds.has(modelId)) return false;
   return provider ? provider.models.some((model) => model.id === modelId) : true;
 }
 
-function firstAllowedModel(listed: ModelListResult, role: 'admin' | 'guest'): { model: string; provider?: string } | undefined {
+function firstAllowedModel(listed: ModelListResult, role: 'admin' | 'guest', grantedModelIds: ReadonlySet<string> = new Set()): { model: string; provider?: string } | undefined {
   for (const provider of listed.providers ?? []) {
     const defaultModel = provider.defaultModel
       ? provider.models.find((candidate) => candidate.id === provider.defaultModel
-        && modelAllowedForRole(role, provider, candidate.id))
+        && modelAllowedForRole(role, provider, candidate.id, grantedModelIds))
       : undefined;
     if (defaultModel) return { model: defaultModel.id, provider: provider.id };
-    const model = provider.models.find((candidate) => modelAllowedForRole(role, provider, candidate.id));
+    const model = provider.models.find((candidate) => modelAllowedForRole(role, provider, candidate.id, grantedModelIds));
     if (model) return { model: model.id, provider: provider.id };
   }
-  const model = listed.models.find((candidate) => modelAllowedForRole(role, undefined, candidate));
+  const model = listed.models.find((candidate) => modelAllowedForRole(role, undefined, candidate, grantedModelIds));
   return model ? { model } : undefined;
 }
 
-function catalogForRole(listed: ModelListResult, role: 'admin' | 'guest'): ModelListResult {
+function catalogForRole(listed: ModelListResult, role: 'admin' | 'guest', grantedModelIds: ReadonlySet<string> = new Set()): ModelListResult {
   const providerModelIds = new Set(listed.providers?.flatMap((provider) => provider.models.map((model) => model.id)) ?? []);
-  const models = listed.models.filter((model) => modelAllowedForRole(role, undefined, model)
-    && (!providerModelIds.has(model) || listed.providers?.some((provider) => modelAllowedForRole(role, provider, model))));
+  const models = listed.models.filter((model) => modelAllowedForRole(role, undefined, model, grantedModelIds)
+    && (!providerModelIds.has(model) || listed.providers?.some((provider) => modelAllowedForRole(role, provider, model, grantedModelIds))));
   const providers = listed.providers?.map((provider) => {
-    const allowedModels = provider.models.filter((model) => modelAllowedForRole(role, provider, model.id));
+    const allowedModels = provider.models.filter((model) => modelAllowedForRole(role, provider, model.id, grantedModelIds));
     return {
       ...provider,
       defaultModel: allowedModels.some((model) => model.id === provider.defaultModel) ? provider.defaultModel : undefined,
@@ -180,7 +180,7 @@ function catalogForRole(listed: ModelListResult, role: 'admin' | 'guest'): Model
   const currentProvider = providers?.find((provider) => provider.id === listed.currentProvider);
   if (currentProvider?.models.some((model) => model.id === listed.current)) return { ...listed, models, providers };
 
-  const fallback = firstAllowedModel({ ...listed, models, providers }, role);
+  const fallback = firstAllowedModel({ ...listed, models, providers }, role, grantedModelIds);
   return {
     ...listed,
     models,
@@ -188,6 +188,30 @@ function catalogForRole(listed: ModelListResult, role: 'admin' | 'guest'): Model
     current: fallback?.model ?? '',
     currentProvider: fallback?.provider,
   };
+}
+
+function grantedModelsFor(config: TaiweiConfig, username: string): ReadonlySet<string> {
+  const grants = config.modelGrants?.[username];
+  return new Set(Array.isArray(grants) ? grants : []);
+}
+
+function validateModelGrants(value: unknown, config: TaiweiConfig): Record<string, string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'grants 必须是 username 到模型列表的对象');
+  const adminOnlyModelIds = new Set(config.providers.flatMap((provider) => provider.models ?? [])
+    .filter((model) => model.adminOnly === true).map((model) => model.id));
+  const entries: Array<[string, string[]]> = [];
+  for (const [rawUsername, rawModels] of Object.entries(value as Record<string, unknown>)) {
+    const username = rawUsername.trim();
+    if (!username) throw new HttpError(400, '授权用户名不能为空');
+    if (!Array.isArray(rawModels) || rawModels.some((model) => typeof model !== 'string' || !model.trim())) {
+      throw new HttpError(400, `用户 ${username} 的授权必须是非空模型 id 数组`);
+    }
+    const models = [...new Set(rawModels.map((model) => (model as string).trim()))];
+    const invalid = models.find((modelId) => !adminOnlyModelIds.has(modelId));
+    if (invalid) throw new HttpError(400, `模型 ${invalid} 不存在或不是 adminOnly 模型`);
+    if (models.length) entries.push([username, models]);
+  }
+  return Object.fromEntries(entries);
 }
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
@@ -1946,8 +1970,25 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         return;
       }
       if (method === 'GET' && pathname === '/api/models') {
-        const listed = catalogForRole(await modelState.resolveModels(), authenticatedRole);
+        const grants = grantedModelsFor(await configState.load(), requestIdentityUsername);
+        const listed = catalogForRole(await modelState.resolveModels(), authenticatedRole, grants);
         json(response, 200, { models: listed.models, current: listed.current, currentProvider: listed.currentProvider, providers: listed.providers });
+        return;
+      }
+      if (method === 'GET' && pathname === '/api/model-grants') {
+        const config = await configState.load();
+        json(response, 200, { grants: config.modelGrants ?? {} });
+        return;
+      }
+      if (method === 'POST' && pathname === '/api/model-grants') {
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.prototype.hasOwnProperty.call(body, 'grants')) {
+          throw new HttpError(400, '请求体必须包含 grants');
+        }
+        const config = await configState.load();
+        config.modelGrants = validateModelGrants((body as { grants?: unknown }).grants, config);
+        await configState.save(config);
+        json(response, 200, { grants: config.modelGrants });
         return;
       }
       if (method === 'GET' && pathname === '/api/admin/models') {
@@ -2058,7 +2099,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
         const selectedProvider = listed.providers?.find((item) => item.id === provider);
         const selectedModel = modelForSelection(listed, provider, model);
         const known = selectedProvider ? Boolean(selectedModel) : listed.models.includes(model);
-        if (!modelAllowedForRole(authenticatedRole, selectedProvider, model)) {
+        const grantedModels = grantedModelsFor(await configState.load(), requestIdentityUsername);
+        if (!modelAllowedForRole(authenticatedRole, selectedProvider, model, grantedModels)) {
           throw new HttpError(403, `${authenticatedRole === 'guest' ? 'Guest' : 'This account'} cannot select this model`);
         }
         if (!known && listed.source !== 'fallback') {
@@ -2111,7 +2153,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           const selectedProvider = listed.providers?.find((item) => item.id === provider);
           const selectedModel = modelForSelection(listed, provider, model);
           const known = selectedProvider ? Boolean(selectedModel) : listed.models.includes(model);
-          if (!modelAllowedForRole(authenticatedRole, selectedProvider, model)) {
+          const grantedModels = grantedModelsFor(await configState.load(), requestIdentityUsername);
+          if (!modelAllowedForRole(authenticatedRole, selectedProvider, model, grantedModels)) {
             throw new HttpError(403, `${authenticatedRole === 'guest' ? 'Guest' : 'This account'} cannot select this model`);
           }
           if (!known && listed.source !== 'fallback') throw new HttpError(400, `Unknown model: ${model}`);
@@ -2321,6 +2364,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           }
           if (missing.length) throw new HttpError(400, `Unknown skills: ${[...new Set(missing)].join(', ')}`);
         }
+        const config = await configState.load();
+        const grantedModels = grantedModelsFor(config, chatIdentity);
         const listedModels = await modelState.resolveModels();
         let runProviderId = typeof body.provider === 'string' ? body.provider.trim() : session.providerId ?? listedModels.currentProvider;
         let runModel = typeof body.model === 'string'
@@ -2333,11 +2378,11 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           json(response, 400, { error: `Unknown model: ${runModel}`, models: listedModels.models });
           return;
         }
-        if (!modelAllowedForRole(chatRole, selectedProvider, runModel)) {
+        if (!modelAllowedForRole(chatRole, selectedProvider, runModel, grantedModels)) {
           if (body.model !== undefined || body.provider !== undefined) {
             throw new HttpError(403, `${chatRole === 'guest' ? 'Guest' : 'This account'} cannot select this model`);
           }
-          const fallback = firstAllowedModel(listedModels, chatRole);
+          const fallback = firstAllowedModel(listedModels, chatRole, grantedModels);
           if (!fallback) throw new HttpError(403, '当前账号没有可用模型');
           runModel = fallback.model;
           runProviderId = fallback.provider;
@@ -2347,7 +2392,6 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           await activeSessions.save(session);
         }
         const message = body.message.trim();
-        const config = await configState.load();
         const sessionFolder = session.folderId ? await activeFolders.get(session.folderId) : undefined;
         if (session.folderId && !sessionFolder) throw new HttpError(404, 'Session folder not found');
         // Guest 的工作目录固定为租户根（/home/<guestN>/projects），UI 文件夹只做会话分类，不改变写权限边界；
@@ -2563,7 +2607,7 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
           osUsername: session.identity.osUsername,
           giteaUsername: session.identity.giteaUsername,
           giteaOrgName: session.identity.giteaOrgName,
-        } : undefined, guestId, activeSkillNames);
+        } : undefined, guestId, activeSkillNames, grantedModels);
         if (contextMessages) session.contextMessages = sanitizeContextMessages(contextMessages);
         const stopped = turnError?.message === 'Turn cancelled';
         if (pendingFinalization) await pendingFinalization;

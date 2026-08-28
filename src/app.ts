@@ -89,7 +89,7 @@ export class TaiweiApp {
     if (options.scheduler !== false) { await this.scheduler.start(); console.log(`[taiwei] Scheduler started (${(await this.cronJobs.list()).filter((job) => job.enabled).length} enabled jobs)`); }
   }
 
-  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; enableDiagnostics?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string; guestId?: string; tenantIdentity?: TenantIdentity; providerId?: string; model?: string; workspaceRoot?: string; userContent?: ContentBlock[] } = {}): Promise<string> {
+  async run(prompt: string, options: { stream?: boolean; retainConversation?: boolean; enableDiagnostics?: boolean; onEvent?: (event: AgentEvent) => void; context?: AgentContext; confirmDanger?: ConfirmationHandler; sessionId?: string; runtimeSessionId?: string; skipBeforeMessageHook?: boolean; agentId?: string; delegationDepth?: number; role?: 'admin' | 'guest'; identity?: string; grantedModels?: ReadonlySet<string>; guestId?: string; tenantIdentity?: TenantIdentity; providerId?: string; model?: string; workspaceRoot?: string; userContent?: ContentBlock[] } = {}): Promise<string> {
     const runtimeSessionId = options.runtimeSessionId ?? options.sessionId ?? 'local';
     return this.runtime.run(runtimeSessionId, async (runtimeSignal) => {
       const localSignal = options.sessionId ? undefined : this.interrupt.beginTurn();
@@ -126,7 +126,7 @@ export class TaiweiApp {
           sessionId: options.sessionId,
           agentProfile: profile,
           delegationDepth: options.delegationDepth,
-          role: options.role ?? 'admin', identity: options.identity ?? options.role ?? 'admin', guestId: options.guestId, tenantIdentity: options.tenantIdentity,
+          role: options.role ?? 'admin', identity: options.identity ?? options.role ?? 'admin', grantedModels: options.grantedModels, guestId: options.guestId, tenantIdentity: options.tenantIdentity,
           workspaceRoot: cwd, policy: new PolicyEngine(this.config.policy),
           userContent: options.userContent,
           userSkillStore: this.userSkills,

@@ -97,14 +97,24 @@ test('generate_image surfaces the upstream error message with the model style hi
   },
 ));
 
-test('admin-only media models deny guests before calling the provider', async () => withMediaProvider(
-  () => Response.json({ error: 'provider should not be called' }, { status: 500 }),
+test('admin-only media models deny ungranted guests and allow explicitly granted guests', async () => withMediaProvider(
+  (url, method) => {
+    if (url.endsWith('/images/generations')) return Response.json({ data: [{ url: 'https://cdn.example/granted.png' }] });
+    if (method === 'POST') return Response.json({ id: 'granted-video' });
+    return Response.json({ internal_status: 'completed', url: 'https://cdn.example/granted.mp4' });
+  },
   async (requests) => {
     const image = await imageGenTool.execute({ prompt: '私有图片' }, { cwd: process.cwd(), role: 'guest' });
     const video = await videoGenTool.execute({ prompt: '私有视频' }, { cwd: process.cwd(), role: 'guest' });
     assert.equal(image, '图片生成失败: 你没有权限使用该模型，仅管理员可用');
     assert.equal(video, '视频生成失败: 你没有权限使用该模型，仅管理员可用');
     assert.equal(requests.length, 0);
+    const grantedModels = new Set(['image-free', 'video-free']);
+    const grantedImage = await imageGenTool.execute({ prompt: '授权图片' }, { cwd: process.cwd(), role: 'guest', grantedModels });
+    const grantedVideo = await videoGenTool.execute({ prompt: '授权视频' }, { cwd: process.cwd(), role: 'guest', grantedModels });
+    assert.match(String(grantedImage), /granted\.png/);
+    assert.match(String(grantedVideo), /granted\.mp4/);
+    assert.equal(requests.length, 3);
   },
   {
     defaultProvider: 'image-provider',

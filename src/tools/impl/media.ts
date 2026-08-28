@@ -193,7 +193,7 @@ export const imageGenTool: ToolSpec = {
     try {
       const model = argumentString(args.model, 'image-free');
       const config = await loadConfig();
-      if (context.role !== 'admin' && findModelAdminOnly(config, mediaProviderId(config, 'image', model), model)) {
+      if (context.role !== 'admin' && findModelAdminOnly(config, mediaProviderId(config, 'image', model), model) && !context.grantedModels?.has(model)) {
         return '图片生成失败: 你没有权限使用该模型，仅管理员可用';
       }
       const count = imageCount(args.n);
@@ -355,7 +355,7 @@ export const videoGenTool: ToolSpec = {
     try {
       const model = argumentString(args.model, 'video-free');
       const config = await loadConfig();
-      if (context.role !== 'admin' && findModelAdminOnly(config, mediaProviderId(config, 'video', model), model)) {
+      if (context.role !== 'admin' && findModelAdminOnly(config, mediaProviderId(config, 'video', model), model) && !context.grantedModels?.has(model)) {
         return '视频生成失败: 你没有权限使用该模型，仅管理员可用';
       }
       const qualitySizes: Record<string, string> = { low: '480p', medium: '720p', high: '1080p' };

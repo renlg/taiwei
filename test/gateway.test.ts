@@ -61,13 +61,15 @@ class MockChat implements ChatBridge {
   workspaceRoots: Array<string | undefined> = [];
   guestIds: Array<string | undefined> = [];
   models: Array<string | undefined> = [];
+  grantedModels: Array<string[]> = [];
 
-  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], _sessionId?: string, _memory?: MemoryStore, _agentId?: string, _role?: 'admin' | 'guest', _identity?: string, _runtimeSessionId?: string, _providerId?: string, _model?: string, workspaceRoot?: string, _userContent?: import('../src/llm/client.js').ContentBlock[], _tenantIdentity?: import('../src/tools/registry.js').TenantIdentity, guestId?: string): Promise<void> {
+  async run(message: string, sink: ChatSink, history: ChatMessage[] = [], _sessionId?: string, _memory?: MemoryStore, _agentId?: string, _role?: 'admin' | 'guest', _identity?: string, _runtimeSessionId?: string, _providerId?: string, _model?: string, workspaceRoot?: string, _userContent?: import('../src/llm/client.js').ContentBlock[], _tenantIdentity?: import('../src/tools/registry.js').TenantIdentity, guestId?: string, _activeSkillNames?: string[], grantedModels?: ReadonlySet<string>): Promise<void> {
     this.messages.push(message);
     this.histories.push(history);
     this.workspaceRoots.push(workspaceRoot);
     this.guestIds.push(guestId);
     this.models.push(_model);
+    this.grantedModels.push([...grantedModels ?? []]);
     for (const event of [
       { type: 'token', text: 'Hello ' },
       { type: 'tool', name: 'read', args: { path: 'README.md' } },
@@ -105,13 +107,13 @@ class MockMcpBridge {
   async test(): Promise<{ connected: boolean; detail: string }> { return { connected: true, detail: '2 tools' }; }
 }
 
-test('gateway chat indexes only enabled skills by default without injecting bodies and honors autoLoadSkills=false', async () => {
+test('gateway chat exposes system skills to admins but isolates them from guests', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-auto-skills-test-'));
   const oldHome = process.env.TAIWEI_HOME;
   process.env.TAIWEI_HOME = directory;
-  await mkdir(join(directory, 'skills', 'enabled'), { recursive: true });
+  await mkdir(join(directory, 'skills', 'taiwei-web-deploy'), { recursive: true });
   await mkdir(join(directory, 'skills', 'disabled'), { recursive: true });
-  await writeFile(join(directory, 'skills', 'enabled', 'SKILL.md'), '---\nname: enabled\ndescription: Enabled skill\n---\n\nEnabled');
+  await writeFile(join(directory, 'skills', 'taiwei-web-deploy', 'SKILL.md'), '---\nname: taiwei-web-deploy\ndescription: Deploy web apps\n---\n\nDEPLOY_BODY');
   await writeFile(join(directory, 'skills', 'disabled', 'SKILL.md'), '---\nname: disabled\ndescription: Disabled skill\n---\n\nDisabled');
   try {
     const skills = new SkillLoader(['disabled']);
@@ -121,6 +123,8 @@ test('gateway chat indexes only enabled skills by default without injecting bodi
       config: { ...structuredClone(DEFAULT_CONFIG), autoLoadSkills },
       memory,
       skills,
+      userSkills: { loadEnabled: async () => [] },
+      userSkillStates: { disabled: async () => new Set<string>() },
       context: new AgentContext(memory, skills),
       run: async (_message: string, options: { context?: AgentContext }) => {
         capturedPrompt = await options.context?.systemPrompt() ?? '';
@@ -130,15 +134,20 @@ test('gateway chat indexes only enabled skills by default without injecting bodi
     }) as unknown as TaiweiApp;
     const sink: ChatSink = { event: () => {}, error: (error) => { throw error; } };
 
-    await new AgentChatBridge(makeApp(true)).run('hello', sink);
-    assert.match(capturedPrompt, /Available skills:\n- enabled: Enabled skill/);
+    await new AgentChatBridge(makeApp(true)).run('hello', sink, [], undefined, undefined, 'build', 'admin');
+    assert.match(capturedPrompt, /Available skills:\n- taiwei-web-deploy: Deploy web apps/);
     assert.match(capturedPrompt, /Call load_skill\(name\) to load a skill's full instructions before using it\./);
     assert.doesNotMatch(capturedPrompt, /Active skills:/);
-    assert.doesNotMatch(capturedPrompt, /\nEnabled(?:\n|$)/);
+    assert.doesNotMatch(capturedPrompt, /DEPLOY_BODY/);
     assert.doesNotMatch(capturedPrompt, /disabled/i);
 
     capturedPrompt = '';
-    await new AgentChatBridge(makeApp(false)).run('hello', sink);
+    await new AgentChatBridge(makeApp(true)).run('hello', sink, [], undefined, undefined, 'build', 'guest', 'guest-user', undefined, undefined, undefined, undefined, undefined, undefined, 'guest-user');
+    assert.doesNotMatch(capturedPrompt, /taiwei-web-deploy/);
+    assert.doesNotMatch(capturedPrompt, /DEPLOY_BODY/);
+
+    capturedPrompt = '';
+    await new AgentChatBridge(makeApp(false)).run('hello', sink, [], undefined, undefined, 'build', 'admin');
     assert.doesNotMatch(capturedPrompt, /Available skills:/);
   } finally {
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
@@ -200,7 +209,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=\d+/);
+    assert.match(pageBody, /logo\.png\?v=79/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -338,10 +347,15 @@ test('gateway enforces role model catalog and repairs a guest session saved with
   const textModels = [
     { id: 'good', provider: 'main', displayName: 'Good', capabilities },
     { id: 'free', provider: 'main', displayName: 'Free', capabilities },
-    { id: 'grok', provider: 'main', displayName: 'Grok', capabilities },
+    { id: 'grok', provider: 'main', displayName: 'Grok', capabilities, adminOnly: true },
   ];
-  const imageModels = [{ id: 'image-free', provider: 'images', displayName: 'Image Free', capabilities }];
-  const videoModels = [{ id: 'video-pro', provider: 'videos', displayName: 'Video Pro', capabilities }];
+  const imageModels = [{ id: 'image-free', provider: 'images', displayName: 'Image Free', capabilities, adminOnly: true }];
+  const videoModels = [{ id: 'video-pro', provider: 'videos', displayName: 'Video Pro', capabilities, adminOnly: true }];
+  config.providers = [
+    { id: 'main', name: 'Main', type: 'openai-compatible', modality: 'text', baseUrl: 'https://example.test/v1', apiKey: '', defaultModel: 'free', models: textModels },
+    { id: 'images', name: 'Images', type: 'openai-compatible', modality: 'image', baseUrl: 'https://example.test/v1', apiKey: '', models: imageModels },
+    { id: 'videos', name: 'Videos', type: 'openai-compatible', modality: 'video', baseUrl: 'https://example.test/v1', apiKey: '', models: videoModels },
+  ];
   const modelState: GatewayModelState = {
     getCurrentModel: async () => 'grok',
     resolveModels: async () => ({
@@ -361,7 +375,7 @@ test('gateway enforces role model catalog and repairs a guest session saved with
   const chat = new MockChat();
   const server = createGatewayServer({
     chat, auth: config.auth, authSessions, modelState,
-    configState: { load: async () => structuredClone(config), save: async () => {} },
+    configState: { load: async () => structuredClone(config), save: async (next) => { config.modelGrants = structuredClone(next.modelGrants); } },
     log: () => {},
   });
   const port = await listenGateway(server, '127.0.0.1', 0);
@@ -393,6 +407,48 @@ test('gateway enforces role model catalog and repairs a guest session saved with
       assert.equal(denied.status, 403, path);
       assert.deepEqual(await denied.json(), { error: 'Guest cannot select this model' });
     }
+
+    assert.equal((await fetch(`${baseUrl}/api/model-grants`, { headers: invalidGatewayAuthHeader })).status, 401);
+    assert.equal((await fetch(`${baseUrl}/api/model-grants`, { headers: guestHeaders })).status, 403);
+    const invalidGrant = await fetch(`${baseUrl}/api/model-grants`, {
+      method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ grants: { 'guest-user': ['missing-model'] } }),
+    });
+    assert.equal(invalidGrant.status, 400);
+
+    const grantResponse = await fetch(`${baseUrl}/api/model-grants`, {
+      method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ grants: { 'guest-user': ['grok', 'image-free', 'video-pro'] } }),
+    });
+    assert.equal(grantResponse.status, 200);
+    assert.deepEqual(await grantResponse.json(), { grants: { 'guest-user': ['grok', 'image-free', 'video-pro'] } });
+    assert.deepEqual(config.modelGrants, { 'guest-user': ['grok', 'image-free', 'video-pro'] });
+    const grantedCatalog = await (await fetch(`${baseUrl}/api/models`, { headers: guestHeaders })).json() as {
+      models: string[]; providers: Array<{ models: Array<{ id: string }> }>;
+    };
+    assert.deepEqual(grantedCatalog.models, ['good', 'free', 'grok']);
+    assert.deepEqual(grantedCatalog.providers.flatMap((provider) => provider.models.map((model) => model.id)), ['good', 'free', 'grok']);
+    const grantedSelection = await fetch(`${baseUrl}/api/model`, {
+      method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'main', model: 'grok' }),
+    });
+    assert.equal(grantedSelection.status, 200);
+    const grantedSession = await grantedSelection.json() as { sessionId: string };
+    const grantedTurn = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: grantedSession.sessionId, message: 'use media' }),
+    });
+    assert.equal(grantedTurn.status, 200);
+    await grantedTurn.text();
+    assert.deepEqual(chat.grantedModels.at(-1), ['grok', 'image-free', 'video-pro']);
+    const adminCatalogAfterGrant = await (await fetch(`${baseUrl}/api/models`, { headers: adminHeaders })).json() as { models: string[] };
+    assert.deepEqual(adminCatalogAfterGrant.models, ['good', 'free', 'grok']);
+
+    const revokeResponse = await fetch(`${baseUrl}/api/model-grants`, {
+      method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/json' }, body: JSON.stringify({ grants: {} }),
+    });
+    assert.equal(revokeResponse.status, 200);
+    assert.deepEqual(config.modelGrants, {});
 
     const withoutSession = await fetch(`${baseUrl}/api/model`, {
       method: 'POST', headers: { ...guestHeaders, 'content-type': 'application/json' },
