@@ -266,6 +266,9 @@ export async function handleChatRoute(ctx: RouteContext): Promise<boolean> {
     startedAt: new Date().toISOString(), answer: '', toolCalls: [], lastSavedAt: Date.now(),
   };
   routePendingTurn = pendingTurn;
+  // 本回合开始前遗留的停止意图不应作用于新回合（避免陈旧 stopRequested 条目
+  // 在 SSE 断开时误停正常运行的新 turn）。
+  stopRequested.delete(runtimeSessionId);
   pendingTurns.set(runtimeSessionId, pendingTurn);
   pendingDeadlineTimer = setTimeout(() => {
     if (routeFinalized) return;

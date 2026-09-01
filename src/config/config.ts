@@ -313,7 +313,49 @@ export async function saveConfig(config: TaiweiConfig): Promise<void> {
     ...configWithoutGuests,
     auth: { ...config.auth, password: passwordForStorage(config.auth.password) },
   };
+  await stripEnvironmentOverrides(config, stored, paths.config);
   await writeFile(paths.config, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
+}
+
+/**
+ * 环境变量覆盖（TAIWEI_API_KEY / TAIWEI_BASE_URL / TAIWEI_MODEL /
+ * TAIWEI_AUTH_PASSWORD / OAUTH_TAIWEI_SECRET / OAUTH_TAIWEI_REDIRECT）只在运行时生效。
+ * 当流入 saveConfig 的值仍等于环境变量值（即来自 loadConfig 的覆盖、并非用户刻意修改），
+ * 写盘前恢复为磁盘原值，避免通过环境变量提供的密钥被持久化到 config.json。
+ */
+async function stripEnvironmentOverrides(config: TaiweiConfig, stored: TaiweiConfig, configPath: string): Promise<void> {
+  const env = process.env;
+  const hasAny = env.TAIWEI_API_KEY !== undefined || env.TAIWEI_BASE_URL !== undefined || env.TAIWEI_MODEL !== undefined
+    || env.TAIWEI_AUTH_PASSWORD !== undefined || env.OAUTH_TAIWEI_SECRET !== undefined || env.OAUTH_TAIWEI_REDIRECT !== undefined;
+  if (!hasAny) return;
+  let disk: Partial<TaiweiConfig> = {};
+  try { disk = JSON.parse(await readFile(configPath, 'utf8')) as Partial<TaiweiConfig>; }
+  catch { /* no previous on-disk config: nothing to restore */ }
+  const restore = (value: string | undefined, override: string | undefined, diskValue: unknown, fallback: string): string | undefined =>
+    override !== undefined && value === override ? (typeof diskValue === 'string' ? diskValue : fallback) : value;
+  stored.apiKey = restore(config.apiKey, env.TAIWEI_API_KEY, disk.apiKey, '')!;
+  stored.baseUrl = restore(config.baseUrl, env.TAIWEI_BASE_URL, disk.apiBaseUrl ?? disk.baseUrl, DEFAULT_CONFIG.baseUrl)!;
+  stored.model = restore(config.model, env.TAIWEI_MODEL, disk.model, DEFAULT_CONFIG.model)!;
+  if (env.TAIWEI_AUTH_PASSWORD !== undefined && config.auth.password === env.TAIWEI_AUTH_PASSWORD) {
+    stored.auth = { ...stored.auth, password: typeof disk.auth?.password === 'string' ? disk.auth.password : '' };
+  }
+  if (env.OAUTH_TAIWEI_SECRET !== undefined && config.oauth.clientSecret === env.OAUTH_TAIWEI_SECRET) {
+    stored.oauth = { ...stored.oauth, clientSecret: typeof disk.oauth?.clientSecret === 'string' ? disk.oauth.clientSecret : DEFAULT_CONFIG.oauth.clientSecret };
+  }
+  if (env.OAUTH_TAIWEI_REDIRECT !== undefined && config.oauth.redirectUri === env.OAUTH_TAIWEI_REDIRECT) {
+    stored.oauth = { ...stored.oauth, redirectUri: typeof disk.oauth?.redirectUri === 'string' ? disk.oauth.redirectUri : DEFAULT_CONFIG.oauth.redirectUri };
+  }
+  const defaultIndex = stored.providers?.findIndex((provider) => provider.id === 'default') ?? -1;
+  if (defaultIndex >= 0 && stored.providers) {
+    const diskProvider = Array.isArray(disk.providers) ? disk.providers.find((provider) => provider?.id === 'default') : undefined;
+    const providers = [...stored.providers];
+    const provider = { ...providers[defaultIndex]! };
+    provider.apiKey = restore(provider.apiKey, env.TAIWEI_API_KEY, diskProvider?.apiKey, '')!;
+    provider.baseUrl = restore(provider.baseUrl, env.TAIWEI_BASE_URL, diskProvider?.baseUrl, DEFAULT_CONFIG.baseUrl)!;
+    provider.defaultModel = restore(provider.defaultModel, env.TAIWEI_MODEL, diskProvider?.defaultModel, DEFAULT_CONFIG.model)!;
+    providers[defaultIndex] = provider;
+    stored.providers = providers;
+  }
 }
 
 export async function initializeConfig(): Promise<TaiweiConfig> {

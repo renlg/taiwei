@@ -4,6 +4,8 @@ import type { EarlyRouteContext, RouteContext } from './route-context.js';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1_000;
 const OAUTH_REQUEST_TIMEOUT_MS = 15_000;
+/** Upper bound for in-flight OAuth states; the endpoint is unauthenticated so this caps memory abuse. */
+const MAX_OAUTH_STATES = 1_000;
 
 function oauthProviderBaseUrl(value: string): string {
   let url: URL;
@@ -27,6 +29,7 @@ export async function handlePublicAuthRoutes(ctx: EarlyRouteContext): Promise<bo
     if (!/^[a-f0-9]{32,128}$/i.test(state)) throw new HttpError(400, 'Invalid OAuth state');
     const now = Date.now();
     for (const [key, expiresAt] of oauthStates) if (expiresAt <= now) oauthStates.delete(key);
+    if (oauthStates.size >= MAX_OAUTH_STATES) throw new HttpError(429, 'Too many pending OAuth states, please retry later');
     const expiresAt = now + OAUTH_STATE_TTL_MS;
     oauthStates.set(state, expiresAt);
     const redirectUri = accessConfig.oauth.redirectUri.trim() || `${requestOrigin(request, accessConfig)}/api/oauth/callback`;

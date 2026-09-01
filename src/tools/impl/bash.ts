@@ -450,6 +450,9 @@ async function enforceGuestCurl(
   return { command: out };
 }
 
+/** Commands that dump the process environment; denied while a Gitea token is injected. */
+const ENV_DUMP_COMMAND = /(?:^|[\s;&|(])(?:env|printenv|set|declare\s+-p|typeset\s+-p|export\s+-p)(?:\s+\d*>&\S+)*\s*(?:[|;&)>]|$)/im;
+
 function guestHome(workspaceRoot: string, guestOsUser: string): string {
   const parent = dirname(workspaceRoot);
   return workspaceRoot.endsWith(`/${guestOsUser}/projects`) ? parent : `/home/${guestOsUser}`;
@@ -520,6 +523,10 @@ export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpe
         try { giteaBaseUrl = await lookupGiteaBaseUrl(); }
         catch { giteaBaseUrl = undefined; }
         const scripts = context.workspaceRoot ? await guestScriptContents(command, cwd, context.workspaceRoot, guestSkillDir) : [];
+        // 凭据由工具自动注入：命令或脚本不允许引用注入的凭据环境变量名。
+        if (/TAIWEI_GITEA_TOKEN/.test(`${command}\n${scripts.join('\n')}`)) {
+          return { error: `${GUEST_DENIAL}：Gitea 凭据由系统自动注入，命令不能引用 TAIWEI_GITEA_TOKEN 环境变量`, command, cwd };
+        }
         for (const script of scripts) {
           const normalizedScript = script.replace(/\\\r?\n/g, '');
           const scriptGit = await enforceGuestGit(normalizedScript, giteaIdentity ?? context.identity, guestOsUser, cwd, lookupSessionGiteaToken, false);
@@ -545,9 +552,15 @@ export function createBashTool(dependencies: BashToolDependencies = {}): ToolSpe
         if (context.authorizeCommand && !await context.authorizeCommand(command, cwd)) {
           return { error: '用户拒绝了该命令的执行', command, cwd };
         }
-        const token = /\b(?:git\s+(?:push|clone|fetch|pull)|curl\b)/i.test(`${command}\n${scripts.join('\n')}`)
+        const combinedCommand = `${command}\n${scripts.join('\n')}`;
+        // TAIWEI_GITEA_TOKEN 只服务于 git credential helper；Gitea curl 的 token
+        // 已由 enforceGuestCurl 直接内嵌到命令行，不再向任意 curl 命令注入凭据环境。
+        const token = /\bgit\s+(?:push|clone|fetch|pull)\b/i.test(combinedCommand)
           ? await lookupSessionGiteaToken(giteaIdentity ?? context.identity)
           : undefined;
+        if (token && ENV_DUMP_COMMAND.test(combinedCommand)) {
+          return { error: `${GUEST_DENIAL}：注入 Gitea 凭据时禁止导出或打印环境变量`, command, cwd };
+        }
         const result = await executeFile('runuser', ['-u', guestOsUser, '--preserve-environment', '--', '/bin/bash', '-c', `cd -- "$1" && ${command}`, 'guest-bash', cwd], {
           cwd, signal: context.signal, timeout: Number(args.timeout_ms ?? 120_000), maxBuffer: 10 * 1024 * 1024,
           env: guestEnvironment(guestOsUser, guestHome(context.workspaceRoot ?? cwd, guestOsUser), token),

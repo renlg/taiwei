@@ -124,7 +124,9 @@ export async function handleSessionRoutes(ctx: RouteContext): Promise<boolean> {
     const body = await readJson(request).catch(() => ({})) as { sessionId?: unknown };
     const sessionId = typeof body.sessionId === 'string' ? body.sessionId : '';
     const runtimeSessionId = runtimeSessionIdFor(sessionId);
-    stopRequested.add(runtimeSessionId);
+    // 只在该会话确有进行中 turn 时记录停止意图；否则陈旧条目会在下一个
+    // turn 的 SSE 断开时把正常运行的回合误停。
+    if (sessionId && pendingTurns.has(runtimeSessionId)) stopRequested.add(runtimeSessionId);
     json(response, 200, { stopped: sessionId ? options.chat.stop(runtimeSessionId) : false });
     return true;
   }
