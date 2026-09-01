@@ -51,7 +51,7 @@ test('generate_image calls the image endpoint and returns displayable markdown',
       url: 'https://media.example/v1/images/generations',
       method: 'POST',
       authorization: 'Bearer media-secret',
-      body: { model: 'image-free', prompt: '一只龙虾', n: 1, size: '1024x1024', quality: 'high' },
+      body: { model: 'image-free', prompt: '一只龙虾', n: 1, size: '1024x1024' },
     });
   },
 ));
@@ -89,11 +89,11 @@ test('generate_image passes a reference image without altering the prompt and om
   },
 ));
 
-test('generate_image surfaces the upstream error message with the model style hint on 4xx', async () => withMediaProvider(
+test('generate_image surfaces the upstream error message with the model parameter example on 4xx', async () => withMediaProvider(
   () => Response.json({ error: { message: 'quota exceeded' } }, { status: 429 }),
   async () => {
     const output = await imageGenTool.execute({ prompt: '海报' }, { cwd: process.cwd() });
-    assert.match(String(output), /图片生成失败: quota exceeded\n\n该图片模型样式：/);
+    assert.match(String(output), /图片生成失败: quota exceeded\n\n.*支持的参数示例：/s);
   },
 ));
 
@@ -211,11 +211,11 @@ test('generate_video reports an async task failure', async () => withMediaProvid
   },
 ));
 
-test('generate_video surfaces the model style hint on a 4xx create failure', async () => withMediaProvider(
+test('generate_video surfaces the model parameter hint on a 4xx create failure', async () => withMediaProvider(
   () => Response.json({ error: { message: 'invalid size' } }, { status: 400 }),
   async () => {
     const output = await videoGenTool.execute({ prompt: '海浪' }, { cwd: process.cwd() });
-    assert.match(String(output), /视频生成失败: invalid size\n\n该视频模型样式：/);
+    assert.match(String(output), /视频生成失败: invalid size\n\n视频模型参数：/);
   },
 ));
 

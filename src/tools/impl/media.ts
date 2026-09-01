@@ -102,32 +102,70 @@ function isUpstream4xx(error: unknown): boolean {
   return /上游服务返回 HTTP 4\d\d|(?:^|\D)(?:400|401|402|403|404|405|406|407|408|409|410|411|412|413|414|415|416|417|418|421|422|423|424|425|426|428|429|431|451)(?:\D|$)/.test(message);
 }
 
-// 各图片/视频模型支持的样式（参数规格），失败提示时直接展示给用户，无需联网查询。
-const MODEL_STYLES: Array<{ match: (model: string) => boolean; hint: string }> = [
+interface ModelParamDef { default?: string; example: string; description: string }
+
+interface ModelSpec {
+  name: string;
+  match: (model: string) => boolean;
+  params: Record<string, ModelParamDef>;
+}
+
+const MODEL_SPECS: ModelSpec[] = [
   {
+    name: 'grok-imagine',
     match: (model) => model.startsWith('grok-imagine'),
-    hint: 'grok-imagine 样式：用 aspect_ratio（2:1 / 20:9 / 19.5:9 / 16:9 / 4:3 / 3:2 / 1:1 / 2:3 / 3:4 / 9:16 / 9:19.5 / 9:20 / 1:2）+ resolution（1k 标准 / 2k 高清）控制尺寸，不用 size；quality 仅支持 low / medium。',
+    params: {
+      aspect_ratio: { default: '1:1', example: '16:9', description: '宽高比，可选 2:1 / 20:9 / 19.5:9 / 16:9 / 4:3 / 3:2 / 1:1 / 2:3 / 3:4 / 9:16 / 9:19.5 / 9:20 / 1:2' },
+      resolution: { default: '1k', example: '1k', description: '分辨率，1k 标准 / 2k 高清' },
+      quality: { example: 'low', description: '仅支持 low / medium，不要传 high' },
+      n: { example: '1', description: '一次生成数量，最多 4' },
+      image: { example: 'https://example.com/ref.png', description: '参考图 URL（可选）' },
+    },
   },
   {
+    name: 'agnes-image / nano-banana / image-free',
     match: (model) => model.startsWith('agnes-image') || model === 'image-free' || model.startsWith('nano-banana'),
-    hint: '该图片模型样式：OpenAI 兼容 size 指定尺寸（如 1024x1024，宽高须为 32 的整数倍、长边不超过 2048、总像素约 400 万内）；quality 支持 low / medium / high；n 一次最多 4 张；可选 image 参考图。',
-  },
-  {
-    match: (model) => model.startsWith('agnes-video') || model === 'video-free' || model === 'free-video',
-    hint: '该视频模型样式：duration 1-15 秒；size 支持 480p / 720p / 1080p / 4k 或 WxH（如 1280x720）；quality 别名 low→480p、medium→720p、high→1080p（同时给 size 时以 size 为准）；可选 image 首帧/参考图做图生视频。',
+    params: {
+      size: { default: '1024x1024', example: '1024x1024', description: '宽xH，宽高须为 32 的整数倍、长边不超过 2048、总像素约 400 万内' },
+      quality: { example: 'high', description: 'low / medium / high' },
+      n: { example: '1', description: '一次最多 4 张' },
+      image: { example: 'https://example.com/ref.png', description: '参考图 URL（可选）' },
+    },
   },
 ];
 
-function modelStyleHint(model: string): string | null {
-  const entry = MODEL_STYLES.find((item) => item.match(model));
-  return entry ? entry.hint : null;
+const FALLBACK_IMAGE_SPEC: ModelSpec = {
+  name: 'OpenAI 兼容图片模型',
+  match: () => true,
+  params: {
+    size: { default: '1024x1024', example: '1024x1024', description: '宽xH，宽高须为 32 的整数倍、长边不超过 2048' },
+    quality: { example: 'high', description: 'low / medium / high' },
+    n: { example: '1', description: '一次最多 4 张' },
+    image: { example: 'https://example.com/ref.png', description: '参考图 URL（可选）' },
+  },
+};
+
+function imageModelSpec(model: string): ModelSpec {
+  return MODEL_SPECS.find((spec) => spec.match(model)) ?? FALLBACK_IMAGE_SPEC;
 }
 
-async function mediaFailure(prefix: string, model: string, error: unknown, context: ToolContext): Promise<string> {
+function buildParamExample(spec: ModelSpec): string {
+  const example: Record<string, unknown> = { prompt: '描述内容', model: '模型名' };
+  for (const [key, def] of Object.entries(spec.params)) {
+    example[key] = def.default ?? def.example;
+  }
+  return JSON.stringify(example, null, 2);
+}
+
+const VIDEO_HINT = '视频模型参数：prompt（必填）、model、duration（1-15 秒）、size（480p / 720p / 1080p / 4k 或 WxH）、quality（low / medium / high，别名 480p/720p/1080p）、image（参考图 URL，可选）。';
+
+async function mediaFailure(prefix: string, model: string, error: unknown, context: ToolContext, spec?: ModelSpec): Promise<string> {
   const message = error instanceof Error ? error.message : String(error);
   if (!isUpstream4xx(error)) return `${prefix}: ${message}`;
-  const hint = modelStyleHint(model);
-  return hint ? `${prefix}: ${message}\n\n${hint}` : `${prefix}: ${message}`;
+  if (spec) {
+    return `${prefix}: ${message}\n\n${spec.name} 支持的参数示例：\n\`\`\`json\n${buildParamExample(spec)}\n\`\`\`\n请根据以上参数示例重新调用，不要传入未列出的字段。`;
+  }
+  return `${prefix}: ${message}\n\n${VIDEO_HINT}`;
 }
 
 function extraPayload(args: Record<string, unknown>, standardFields: ReadonlySet<string>): Record<string, unknown> {
@@ -161,27 +199,25 @@ function validateReferenceImage(url: string): string | null {
 
 export const imageGenTool: ToolSpec = {
   name: 'generate_image',
-  description: '生成图片。当用户要求画图/生成图片/设计图/示意图/海报/头像/logo等视觉内容时调用。支持 grok-imagine 系列模型（grok-imagine-image-2.0 等，用 aspect_ratio+resolution 控制尺寸，不用 size）。生成结果会自动在聊天中显示。',
+  description: '生成图片。当用户要求画图/生成图片/设计图/示意图/海报/头像/logo等视觉内容时调用。不同模型参数不同：grok-imagine 系列用 aspect_ratio+resolution（不用 size）；agnes-image / nano-banana / image-free 用 size（不用 aspect_ratio/resolution）。只传目标模型支持的参数，不要传不支持的字段。生成结果会自动在聊天中显示。',
   parameters: {
     type: 'object',
     properties: {
       prompt: { type: 'string', description: '要生成的图片内容描述。' },
       model: { type: 'string', enum: await configuredImageModels(), default: 'image-free' },
-      size: { type: 'string', default: '1024x1024' },
+      size: { type: 'string', description: '图片尺寸如 1024x1024（仅 agnes-image / nano-banana / image-free 使用，grok-imagine 忽略此字段）。' },
       aspect_ratio: {
         type: 'string',
         enum: ['2:1', '20:9', '19.5:9', '16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16', '9:19.5', '9:20', '1:2'],
-        description: '图片宽高比（xAI grok-imagine 专用），默认 1:1。',
-        default: '1:1',
+        description: '图片宽高比，仅 grok-imagine 模型使用，其他模型忽略。',
       },
       resolution: {
         type: 'string',
         enum: ['1k', '2k'],
-        description: '图片分辨率（xAI grok-imagine 专用），1k 标准、2k 高清。默认 1k。',
-        default: '1k',
+        description: '图片分辨率，仅 grok-imagine 模型使用，1k 标准、2k 高清。',
       },
       n: { type: 'integer', description: '生成图片数量（最多 4 张），多张会依次生成。', default: 1, minimum: 1, maximum: 4 },
-      quality: { type: 'string', enum: ['low', 'medium', 'high'], description: '图片质量：low 较快、medium 均衡、high 更清晰。', default: 'high' },
+      quality: { type: 'string', enum: ['low', 'medium', 'high'], description: '图片质量。不是所有模型都支持：grok-imagine 仅支持 low/medium；不传则使用模型默认值。' },
       image: { type: 'string', description: '参考图 URL（可选）；上游暂不保证支持参考图。' },
     },
     required: ['prompt'],
@@ -196,12 +232,8 @@ export const imageGenTool: ToolSpec = {
       if (context.role !== 'admin' && findModelAdminOnly(config, mediaProviderId(config, 'image', model), model) && !context.grantedModels?.has(model)) {
         return '图片生成失败: 你没有权限使用该模型，仅管理员可用';
       }
+      const spec = imageModelSpec(model);
       const count = imageCount(args.n);
-      const grokImagine = model.startsWith('grok-imagine');
-      const quality = argumentString(args.quality, grokImagine ? 'low' : 'high');
-      if (grokImagine && !['low', 'medium'].includes(quality)) {
-        return `图片生成失败: grok-imagine 仅支持 quality=low/medium（当前 ${quality}）`;
-      }
       const referenceImage = argumentString(args.image, '');
       const imageError = validateReferenceImage(referenceImage);
       if (imageError) return `图片生成失败: ${imageError}`;
@@ -212,16 +244,13 @@ export const imageGenTool: ToolSpec = {
           ...extraPayload(args, IMAGE_STANDARD_FIELDS),
           model,
           prompt: requestPrompt,
-          n: 1,
-          ...(grokImagine
-            ? {
-                aspect_ratio: argumentString(args.aspect_ratio, '1:1'),
-                resolution: argumentString(args.resolution, '1k'),
-              }
-            : { size: argumentString(args.size, '1024x1024') }),
-          quality,
-          ...(referenceImage ? { image: referenceImage } : {}),
         };
+        if (spec.params.aspect_ratio) payload.aspect_ratio = argumentString(args.aspect_ratio, spec.params.aspect_ratio.default ?? '1:1');
+        if (spec.params.resolution) payload.resolution = argumentString(args.resolution, spec.params.resolution.default ?? '1k');
+        if (spec.params.size) payload.size = argumentString(args.size, spec.params.size.default ?? '1024x1024');
+        if (spec.params.quality && args.quality !== undefined) payload.quality = argumentString(args.quality, '');
+        if (spec.params.n) payload.n = 1;
+        if (spec.params.image && referenceImage) payload.image = referenceImage;
         const body = await postMedia('/images/generations', payload, context);
         const markdown = imageMarkdown(body.data?.[0], count > 1 ? index + 1 : undefined);
         if (!markdown) return '图片生成失败: 上游响应中没有图片 URL 或 b64_json';
@@ -232,7 +261,7 @@ export const imageGenTool: ToolSpec = {
         : `图片生成成功：\n${images[0]}`;
     } catch (error) {
       if (context.signal?.aborted) throw error;
-      return mediaFailure('图片生成失败', argumentString(args.model, 'image-free'), error, context);
+      return mediaFailure('图片生成失败', argumentString(args.model, 'image-free'), error, context, imageModelSpec(argumentString(args.model, 'image-free')));
     }
   },
 };
