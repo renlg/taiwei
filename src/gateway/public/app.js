@@ -222,7 +222,7 @@ const state = {
   shareToken: localStorage.getItem('taiwei_share_token') || '',
   role: localStorage.getItem('taiwei-role') || 'admin',
   username: localStorage.getItem('taiwei-username') || '',
-  loginRole: 'admin',
+  loginRole: 'guest',
   models: [],
   providers: [],
   currentProvider: 'default',

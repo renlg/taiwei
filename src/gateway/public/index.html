@@ -14,23 +14,23 @@
     <form class="login-card" id="login-form">
       <img class="login-mark" src="/logo.png?v={{ASSET_VERSION}}" alt="taiwei">
       <h1>登录 taiwei</h1>
-      <p id="login-description">请输入管理员账号以继续。</p>
+      <p id="login-description">使用 ai-connect 账号安全登录。</p>
       <div class="login-tabs" role="tablist">
-        <button class="login-tab active" type="button" data-login-role="admin">管理员登录</button>
-        <button class="login-tab" type="button" data-login-role="guest">普通用户登录</button>
+        <button class="login-tab active" type="button" data-login-role="guest">普通用户登录</button>
+        <button class="login-tab" type="button" data-login-role="admin">管理员登录</button>
       </div>
-      <div id="admin-login-fields">
+      <div id="admin-login-fields" hidden>
         <label for="login-username">用户名</label>
         <input id="login-username" name="username" autocomplete="username" required>
         <label for="login-password">密码</label>
         <input id="login-password" name="password" type="password" autocomplete="current-password" required>
       </div>
-      <div class="oauth-login-panel" id="oauth-login-panel" hidden>
+      <div class="oauth-login-panel" id="oauth-login-panel">
         <p>登录 ai-connect 账号后直接进入聊天,独立记忆</p>
         <button class="login-button" id="oauth-login" type="button">通过 ai-connect 登录</button>
       </div>
       <div class="login-error" id="login-error" role="alert"></div>
-      <button class="login-button" id="login-submit" type="submit">登录</button>
+      <button class="login-button" id="login-submit" type="submit" hidden>登录</button>
     </form>
   </section>
   <script>
