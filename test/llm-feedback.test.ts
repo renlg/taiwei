@@ -159,3 +159,26 @@ test('AbortError bypasses model feedback iteration', async () => isolated(async 
     assert.equal(events.filter((event) => event.type === 'model_iterate').length, 0);
   } finally { await close(server); }
 }));
+
+test('exhausted transient retries surface directly without model feedback iteration', async () => isolated(async () => {
+  let calls = 0;
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain request */ }
+    calls += 1;
+    response.writeHead(503, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ error: { message: `temporary failure ${calls}` } }));
+  });
+  const baseUrl = await listen(server);
+  try {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.skillSelfLearning = false;
+    config.baseUrl = baseUrl;
+    config.retry = { ...config.retry, maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0, maxFeedbackIterations: 2 };
+    const events: AgentEvent[] = [];
+    await assert.rejects(runAgentTurn('hello', context(), new ToolRegistry(), config, {
+      onEvent: (event) => events.push(event),
+    }), /temporary failure 3/);
+    assert.equal(calls, 3);
+    assert.equal(events.filter((event) => event.type === 'model_iterate').length, 0);
+  } finally { await close(server); }
+}));

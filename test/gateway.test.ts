@@ -1592,6 +1592,45 @@ test('gateway persists reported and thrown turn errors with partial output', asy
   }
 });
 
+test('gateway keeps model feedback errors out of SSE and sends only the final error', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-retry-error-test-'));
+  const sessions = new SessionStore(join(directory, 'sessions'));
+  const chat: ChatBridge = {
+    async run(_message, sink) {
+      sink.event({
+        type: 'model_iterate', model: 'test-model', feedbackAttempt: 1, maxFeedbackIterations: 2,
+        error: { message: 'intermediate provider failure' },
+      });
+      sink.error(new Error('final provider failure'));
+    },
+    stop: () => true,
+  };
+  const server = createGatewayServer({
+    chat, sessions, history: false,
+    uploadsDirectory: join(directory, 'uploads'),
+    configState: { load: async () => structuredClone(DEFAULT_CONFIG), save: async () => {} },
+    log: () => {},
+  });
+  try {
+    const port = await listenGateway(server, '127.0.0.1', 0);
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const created = await (await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
+    })).json() as { id: string };
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hello', sessionId: created.id }),
+    });
+    const events = await response.text();
+    assert.doesNotMatch(events, /model_iterate|intermediate provider failure/);
+    assert.equal(events.match(/event: error/g)?.length, 1);
+    assert.match(events, /final provider failure/);
+  } finally {
+    await closeGateway(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('gateway SSE disconnect does not cancel the running turn', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-disconnect-test-'));
   const slowChat = new SlowChat();

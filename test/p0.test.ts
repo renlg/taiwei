@@ -15,7 +15,7 @@ import { getAgentProfile } from '../src/agents/profiles.js';
 import { resolveInWorkspace } from '../src/util/paths.js';
 import { appendAudit } from '../src/observability/audit.js';
 import { streamChat, type ChatMessage } from '../src/llm/client.js';
-import { ProviderHttpError, retryableProviderError } from '../src/llm/retry.js';
+import { ProviderHttpError, retryableProviderError, withProviderRetry } from '../src/llm/retry.js';
 import { DEFAULT_CONFIG } from '../src/config/config.js';
 import { AgentContext } from '../src/agent/context.js';
 import { MemoryStore } from '../src/memory/store.js';
@@ -304,10 +304,37 @@ test('provider retry classification includes only transient 400 responses', () =
   assert.equal(retryableProviderError(new ProviderHttpError(400, 'Upstream service temporarily unavailable')), true);
   assert.equal(retryableProviderError(new ProviderHttpError(400, 'Please try again later')), true);
   assert.equal(retryableProviderError(new ProviderHttpError(400, 'upstream error')), true);
+  assert.equal(retryableProviderError(new ProviderHttpError(400, 'request timed out')), true);
   assert.equal(retryableProviderError(new ProviderHttpError(400, 'invalid request')), false);
   assert.equal(retryableProviderError(new ProviderHttpError(400, 'Bad Request')), false);
+  assert.equal(retryableProviderError(new ProviderHttpError(408, 'request timeout')), true);
   assert.equal(retryableProviderError(new ProviderHttpError(429, 'too many requests')), true);
   assert.equal(retryableProviderError(new ProviderHttpError(500, 'internal server error')), true);
+});
+
+test('provider timeout retries to maxAttempts and throws the final error', async () => {
+  const errors = Array.from({ length: 3 }, (_, index) => new DOMException(`timeout ${index + 1}`, 'TimeoutError'));
+  let calls = 0;
+  await assert.rejects(withProviderRetry(async () => {
+    throw errors[calls++];
+  }, {
+    maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0, sleep: async () => {}, random: () => 0,
+  }), (error: unknown) => error === errors[2]);
+  assert.equal(calls, 3);
+  assert.equal(retryableProviderError(errors[0]), true);
+});
+
+test('provider retry does not retry a user-cancel AbortError', async () => {
+  const cancelled = new DOMException('user cancelled', 'AbortError');
+  let calls = 0;
+  await assert.rejects(withProviderRetry(async () => {
+    calls += 1;
+    throw cancelled;
+  }, {
+    maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0, sleep: async () => {}, random: () => 0,
+  }), (error: unknown) => error === cancelled);
+  assert.equal(calls, 1);
+  assert.equal(retryableProviderError(cancelled), false);
 });
 
 test('audit recursively redacts secret-shaped argument keys', async () => temporaryHome(async (directory) => {

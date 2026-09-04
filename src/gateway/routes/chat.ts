@@ -317,7 +317,8 @@ export async function handleChatRoute(ctx: RouteContext): Promise<boolean> {
         sendSse(response, 'tool_result', { name: event.name, result: event.result });
         throttledSave();
       } else if (event.type === 'model_iterate') {
-        sendSse(response, 'model_iterate', event);
+        // Model feedback is an internal recovery step. Do not expose its raw error
+        // to the browser; a terminal failure is delivered once through sink.error.
       } else if (event.type === 'compressing') {
         sendSse(response, 'compressing', {});
       } else if (event.type === 'usage') {

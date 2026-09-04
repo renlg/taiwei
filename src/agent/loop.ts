@@ -14,7 +14,7 @@ import { appendAudit } from '../observability/audit.js';
 import { emitEvent } from '../observability/events.js';
 import { filterToolsForModel, resolveModel } from '../llm/catalog.js';
 import { selectionFor } from '../config/model.js';
-import { ProviderHttpError } from '../llm/retry.js';
+import { ProviderHttpError, retryableProviderError } from '../llm/retry.js';
 import { guestIdForUsername } from '../util/paths.js';
 import { parseSkill } from '../skills/loader.js';
 import { UserSkillStore } from '../skills/user-store.js';
@@ -313,7 +313,9 @@ export async function runAgentTurn(
         },
       });
     } catch (error) {
-      if (isAbortError(error, options.signal) || consecutiveModelFeedbacks >= maxFeedbackIterations) throw error;
+      // Transient failures have already exhausted provider retry/fallback handling.
+      // Surface that final failure once instead of starting another model request cycle.
+      if (isAbortError(error, options.signal) || retryableProviderError(error) || consecutiveModelFeedbacks >= maxFeedbackIterations) throw error;
       consecutiveModelFeedbacks += 1;
       const feedback = modelErrorFeedback(error);
       const iterateEvent = {

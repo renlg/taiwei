@@ -10,12 +10,16 @@ export class ProviderHttpError extends Error {
 
 export function retryableProviderError(error: unknown): boolean {
   if (error instanceof ProviderHttpError) {
-    if (error.status === 429 || error.status >= 500) return true;
-    if (error.status === 400 && /temporarily unavailable|temporarily overloaded|upstream.*(unavailable|error)|service.*unavailable|please try again later/i.test(error.message)) return true;
+    if (error.status === 408 || error.status === 429 || error.status >= 500) return true;
+    if (error.status === 400 && /timed?\s*out|temporarily unavailable|temporarily overloaded|upstream.*(unavailable|error)|service.*unavailable|please try again later/i.test(error.message)) return true;
     return false;
   }
-  if (error instanceof DOMException && error.name === 'AbortError') return false;
-  return error instanceof TypeError || (error instanceof Error && /fetch|network|socket|ECONN|ETIMEDOUT/i.test(error.message));
+  // An external/user cancellation is permanent for this turn. AbortSignal.timeout(),
+  // however, rejects with TimeoutError and therefore remains retryable below.
+  if (error instanceof Error && error.name === 'AbortError') return false;
+  // Non-HTTP provider failures are generally transport/runtime failures. Retry them,
+  // including TimeoutError, malformed responses, socket errors, and non-Error throws.
+  return true;
 }
 
 export async function withProviderRetry<T>(operation: (attempt: number) => Promise<T>, options: RetryOptions): Promise<{ value: T; attempts: number }> {
