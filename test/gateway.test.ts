@@ -20,6 +20,8 @@ import { ToolRegistry } from '../src/tools/registry.js';
 import { AgentContext } from '../src/agent/context.js';
 import { MemoryStore } from '../src/memory/store.js';
 import { SkillLoader } from '../src/skills/loader.js';
+import { UserSkillStore } from '../src/skills/user-store.js';
+import { UserSkillStateStore } from '../src/skills/user-state.js';
 import type { TaiweiApp } from '../src/app.js';
 import { createMemoryTools, writeExtendedMemory } from '../src/tools/impl/memory.js';
 import { installGatewayTestAdminAuth, invalidGatewayAuthHeader } from './gateway-test-auth.js';
@@ -150,6 +152,87 @@ test('gateway chat exposes system skills to admins but isolates them from guests
     await new AgentChatBridge(makeApp(false)).run('hello', sink, [], undefined, undefined, 'build', 'admin');
     assert.doesNotMatch(capturedPrompt, /Available skills:/);
   } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('guest browser chat can activate an installed skill but cannot use other overrides', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-guest-skill-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  process.env.TAIWEI_HOME = directory;
+  const username = 'skill-user';
+  const guestId = guestIdForUsername(username);
+  const authSessions = new AuthSessionStore(join(directory, 'gateway-sessions.json'));
+  const token = await authSessions.create(username, 'guest');
+  const userSkills = new UserSkillStore(join(directory, 'user-skills'));
+  const userSkillStates = new UserSkillStateStore(join(directory, 'skill-states'));
+  const skillSource = (name: string, body: string) => `---\nname: ${name}\ndescription: ${name}\n---\n\n${body}\n`;
+  await userSkills.save(guestId, 'personal-skill', skillSource('personal-skill', 'GUEST_PERSONAL_SKILL_BODY'));
+  await mkdir(join(directory, 'skills', 'system-only'), { recursive: true });
+  await writeFile(join(directory, 'skills', 'system-only', 'SKILL.md'), skillSource('system-only', 'SYSTEM_ONLY_BODY'));
+  const skills = new SkillLoader();
+  const memory = new MemoryStore(join(directory, 'memory.md'));
+  let capturedPrompt = '';
+  const app = {
+    config: { ...structuredClone(DEFAULT_CONFIG), autoLoadSkills: true }, memory, skills, userSkills, userSkillStates,
+    context: new AgentContext(memory, skills),
+    run: async (_message: string, options: { context?: AgentContext; onEvent?: (event: AgentEvent) => void }) => {
+      capturedPrompt = await options.context!.systemPrompt();
+      options.onEvent?.({ type: 'done', text: 'skill active' });
+      return 'skill active';
+    },
+    interrupt: { cancel: () => false },
+  } as unknown as TaiweiApp;
+  const config = structuredClone(DEFAULT_CONFIG);
+  const server = createGatewayServer({
+    chat: new AgentChatBridge(app), authSessions, tenantAccounts: false, skillLoader: skills,
+    userSkillStore: userSkills, userSkillStateStore: userSkillStates,
+    modelState: {
+      getCurrentModel: async () => 'free',
+      resolveModels: async () => ({ models: ['free'], current: 'free', source: 'config' }),
+      setCurrentModel: async () => {},
+    },
+    configState: { load: async () => structuredClone(config), save: async () => {} }, log: () => {},
+  });
+  const port = await listenGateway(server, '127.0.0.1', 0);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+  try {
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST', headers, body: JSON.stringify({ message: 'use my skill', skills: ['personal-skill'] }),
+    });
+    const responseText = await response.text();
+    assert.equal(response.status, 200, responseText);
+    assert.match(response.headers.get('content-type') ?? '', /^text\/event-stream/);
+    assert.match(responseText, /event: done/);
+    assert.match(capturedPrompt, /GUEST_PERSONAL_SKILL_BODY/);
+
+    await userSkillStates.setEnabled(guestId, 'personal-skill', false);
+    capturedPrompt = '';
+    const disabledResponse = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST', headers, body: JSON.stringify({ message: 'do not use disabled skill', skills: ['personal-skill'] }),
+    });
+    assert.equal(disabledResponse.status, 200);
+    await disabledResponse.text();
+    assert.doesNotMatch(capturedPrompt, /GUEST_PERSONAL_SKILL_BODY/);
+
+    for (const override of [{ provider: 'forbidden-provider' }, { model: 'forbidden-model' }]) {
+      const forbidden = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST', headers, body: JSON.stringify({ message: 'override', ...override }),
+      });
+      assert.equal(forbidden.status, 403);
+      assert.deepEqual(await forbidden.json(), { error: 'Gateway chat overrides require X-API-Key authentication' });
+    }
+
+    const listing = await (await fetch(`${baseUrl}/api/skills`, {
+      headers: { authorization: `Bearer ${token}` },
+    })).json() as { skills: Array<{ name: string; enabled: boolean; installed: boolean }> };
+    const systemOnly = listing.skills.find((skill) => skill.name === 'system-only');
+    assert.equal(systemOnly?.enabled, false);
+    assert.equal(systemOnly?.installed, false);
+  } finally {
+    await closeGateway(server);
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
     await rm(directory, { recursive: true, force: true });
   }

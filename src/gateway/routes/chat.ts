@@ -28,10 +28,10 @@ export async function handleChatRoute(ctx: RouteContext): Promise<boolean> {
   };
   const extendedFields = ['provider', 'model', 'mode', 'skills', 'skipDangerous', 'directory'] as const;
   const hasExtendedParameters = extendedFields.some((field) => Object.prototype.hasOwnProperty.call(body, field));
-  // skills（技能注入）允许 admin 登录会话使用（UI 技能选择）；其余扩展覆盖仍仅限 API-key
-  const isAdminSession = authenticatedRole === 'admin' && Boolean(authenticatedToken);
+  // skills（技能注入）允许所有已认证浏览器会话使用（UI 技能选择）；其余扩展覆盖仍仅限 API-key
+  const isBrowserSession = (authenticatedRole === 'admin' || authenticatedRole === 'guest') && Boolean(authenticatedToken);
   const hasOnlySkillsOverride = Object.keys(body).every((key) => key === 'message' || key === 'sessionId' || key === 'files' || key === 'skills');
-  if (hasExtendedParameters && !authenticatedViaApiKey && !(isAdminSession && hasOnlySkillsOverride)) {
+  if (hasExtendedParameters && !authenticatedViaApiKey && !(isBrowserSession && hasOnlySkillsOverride)) {
     json(response, 403, { error: 'Gateway chat overrides require X-API-Key authentication' });
     return true;
   }

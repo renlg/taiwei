@@ -55,6 +55,16 @@ export class AgentChatBridge implements ChatBridge {
         }
       }
     }
+    if (role === 'guest' && activeSkillNames !== undefined) {
+      try {
+        const disabled = await this.app.userSkillStates.disabled(owner);
+        for (const name of activeSkillNames) {
+          if (disabled.has(name)) continue;
+          try { context.activateUserSkill(await this.app.userSkills.load(owner, name)); }
+          catch { /* Missing or unreadable guest skills must never block a web chat turn. */ }
+        }
+      } catch { /* Missing or unreadable guest skill state must never block a web chat turn. */ }
+    }
     try {
       try { context.setRetrievedContext(renderRetrievedContext(await retrieve(message))); }
       catch { /* RAG is optional and must never block a web chat turn. */ }

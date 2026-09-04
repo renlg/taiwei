@@ -26,7 +26,7 @@ export async function handleSkillRoutes(ctx: RouteContext): Promise<boolean> {
       name: skill.name,
       description: skill.description,
       enabled: skillStoreOwner
-        ? (installed.has(skill.name) ? !disabled.has(skill.name) : !skillLoader.isDisabled?.(skill) && !configDisabled.has(skill.name))
+        ? installed.has(skill.name) && !disabled.has(skill.name)
         : !(skillLoader.isDisabled?.(skill) ?? configDisabled.has(skill.name)),
       installed: installed.has(skill.name),
       source: 'system',
