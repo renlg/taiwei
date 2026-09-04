@@ -7,7 +7,7 @@ import { LoginLockStore } from './login-locks.js';
 import { SessionStore, type SessionIdentity, type SessionUsage, type SessionToolCall } from './sessions.js';
 import { FolderStore, guestFolderName, workspaceFolderMetadata, type GatewayFolder } from './folders.js';
 import { getCurrentModel, resolveModelCatalog, setCurrentModel, type ModelListResult } from '../config/model.js';
-import { loadConfig, resolveContextWindow, resolveToolSettings, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
+import { authPasswordHasEnvironmentTemplate, loadConfig, resolveContextWindow, resolveToolSettings, resolveWorkspaceDir, saveConfig, type TaiweiConfig } from '../config/config.js';
 import { getPaths } from '../util/paths.js';
 import { ConfirmationBroker } from './confirmations.js';
 import type { HookRunner } from '../hooks/runner.js';
@@ -62,7 +62,7 @@ export interface GatewayServerOptions {
   uploadsDirectory?: string;
   ossUpload?: typeof uploadToOss;
   confirmations?: ConfirmationBroker;
-  configState?: { load(): Promise<TaiweiConfig>; save(config: TaiweiConfig): Promise<void> };
+  configState?: { load(): Promise<TaiweiConfig>; save(config: TaiweiConfig): Promise<void>; authPasswordHasEnvironmentTemplate?(): Promise<boolean> };
   hooks?: HookRunner;
   skillLoader?: Pick<SkillLoader, 'list' | 'load'> & Partial<Pick<SkillLoader, 'setDisabled' | 'isDisabled'>>;
   userSkillStore?: UserSkillStore;
@@ -117,7 +117,7 @@ export interface GatewayRuntime {
   apiKeyStore: ApiKeyStore;
   loginLocks: LoginLockStore;
   confirmations: ConfirmationBroker;
-  configState: { load(): Promise<TaiweiConfig>; save(config: TaiweiConfig): Promise<void> };
+  configState: { load(): Promise<TaiweiConfig>; save(config: TaiweiConfig): Promise<void>; authPasswordHasEnvironmentTemplate?(): Promise<boolean> };
   uploadsDirectory: string;
   taiweiPaths: ReturnType<typeof getPaths>;
   startupCleanup: Promise<void>;
@@ -163,7 +163,7 @@ export function createGatewayRuntime(options: GatewayServerOptions): GatewayRunt
   const apiKeyStore = options.apiKeys ?? new ApiKeyStore();
   const loginLocks = options.loginLocks ?? new LoginLockStore();
   const confirmations = options.confirmations ?? new ConfirmationBroker();
-  const configState = options.configState ?? { load: loadConfig, save: saveConfig };
+  const configState = options.configState ?? { load: loadConfig, save: saveConfig, authPasswordHasEnvironmentTemplate };
   const uploadsDirectory = resolve(options.uploadsDirectory ?? taiweiPaths.uploads);
   const startupCleanup = (async () => {
     let finalized = await sessions.finalizeStalePending();

@@ -43,6 +43,13 @@ export class PolicyEngine {
   constructor(private readonly config: PolicyConfig = { rules: [] }) {}
 
   decide(input: PolicyInput): PolicyDecision {
+    if (input.agentMode === 'plan'
+      && (input.tool === 'bash' || WRITE_TOOLS.has(input.tool) || input.tool === 'delegate_task'
+        || input.tool.startsWith('memory_') || input.tool === 'task_start' || input.tool === 'task_kill'
+        || input.tool.startsWith('browser_') || input.tool.startsWith('mcp_')
+        || (input.tool.startsWith('lsp_') && !READ_ONLY_LSP_TOOLS.has(input.tool)))) {
+      return { effect: 'deny', rule: input.tool.startsWith('lsp_') ? 'builtin.plan.no-lsp-mutation' : 'builtin.plan.read-only', explicit: false };
+    }
     for (let index = 0; index < this.config.rules.length; index += 1) {
       const rule = this.config.rules[index]!;
       if (ruleMatches(rule, input)) {
@@ -66,9 +73,6 @@ export class PolicyEngine {
       return { effect: 'deny', rule: 'builtin.guest.default-deny', explicit: false };
     }
     if (input.agentMode === 'plan') {
-      if (input.tool === 'bash' || WRITE_TOOLS.has(input.tool) || input.tool === 'delegate_task' || input.tool.startsWith('memory_') || input.tool === 'task_start' || input.tool === 'task_kill' || input.tool.startsWith('browser_') || input.tool.startsWith('mcp_')) {
-        return { effect: 'deny', rule: 'builtin.plan.read-only', explicit: false };
-      }
       if (READ_ONLY_LSP_TOOLS.has(input.tool)) return { effect: 'allow', rule: 'builtin.plan.lsp-navigation', explicit: false };
       if (input.tool.startsWith('lsp_')) return { effect: 'deny', rule: 'builtin.plan.no-lsp-mutation', explicit: false };
       return { effect: 'allow', rule: 'builtin.plan.read', explicit: false };

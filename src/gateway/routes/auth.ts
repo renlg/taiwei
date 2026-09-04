@@ -1,3 +1,4 @@
+import { hasEnvironmentTemplate } from '../../config/config.js';
 import { hashPassword, isScryptPassword, verifyPassword } from '../../config/password.js';
 import { HttpError, json, lockMessage, readJson, requestOrigin, safeInlineJson, sessionCookie, constantTimeEqual } from '../http.js';
 import type { EarlyRouteContext, RouteContext } from './route-context.js';
@@ -125,7 +126,10 @@ export async function handlePublicAuthRoutes(ctx: EarlyRouteContext): Promise<bo
       json(response, 401, { error: 'Invalid username or password' });
       return true;
     }
-    if (adminValid && !options.authPasswordFromEnvironment && !isScryptPassword(configuredPassword)) {
+    const templateBackedPassword = adminValid && !options.authPasswordFromEnvironment
+      ? (await configState.authPasswordHasEnvironmentTemplate?.() ?? hasEnvironmentTemplate(configuredPassword))
+      : false;
+    if (adminValid && !options.authPasswordFromEnvironment && !templateBackedPassword && !isScryptPassword(configuredPassword)) {
       const migratedPassword = hashPassword(body.password as string);
       const config = await configState.load();
       if (config.auth.password === configuredPassword) {

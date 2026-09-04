@@ -225,8 +225,19 @@ function resolveSecret(value: string): string {
     .replace(/\u0000TAIWEI_ESC_(\d+)\u0000/g, (_match, index: string) => escaped[Number(index)]!);
 }
 
-function hasEnvironmentTemplate(value: string): boolean {
+export function hasEnvironmentTemplate(value: string): boolean {
   return /(^|[^$])\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(value);
+}
+
+export async function authPasswordHasEnvironmentTemplate(): Promise<boolean> {
+  const paths = await ensureTaiweiHome();
+  try {
+    const stored = JSON.parse(await readFile(paths.config, 'utf8')) as Partial<TaiweiConfig>;
+    return typeof stored.auth?.password === 'string' && hasEnvironmentTemplate(stored.auth.password);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function hasEnvironmentReference(value: string): boolean {

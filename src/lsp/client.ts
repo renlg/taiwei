@@ -154,7 +154,15 @@ class LspClient {
     private readonly server: LspServerConfig,
     private readonly resolvedCommand: string,
     private readonly requestTimeoutMs: number,
+    private readonly onClosed: () => void,
   ) {}
+
+  private markClosed(error: Error): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.failAll(error);
+    this.onClosed();
+  }
 
   private spawnAndInitialize(): Promise<void> {
     if (this.ready) return this.ready;
@@ -169,8 +177,8 @@ class LspClient {
       child.stdout.on('data', (chunk: Buffer) => this.onData(chunk));
       // Always consume stderr: an unread pipe can fill and deadlock a verbose server.
       child.stderr.resume();
-      child.on('error', (error) => this.failAll(error));
-      child.on('close', () => { this.closed = true; this.failAll(new Error(`Language server "${this.server.command}" exited`)); });
+      child.on('error', (error) => this.markClosed(error));
+      child.on('close', () => this.markClosed(new Error(`Language server "${this.server.command}" exited`)));
       const rootUri = pathToFileURL(this.workspace).href;
       await this.request('initialize', {
         processId: process.pid,
@@ -374,7 +382,12 @@ export class LspManager {
     if (cached) { this.touch(key); return cached; }
     const resolved = await resolveServerCommand(server.command, root);
     if (!resolved) throw new LspServerNotFoundError(server.command);
-    const client = new LspClient(root, server, resolved, this.requestTimeoutMs);
+    const client = new LspClient(root, server, resolved, this.requestTimeoutMs, () => {
+      if (this.clients.get(key) !== client) return;
+      this.clients.delete(key);
+      const timer = this.idleTimers.get(key);
+      if (timer) { clearTimeout(timer); this.idleTimers.delete(key); }
+    });
     this.clients.set(key, client);
     this.touch(key);
     return client;

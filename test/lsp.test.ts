@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -29,9 +29,57 @@ test('LspManager.serverForFile matches extensions case-insensitively', () => {
   assert.ok(tsxServer);
 });
 
-test('LspManager.close() is safe to call with no clients', async () => {
+test('LspManager closes safely and replaces a client after its server exits', async () => {
   const manager = new LspManager([]);
   await manager.close(); // Should not throw.
+
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-lsp-restart-test-'));
+  const serverScript = join(directory, 'server.mjs');
+  const spawnCount = join(directory, 'spawn-count.txt');
+  await writeFile(serverScript, `
+import { readFileSync, writeFileSync } from 'node:fs';
+const countFile = process.argv[2];
+let count = 0;
+try { count = Number(readFileSync(countFile, 'utf8')); } catch {}
+writeFileSync(countFile, String(count + 1));
+let buffer = Buffer.alloc(0);
+function send(id, result) {
+  const json = JSON.stringify({ jsonrpc: '2.0', id, result });
+  process.stdout.write('Content-Length: ' + Buffer.byteLength(json) + '\\r\\n\\r\\n' + json);
+}
+process.stdin.on('data', (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  for (;;) {
+    const headerEnd = buffer.indexOf('\\r\\n\\r\\n');
+    if (headerEnd < 0) return;
+    const match = /content-length:\\s*(\\d+)/i.exec(buffer.subarray(0, headerEnd).toString('ascii'));
+    if (!match) { buffer = buffer.subarray(headerEnd + 4); continue; }
+    const length = Number(match[1]);
+    if (buffer.length < headerEnd + 4 + length) return;
+    const message = JSON.parse(buffer.subarray(headerEnd + 4, headerEnd + 4 + length).toString('utf8'));
+    buffer = buffer.subarray(headerEnd + 4 + length);
+    if (message.method === 'initialize') send(message.id, { capabilities: {} });
+    if (message.method === 'textDocument/documentSymbol') {
+      send(message.id, []);
+      setImmediate(() => process.exit(0));
+    }
+  }
+});
+`, 'utf8');
+  const restartManager = new LspManager([{ command: process.execPath, args: [serverScript, spawnCount], extensions: ['.xyz'] }]);
+  try {
+    await restartManager.documentSymbols(directory, join(directory, 'test.xyz'), 'first');
+    const clients = (restartManager as unknown as { clients: Map<string, unknown> }).clients;
+    for (let attempt = 0; attempt < 50 && clients.size !== 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(clients.size, 0, 'exited LSP client should be evicted immediately');
+    await restartManager.documentSymbols(directory, join(directory, 'test.xyz'), 'second');
+    assert.equal(await readFile(spawnCount, 'utf8'), '2');
+  } finally {
+    await restartManager.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('LSP tools return guest-disabled message for guest role', async () => {
@@ -87,4 +135,10 @@ test('plan and research allow only the documented read-only LSP navigation tools
   assert.equal(decide('lsp_apply_workspace_edit').effect, 'deny');
   assert.equal(toolDenied('lsp_apply_workspace_edit', getAgentProfile('plan')), true);
   assert.equal(toolDenied('lsp_apply_workspace_edit', getAgentProfile('research')), true);
+  const explicitAllowPolicy = new PolicyEngine({ rules: [{ match: { agentMode: 'plan', tool: 'lsp_*' }, effect: 'allow' }] });
+  const decideWithExplicitAllow = (tool: string) => explicitAllowPolicy.decide({
+    role: 'admin', agentMode: 'plan', sessionId: 'plan', tool, args: {}, cwd: '/tmp', workspaceRoot: '/tmp', identity: 'admin',
+  });
+  assert.deepEqual(decideWithExplicitAllow('lsp_apply_workspace_edit'), { effect: 'deny', rule: 'builtin.plan.no-lsp-mutation', explicit: false });
+  assert.deepEqual(decideWithExplicitAllow('go_to_definition'), { effect: 'allow', rule: 'builtin.plan.lsp-navigation', explicit: false });
 });

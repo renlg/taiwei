@@ -132,7 +132,13 @@ export class PluginLoader {
         const cleanup = () => { clearTimeout(timer); worker.removeListener('message', onMessage); worker.removeListener('error', onError); worker.removeListener('exit', onExit); };
         const fail = (error: Error) => { cleanup(); rejectLoad(error); };
         const onMessage = (message: { type: string; tools?: WorkerLoad['tools']; skillPaths?: string[]; skills?: WorkerLoad['skills']; error?: string }) => {
-          if (message.type === 'loaded') { cleanup(); resolveLoad({ tools: message.tools ?? [], skillPaths: message.skillPaths ?? [], skills: message.skills ?? [] }); }
+          if (message.type === 'loaded') {
+            // Install permanent crash handlers before removing the bootstrap handlers.
+            worker.on('error', (error) => this.markWorkerCrashed(loaded, error.message));
+            worker.on('exit', (code) => this.markWorkerCrashed(loaded, `worker exited (${code})`));
+            cleanup();
+            resolveLoad({ tools: message.tools ?? [], skillPaths: message.skillPaths ?? [], skills: message.skills ?? [] });
+          }
           else if (message.type === 'error') fail(new Error(message.error ?? 'worker load failed'));
         };
         const onError = (error: Error) => fail(error);
@@ -159,8 +165,6 @@ export class PluginLoader {
           console[level](`[taiwei:plugin:${manifest.name}] ${message.message}`);
         }
       });
-      worker.on('error', (error) => this.markWorkerCrashed(loaded, error.message));
-      worker.on('exit', (code) => this.markWorkerCrashed(loaded, `worker exited (${code})`));
       for (const tool of workerLoad.tools) {
         const name = `${prefix}${safeName(tool.name)}`;
         loaded.toolNames.push(name);

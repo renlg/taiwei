@@ -549,7 +549,7 @@ Plugin API v1 uses `~/.taiwei/plugins/<directory>/manifest.json` (or a `package.
 
 The main ESM/CommonJS module receives `{log, registerTool, registerSkill, config, policyCheck}` in `init(api)` and may export `dispose()`. Per-plugin settings live at `plugins.<name>.{enabled,config}` and can be changed with `GET /api/plugins` and `POST /api/plugins/:name`. Pending tool work is awaited before disposal; thrown handlers mark the plugin crashed and subsequent calls return an error. Legacy `plugin.js` exports remain supported.
 
-**Worker isolation** (v1.2): Plugins without `"main-process"` in `capabilities` run in a dedicated `worker_threads` worker. Tool execution is proxied via IPC; native crashes and infinite loops cannot kill the main process. Workers time out after 30 seconds per call. `registerSkill` is not available inside workers — plugins that need skill injection must declare `"capabilities": ["main-process"]`. Legacy plugins (no manifest) continue to run in the main process for backward compatibility.
+**Worker isolation** (v1.2): Plugins without `"main-process"` in `capabilities` run in a dedicated `worker_threads` worker. Tool execution is proxied via IPC; native crashes and infinite loops cannot kill the main process. Workers time out after 30 seconds per call. `registerSkill` is supported in workers; registered skill paths are returned to the host during the worker load IPC round-trip and loaded from the plugin directory. Legacy plugins (no manifest) continue to run in the main process for backward compatibility.
 
 ```js
 export default {

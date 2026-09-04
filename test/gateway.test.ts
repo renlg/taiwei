@@ -13,7 +13,7 @@ import { createOssObjectKey } from '../src/gateway/oss.js';
 import { SessionStore } from '../src/gateway/sessions.js';
 import type { ChatMessage } from '../src/llm/client.js';
 import type { GatewayModelState } from '../src/gateway/server.js';
-import { DEFAULT_CONFIG, type TaiweiConfig } from '../src/config/config.js';
+import { DEFAULT_CONFIG, saveConfig, type TaiweiConfig } from '../src/config/config.js';
 import { hashPassword, isScryptPassword } from '../src/config/password.js';
 import { HookRunner } from '../src/hooks/runner.js';
 import { ToolRegistry } from '../src/tools/registry.js';
@@ -1225,7 +1225,7 @@ test('gateway authenticates API requests and preserves tokens across restarts', 
   }
 });
 
-test('gateway login migrates a legacy plaintext password to scrypt', async () => {
+test('gateway login migrates legacy plaintext but preserves environment-template passwords', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-password-migration-test-'));
   const config = structuredClone(DEFAULT_CONFIG);
   config.auth = { enabled: true, username: 'admin', password: 'legacy secret' };
@@ -1254,6 +1254,37 @@ test('gateway login migrates a legacy plaintext password to scrypt', async () =>
   } finally {
     await closeGateway(server);
     await rm(directory, { recursive: true, force: true });
+  }
+
+  const templateDirectory = await mkdtemp(join(tmpdir(), 'taiwei-gateway-template-password-test-'));
+  const previousHome = process.env.TAIWEI_HOME;
+  const previousPassword = process.env.TAIWEI_TEST_AUTH_PASSWORD;
+  process.env.TAIWEI_HOME = templateDirectory;
+  process.env.TAIWEI_TEST_AUTH_PASSWORD = 'template secret';
+  const templateConfig = structuredClone(DEFAULT_CONFIG);
+  templateConfig.auth = { enabled: true, username: 'admin', password: '${TAIWEI_TEST_AUTH_PASSWORD}' };
+  await saveConfig(templateConfig);
+  const templateServer = createGatewayServer({
+    chat: new MockChat(),
+    sessions: new SessionStore(join(templateDirectory, 'sessions')),
+    authSessions: new AuthSessionStore(join(templateDirectory, 'gateway-sessions.json')),
+    loginLocks: new LoginLockStore(join(templateDirectory, 'login-locks.json')),
+    log: () => {},
+  });
+  const templatePort = await listenGateway(templateServer, '127.0.0.1', 0);
+  try {
+    const login = await fetch(`http://127.0.0.1:${templatePort}/api/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'template secret' }),
+    });
+    assert.equal(login.status, 200);
+    const stored = JSON.parse(await readFile(join(templateDirectory, 'config.json'), 'utf8')) as TaiweiConfig;
+    assert.equal(stored.auth.password, '${TAIWEI_TEST_AUTH_PASSWORD}');
+  } finally {
+    await closeGateway(templateServer);
+    if (previousHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = previousHome;
+    if (previousPassword === undefined) delete process.env.TAIWEI_TEST_AUTH_PASSWORD; else process.env.TAIWEI_TEST_AUTH_PASSWORD = previousPassword;
+    await rm(templateDirectory, { recursive: true, force: true });
   }
 });
 
