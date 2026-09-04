@@ -18,6 +18,7 @@ export function guestIdForShareToken(token: string): string {
 
 export function publicApiRouteAllowed(method: string, pathname: string): boolean {
   if (method === 'GET' && pathname === '/api/health') return true;
+  if (method === 'GET' && /^\/api\/share\/[^/]+$/.test(pathname)) return true;
   if (method === 'POST' && pathname === '/api/login') return true;
   if (method === 'POST' && pathname === '/api/oauth/start') return true;
   return method === 'GET' && pathname === '/api/oauth/callback';
@@ -44,6 +45,19 @@ export function guestPublicSession(session: GatewaySession): Omit<GatewaySession
   }));
   const { contextMessages: _contextMessages, identity: _identity, messages: _messages, ...metadata } = session;
   return { ...metadata, messages };
+}
+
+export function sharedSessionView(session: GatewaySession): ReturnType<typeof guestPublicSession> {
+  const publicSession = guestPublicSession(session);
+  return {
+    ...publicSession,
+    messages: publicSession.messages.map((message) => ({
+      ...message,
+      ...(message.toolCalls?.length
+        ? { toolCalls: message.toolCalls.map(({ name, args }) => ({ name, args })) }
+        : {}),
+    })),
+  };
 }
 
 export type GuestPublicFolder = Omit<GatewayFolder, 'path' | 'dirName'>;
@@ -74,5 +88,6 @@ export function guestRouteAllowed(method: string, pathname: string): boolean {
   if (method === 'GET' && pathname === '/api/deployments/doctor') return true;
   if (method === 'DELETE' && /^\/api\/deployments\/[^/]+$/.test(pathname)) return true;
   if (method === 'GET' && /^\/api\/sessions\/[^/]+\/pending$/.test(pathname)) return true;
+  if ((method === 'GET' || method === 'POST' || method === 'DELETE') && /^\/api\/sessions\/[^/]+\/share$/.test(pathname)) return true;
   return (method === 'GET' || method === 'DELETE') && /^\/api\/sessions\/[^/]+$/.test(pathname);
 }

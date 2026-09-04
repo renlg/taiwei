@@ -528,6 +528,9 @@ a.message-attachment-file:hover { background: rgba(255,255,255,.25); text-decora
 .prompt-chip small { color: var(--faint); font-size: 11px; }
 
 .composer-dock { z-index: 8; padding: 11px max(18px, calc((100% - 900px) / 2)) 10px; background: linear-gradient(180deg, transparent, var(--panel) 24%); }
+.composer-toolbar { min-height: 30px; display: flex; justify-content: flex-end; align-items: center; padding: 0 3px 5px; }
+.session-share-button { padding: 5px 10px; border: 1px solid var(--border-strong); border-radius: 9px; color: var(--muted); background: var(--surface-soft); cursor: pointer; font-size: 11px; transition: .16s; }
+.session-share-button:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); background: var(--surface-hover); }
 .composer { padding: 11px 11px 9px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--surface-soft); box-shadow: 0 11px 35px rgba(0,0,0,.14); backdrop-filter: blur(18px); transition: border-color .18s, box-shadow .18s; position: relative; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 48%, transparent); box-shadow: 0 12px 38px rgba(0,0,0,.17), 0 0 0 3px var(--accent-soft); }
 .composer-main { display: grid; grid-template-columns: 38px minmax(0, 1fr) 52px; gap: 9px; align-items: center; }
@@ -581,6 +584,19 @@ body.streaming .stop-button { display: flex; }
 .toast { position: fixed; z-index: 100; left: 50%; bottom: 22px; padding: 9px 14px; border: 1px solid var(--border-strong); border-radius: 10px; opacity: 0; pointer-events: none; color: var(--text); background: var(--surface); box-shadow: var(--shadow); font-size: 12px; transform: translate(-50%, 10px); transition: .2s; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .mobile-scrim { display: none; }
+
+.readonly-share-label { padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 11px; font-weight: 650; }
+.share-card { width: min(520px, calc(100vw - 28px)); }
+.share-status { margin-bottom: 13px; color: var(--muted); font-size: 12px; }
+.share-error { min-height: 18px; margin-top: 8px; color: var(--danger); font-size: 11px; }
+.share-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.shared-error { width: min(560px, calc(100% - 30px)); margin: 15vh auto 0; padding: 24px; border: 1px solid var(--border-strong); border-radius: 16px; color: var(--muted); background: var(--surface-soft); text-align: center; line-height: 1.7; }
+body.readonly-share .app-shell { grid-template-columns: minmax(0, 1fr); }
+body.readonly-share .sidebar, body.readonly-share .mobile-scrim, body.readonly-share .composer-dock, body.readonly-share #sidebar-toggle { display: none !important; }
+body.readonly-share .main-panel { grid-template-rows: 73px minmax(0, 1fr); }
+body.readonly-share .topbar-actions > :not(.readonly-share-label) { display: none !important; }
+body.readonly-share .readonly-share-label { display: inline-flex !important; }
+body.readonly-share .copy-message, body.readonly-share .media-download-button { display: none !important; }
 
 body.sidebar-collapsed { --sidebar-width: 76px; }
 body.sidebar-collapsed .sidebar { padding-inline: 10px; }

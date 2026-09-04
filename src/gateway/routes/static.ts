@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { json } from '../http.js';
 import type { RouteContext } from './route-context.js';
 
-export const STATIC_ASSET_VERSION = '80';
+export const STATIC_ASSET_VERSION = '81';
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -23,8 +23,9 @@ export async function handleStaticRoutes(ctx: RouteContext): Promise<boolean> {
   const { runtime, response, method, pathname } = ctx;
   const staticMatch = pathname.match(/^\/([^/]+)(\.[^.]+)$/);
   const staticContentType = staticMatch ? STATIC_CONTENT_TYPES[staticMatch[2].toLowerCase()] : undefined;
-  if ((method === 'GET' || method === 'HEAD') && (pathname === '/' || staticContentType)) {
-    const filename = pathname === '/' ? 'index.html' : pathname.slice(1);
+  const sharedPage = /^\/share\/[^/]+$/.test(pathname);
+  if ((method === 'GET' || method === 'HEAD') && (pathname === '/' || sharedPage || staticContentType)) {
+    const filename = pathname === '/' || sharedPage ? 'index.html' : pathname.slice(1);
     const fileContent = await readFile(join(runtime.publicDirectory, filename));
     const isHtml = filename.endsWith('.html');
     const content = isHtml

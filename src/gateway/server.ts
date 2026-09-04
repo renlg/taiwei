@@ -27,6 +27,7 @@ import { handleSessionRoutes } from './routes/sessions.js';
 import { handleUploadRoute } from './routes/upload.js';
 import { handleChatRoute } from './routes/chat.js';
 import { handleStaticRoutes } from './routes/static.js';
+import { handlePublicShareRoute } from './routes/share.js';
 
 // Public API surface preserved from the pre-split server.ts.
 export type { GatewayHistoryIndex, GatewayModelState, GatewayServerOptions } from './runtime.js';
@@ -53,6 +54,8 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
       }
       const accessConfig = await configState.load();
       const earlyContext = { runtime, request, response, method, pathname, accessConfig };
+      // Token-scoped shared sessions are public and read-only.
+      if (await handlePublicShareRoute(earlyContext)) return;
       // Public authentication routes (OAuth start/callback, local login).
       if (await handlePublicAuthRoutes(earlyContext)) return;
       // Authentication middleware: writes the 401/403 response itself when it fails.

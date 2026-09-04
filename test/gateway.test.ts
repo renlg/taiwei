@@ -292,7 +292,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=80/);
+    assert.match(pageBody, /logo\.png\?v=81/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -316,7 +316,11 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.match(frontendSource, /URL\.createObjectURL\(await response\.blob\(\)\)/);
     const frontendHtml = await readFile(join(import.meta.dirname, '..', 'src', 'gateway', 'public', 'index.html'), 'utf8');
     assert.match(frontendHtml, /class="attachment-button" id="attachment-button"/);
+    assert.match(frontendHtml, /id="session-share"/);
+    assert.match(frontendHtml, /id="share-modal"/);
     assert.doesNotMatch(frontendHtml, /class="attachment-button admin-only"/);
+    assert.match(frontendSource, /location\.pathname\.match\(\/\^\\\/share/);
+    assert.match(frontendSource, /fetch\(`\/api\/share\/\$\{encodeURIComponent\(token\)\}`\)/);
 
     const logo = await fetch(`${baseUrl}/logo.png`);
     assert.equal(logo.status, 200);

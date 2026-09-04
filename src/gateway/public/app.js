@@ -41,6 +41,16 @@ const elements = {
   input: $('#input'),
   send: $('#send'),
   stop: $('#stop'),
+  sessionShare: $('#session-share'),
+  shareModal: $('#share-modal'),
+  shareClose: $('#share-close'),
+  shareStatus: $('#share-status'),
+  shareLink: $('#share-link'),
+  shareError: $('#share-error'),
+  shareCreate: $('#share-create'),
+  shareCopy: $('#share-copy'),
+  shareRevoke: $('#share-revoke'),
+  readonlyShareLabel: $('#readonly-share-label'),
   skillMenu: $('#skill-menu'),
   skillMenuList: $('#skill-menu-list'),
   attachmentButton: $('#attachment-button'),
@@ -254,6 +264,7 @@ const state = {
   adminOnlyModels: [],
   savedMemory: '',
   memoryFeedbackTimer: 0,
+  sessionShare: null,
 };
 
 const WORKSPACE_OPEN_STORAGE_KEY = 'taiwei-settings-workspace-open';
@@ -2589,6 +2600,8 @@ function nextRenderBatch(messages, start) {
 function renderConversation(session) {
   elements.messages.replaceChildren();
   elements.title.textContent = session?.title || '新会话';
+  elements.sessionShare.hidden = !session;
+  state.sessionShare = null;
   const messages = session?.messages || [];
   elements.welcome.classList.toggle('hidden', messages.length > 0);
   state.lazySessionId = session?.id || null;
@@ -2742,6 +2755,90 @@ async function requestJson(path, options) {
     throw error;
   }
   return response.status === 204 ? null : response.json();
+}
+
+function renderShareState(share) {
+  state.sessionShare = share?.shared === false ? null : share;
+  const shared = Boolean(state.sessionShare?.token);
+  elements.shareStatus.textContent = shared ? '已分享 · 此链接只能查看，不能对话' : '未分享';
+  elements.shareLink.value = shared ? state.sessionShare.url || `${location.origin}/share/${state.sessionShare.token}` : '';
+  elements.shareCreate.hidden = shared;
+  elements.shareCopy.hidden = !shared;
+  elements.shareRevoke.hidden = !shared;
+}
+
+async function openSharePanel() {
+  if (!state.current?.id) return;
+  elements.shareError.textContent = '';
+  elements.shareStatus.textContent = '正在读取分享状态…';
+  elements.shareLink.value = '';
+  elements.shareCreate.hidden = true;
+  elements.shareCopy.hidden = true;
+  elements.shareRevoke.hidden = true;
+  elements.shareModal.showModal();
+  try {
+    renderShareState(await requestJson(`/api/sessions/${encodeURIComponent(state.current.id)}/share`));
+  } catch (error) {
+    elements.shareStatus.textContent = '无法读取分享状态';
+    elements.shareError.textContent = error.message;
+  }
+}
+
+async function createSessionShare() {
+  if (!state.current?.id) return;
+  elements.shareError.textContent = '';
+  elements.shareCreate.disabled = true;
+  elements.shareCreate.textContent = '生成中…';
+  try {
+    renderShareState(await requestJson(`/api/sessions/${encodeURIComponent(state.current.id)}/share`, { method: 'POST' }));
+  } catch (error) { elements.shareError.textContent = error.message; }
+  finally {
+    elements.shareCreate.disabled = false;
+    elements.shareCreate.textContent = '生成分享链接';
+  }
+}
+
+async function revokeSessionShare() {
+  if (!state.current?.id) return;
+  const confirmed = await confirmDialog({
+    title: '取消分享', desc: '现有分享链接将立即失效。', okText: '取消分享', danger: true,
+  });
+  if (!confirmed) return;
+  elements.shareError.textContent = '';
+  try {
+    await requestJson(`/api/sessions/${encodeURIComponent(state.current.id)}/share`, { method: 'DELETE' });
+    renderShareState({ shared: false });
+  } catch (error) { elements.shareError.textContent = error.message; }
+}
+
+function sharedSessionTokenFromPath() {
+  const match = location.pathname.match(/^\/share\/([^/]+)$/);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch { return ''; }
+}
+
+async function loadReadonlyShare(token) {
+  elements.body.classList.add('readonly-share');
+  elements.loginScreen.hidden = true;
+  elements.appShell.hidden = false;
+  elements.readonlyShareLabel.hidden = false;
+  elements.welcome.classList.add('hidden');
+  try {
+    const response = await fetch(`/api/share/${encodeURIComponent(token)}`);
+    if (!response.ok) throw new Error(response.status === 404 ? '分享链接无效或已被取消' : `加载失败 (${response.status})`);
+    const session = await response.json();
+    state.current = session;
+    document.title = `${session.title || '会话分享'} · taiwei`;
+    setStatus('idle', '只读');
+    await renderConversation(session);
+  } catch (error) {
+    elements.title.textContent = '无法查看分享会话';
+    elements.messages.replaceChildren();
+    const message = document.createElement('div');
+    message.className = 'shared-error';
+    message.textContent = error.message;
+    elements.messages.append(message);
+  }
 }
 
 function closeModelMenu() {
@@ -3894,6 +3991,12 @@ async function logout() {
 
 elements.logout.addEventListener('click', logout);
 elements.guestLogout.addEventListener('click', logout);
+elements.sessionShare.addEventListener('click', openSharePanel);
+elements.shareClose.addEventListener('click', () => elements.shareModal.close());
+elements.shareCreate.addEventListener('click', createSessionShare);
+elements.shareCopy.addEventListener('click', () => copyText(elements.shareLink.value, elements.shareCopy));
+elements.shareRevoke.addEventListener('click', revokeSessionShare);
+elements.shareModal.addEventListener('click', (event) => { if (event.target === elements.shareModal) elements.shareModal.close(); });
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
@@ -3997,6 +4100,11 @@ async function initialize() {
     elements.resourceToggle.setAttribute('aria-expanded', 'true');
   }
   resizeInput();
+  const readonlyShareToken = sharedSessionTokenFromPath();
+  if (readonlyShareToken !== null) {
+    await loadReadonlyShare(readonlyShareToken);
+    return;
+  }
   const shared = new URL(location.href).searchParams.get('share');
   if (shared) {
     state.shareToken = shared;

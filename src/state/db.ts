@@ -98,6 +98,17 @@ function initializeSchema(db: DatabaseSync): void {
       expires_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS session_shares (
+      token TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      owner TEXT NOT NULL,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT,
+      UNIQUE(session_id, owner),
+      FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS login_locks (
       kind TEXT NOT NULL,
       lock_key TEXT NOT NULL,
@@ -116,6 +127,8 @@ function initializeSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_cron_runs_job_started ON cron_runs(job_id, started_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_cron_runs_started ON cron_runs(started_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_gateway_sessions_expires ON gateway_sessions(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_session_shares_session_owner ON session_shares(session_id, owner);
+    CREATE INDEX IF NOT EXISTS idx_session_shares_expires ON session_shares(expires_at);
   `);
 
   // Keep upgrades idempotent if a development version of state.db already exists.

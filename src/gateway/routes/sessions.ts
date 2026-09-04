@@ -1,4 +1,4 @@
-import { HttpError, json, readJson } from '../http.js';
+import { HttpError, json, readJson, requestOrigin } from '../http.js';
 import { guestPublicFolder, guestPublicSession } from '../guests.js';
 import { grantedModelsFor, modelAllowedForRole, modelForSelection } from '../models-policy.js';
 import type { RouteContext } from './route-context.js';
@@ -89,6 +89,39 @@ export async function handleSessionRoutes(ctx: RouteContext): Promise<boolean> {
     await activeFolders.delete(id);
     json(response, 200, { ok: true, movedSessions, destinationFolderId: destination.id });
     return true;
+  }
+  const shareRoute = pathname.match(/^\/api\/sessions\/([^/]+)\/share$/);
+  if (shareRoute) {
+    const sessionId = decodeURIComponent(shareRoute[1]);
+    const session = await activeSessions.get(sessionId);
+    if (!session) {
+      json(response, 404, { error: 'Session not found' });
+      return true;
+    }
+    if (method === 'GET') {
+      const share = await activeSessions.getShare(sessionId);
+      json(response, 200, share ? {
+        shared: true, token: share.token,
+        url: `${requestOrigin(request, ctx.scope.accessConfig)}/share/${share.token}`,
+        createdAt: share.createdAt, expiresAt: share.expiresAt ?? null,
+      } : { shared: false });
+      return true;
+    }
+    if (method === 'POST') {
+      const share = await activeSessions.createShare(sessionId, requestIdentityUsername);
+      if (!share) json(response, 404, { error: 'Session not found' });
+      else json(response, 200, {
+        token: share.token, url: `${requestOrigin(request, ctx.scope.accessConfig)}/share/${share.token}`,
+        createdAt: share.createdAt, expiresAt: share.expiresAt ?? null,
+      });
+      return true;
+    }
+    if (method === 'DELETE') {
+      await activeSessions.deleteShare(sessionId);
+      response.writeHead(204);
+      response.end();
+      return true;
+    }
   }
   const sessionRoute = pathname.match(/^\/api\/sessions\/([^/]+)$/);
   if (sessionRoute && method === 'GET') {

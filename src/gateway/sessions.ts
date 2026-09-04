@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import type { ChatMessage } from '../llm/client.js';
@@ -71,6 +71,15 @@ export interface SessionSummary {
   running?: boolean;
 }
 
+export interface SessionShare {
+  token: string;
+  sessionId: string;
+  owner: string;
+  createdBy?: string;
+  createdAt: string;
+  expiresAt?: string;
+}
+
 const VALID_ID = /^[a-f0-9-]{36}$/i;
 
 function hasValidToolArguments(value: unknown): value is string {
@@ -122,8 +131,16 @@ export class SessionStore {
   static async moveGuestScope(legacyGuestId: string, guestId: string): Promise<void> {
     try {
       const state = await openStateDatabase(getPaths().stateDb);
-      await state.serial((db) => db.prepare('UPDATE sessions SET owner = ? WHERE owner = ?')
-        .run(`guest:${guestId}`, `guest:${legacyGuestId}`));
+      await state.serial((db) => {
+        const nextOwner = `guest:${guestId}`;
+        const previousOwner = `guest:${legacyGuestId}`;
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          db.prepare('UPDATE sessions SET owner = ? WHERE owner = ?').run(nextOwner, previousOwner);
+          db.prepare('UPDATE session_shares SET owner = ? WHERE owner = ?').run(nextOwner, previousOwner);
+          db.exec('COMMIT');
+        } catch (error) { db.exec('ROLLBACK'); throw error; }
+      });
     } catch (error) {
       if (!isStateUnavailable(error)) throw error;
     }
@@ -282,6 +299,83 @@ export class SessionStore {
     }
   }
 
+  async getShare(sessionId: string): Promise<SessionShare | undefined> {
+    if (!VALID_ID.test(sessionId)) return undefined;
+    await this.initialize();
+    const state = await this.state();
+    if (!state) return undefined;
+    const now = new Date().toISOString();
+    return state.serial((db) => {
+      const row = db.prepare(`
+        SELECT * FROM session_shares
+        WHERE session_id = ? AND owner = ? AND (expires_at IS NULL OR expires_at > ?)
+      `).get(sessionId, this.owner, now) as SessionShareRow | undefined;
+      return row ? shareFromRow(row) : undefined;
+    });
+  }
+
+  async createShare(sessionId: string, createdBy?: string): Promise<SessionShare | undefined> {
+    if (!VALID_ID.test(sessionId)) return undefined;
+    await this.initialize();
+    const state = await this.state();
+    if (!state) throw new Error('Session sharing requires the state database');
+    const now = new Date().toISOString();
+    return state.serial((db) => {
+      const session = db.prepare('SELECT id FROM sessions WHERE id = ? AND owner = ?').get(sessionId, this.owner);
+      if (!session) return undefined;
+      const existing = db.prepare(`
+        SELECT * FROM session_shares
+        WHERE session_id = ? AND owner = ? AND (expires_at IS NULL OR expires_at > ?)
+      `).get(sessionId, this.owner, now) as SessionShareRow | undefined;
+      if (existing) return shareFromRow(existing);
+      db.prepare('DELETE FROM session_shares WHERE session_id = ? AND owner = ?').run(sessionId, this.owner);
+      const token = randomBytes(24).toString('base64url');
+      db.prepare(`
+        INSERT INTO session_shares(token, session_id, owner, created_by, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, NULL)
+      `).run(token, sessionId, this.owner, createdBy ?? null, now);
+      return { token, sessionId, owner: this.owner, ...(createdBy ? { createdBy } : {}), createdAt: now };
+    });
+  }
+
+  async deleteShare(sessionId: string): Promise<boolean> {
+    if (!VALID_ID.test(sessionId)) return false;
+    await this.initialize();
+    const state = await this.state();
+    if (!state) return false;
+    return state.serial((db) => Number(db.prepare(
+      'DELETE FROM session_shares WHERE session_id = ? AND owner = ?',
+    ).run(sessionId, this.owner).changes) > 0);
+  }
+
+  async getSharedSession(token: string): Promise<{ share: SessionShare; session: GatewaySession } | undefined> {
+    if (!/^[A-Za-z0-9_-]{32}$/.test(token)) return undefined;
+    await this.initialize();
+    const state = await this.state();
+    if (!state) return undefined;
+    const now = new Date().toISOString();
+    return state.serial((db) => {
+      const row = db.prepare(`
+        SELECT
+          shares.token AS share_token, shares.session_id AS share_session_id,
+          shares.owner AS share_owner, shares.created_by AS share_created_by,
+          shares.created_at AS share_created_at, shares.expires_at AS share_expires_at,
+          sessions.*
+        FROM session_shares AS shares
+        JOIN sessions ON sessions.id = shares.session_id AND sessions.owner = shares.owner
+        WHERE shares.token = ? AND (shares.expires_at IS NULL OR shares.expires_at > ?)
+      `).get(token, now) as SharedSessionRow | undefined;
+      if (!row) return undefined;
+      return {
+        share: shareFromRow({
+          token: row.share_token, session_id: row.share_session_id, owner: row.share_owner,
+          created_by: row.share_created_by, created_at: row.share_created_at, expires_at: row.share_expires_at,
+        }),
+        session: sessionFromRow(row),
+      };
+    });
+  }
+
   async moveFolderSessions(folderId: string, destinationFolderId: string): Promise<number> {
     const summaries = await this.list();
     let moved = 0;
@@ -377,6 +471,16 @@ interface SessionSummaryRow {
   folder_id: string | null; running: number;
 }
 
+interface SessionShareRow {
+  token: string; session_id: string; owner: string; created_by: string | null;
+  created_at: string; expires_at: string | null;
+}
+
+interface SharedSessionRow extends SessionRow {
+  share_token: string; share_session_id: string; share_owner: string; share_created_by: string | null;
+  share_created_at: string; share_expires_at: string | null;
+}
+
 function parseJson<T>(value: string | null): T | undefined {
   return value === null ? undefined : JSON.parse(value) as T;
 }
@@ -390,6 +494,14 @@ function sessionFromRow(row: SessionRow): GatewaySession {
     ...(row.agent_id ? { agentId: row.agent_id } : {}), ...(row.provider_id ? { providerId: row.provider_id } : {}),
     ...(row.current_model ? { currentModel: row.current_model } : {}), ...(row.folder_id ? { folderId: row.folder_id } : {}),
     ...(row.identity !== null ? { identity: parseJson<SessionIdentity>(row.identity) } : {}),
+  };
+}
+
+function shareFromRow(row: SessionShareRow): SessionShare {
+  return {
+    token: row.token, sessionId: row.session_id, owner: row.owner,
+    ...(row.created_by ? { createdBy: row.created_by } : {}), createdAt: row.created_at,
+    ...(row.expires_at ? { expiresAt: row.expires_at } : {}),
   };
 }
 

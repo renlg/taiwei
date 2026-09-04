@@ -37,7 +37,7 @@
     // 刷新时避免先闪登录页：已有有效 token 则立即隐藏登录页（app.js 初始化会接管；token 失效时 showLogin 会重新显示）
     (function () {
       try {
-        if (localStorage.getItem('taiwei-token') || localStorage.getItem('taiwei_share_token')) {
+        if (location.pathname.startsWith('/share/') || localStorage.getItem('taiwei-token') || localStorage.getItem('taiwei_share_token')) {
           var loginScreen = document.getElementById('login-screen');
           if (loginScreen) loginScreen.hidden = true;
         }
@@ -93,6 +93,7 @@
           </div>
         </div>
         <div class="topbar-actions">
+          <span class="readonly-share-label" id="readonly-share-label" hidden>只读分享 · 无法对话</span>
           <span class="guest-mode-label" id="guest-mode-label" hidden><b>访客</b> 访客模式 · 仅聊天</span>
           <button class="guest-logout-button guest-only" id="guest-gitea" type="button" title="部署管理">🚀 部署</button>
           <button class="guest-logout-button guest-only" id="guest-logout" type="button">退出</button>
@@ -139,6 +140,9 @@
       <button class="scroll-bottom" id="scroll-bottom" type="button">↓ 回到底部</button>
 
       <div class="composer-dock">
+        <div class="composer-toolbar">
+          <button class="session-share-button" id="session-share" type="button" hidden>↗ 分享</button>
+        </div>
         <form class="composer" id="composer">
           <div class="composer-main">
             <button class="attachment-button" id="attachment-button" type="button" aria-label="添加附件" title="添加附件">📎</button>
@@ -496,6 +500,25 @@
       <div class="management-error" id="deployments-error" role="alert"></div>
       <pre class="deployment-result" id="deployments-result" aria-live="polite"></pre>
       <div class="resource-list deployment-list" id="deployments-list"></div>
+    </div>
+  </dialog>
+  <dialog class="modal share-modal" id="share-modal">
+    <div class="modal-card share-card">
+      <header>
+        <div><h2>分享会话</h2><p>任何获得链接的人都可以免登录只读查看此会话。</p></div>
+        <button class="icon-button" id="share-close" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="share-status" id="share-status" role="status">正在读取分享状态…</div>
+      <label for="share-link">分享链接</label>
+      <input id="share-link" type="text" readonly placeholder="尚未生成分享链接">
+      <div class="share-error" id="share-error" role="alert"></div>
+      <footer>
+        <button class="secondary-button danger-button" id="share-revoke" type="button" hidden>取消分享</button>
+        <span class="share-actions">
+          <button class="secondary-button" id="share-copy" type="button" hidden>复制链接</button>
+          <button class="primary-button" id="share-create" type="button">生成分享链接</button>
+        </span>
+      </footer>
     </div>
   </dialog>
   <dialog class="modal confirm-modal" id="confirm-modal">
