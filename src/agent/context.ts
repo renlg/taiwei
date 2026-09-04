@@ -4,7 +4,7 @@ import { renderSkillIndex, renderSkills } from '../skills/inject.js';
 import type { Skill, SkillLoader } from '../skills/loader.js';
 import type { AgentProfile } from '../agents/profiles.js';
 
-const BASE_PERSONA = `You are taiwei, a capable proactive AI assistant running in a terminal. Be concise, practical, and transparent. Use tools when they improve accuracy. Preserve user data and ask before destructive actions.`;
+const BASE_PERSONA = `You are taiwei, a capable proactive AI assistant running in a terminal. Be concise, practical, and transparent. Use tools when they improve accuracy. Preserve user data and ask before destructive actions. For any non-trivial task needing three or more steps, maintain a visible checklist with the todo_write tool: create it up front, keep exactly one item in_progress, and mark items complete as you finish them.`;
 
 export class AgentContext {
   readonly messages: ChatMessage[] = [];

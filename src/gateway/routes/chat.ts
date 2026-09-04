@@ -322,6 +322,8 @@ export async function handleChatRoute(ctx: RouteContext): Promise<boolean> {
       } else if (event.type === 'compressing') {
         sendSse(response, 'compressing', {});
       } else if (event.type === 'usage') {
+        // session.usage stores per-turn numbers (for context ring) + cumulative totals across all turns.
+        const prev = session.usage;
         session.usage = {
           promptTokens: event.usage.promptTokens,
           completionTokens: event.usage.completionTokens,
@@ -329,6 +331,9 @@ export async function handleChatRoute(ctx: RouteContext): Promise<boolean> {
           contextWindow: event.usage.contextWindow ?? activeContextWindow,
           model: event.model || activeModel,
           compressed: event.compressed === true,
+          cumulativePromptTokens: (prev?.cumulativePromptTokens ?? 0) + (event.usage.promptTokens || 0),
+          cumulativeCompletionTokens: (prev?.cumulativeCompletionTokens ?? 0) + (event.usage.completionTokens || 0),
+          cumulativeTotalTokens: (prev?.cumulativeTotalTokens ?? 0) + (event.usage.totalTokens || 0),
         };
         pendingTurn.usage = session.usage;
         sendSse(response, 'usage', session.usage);

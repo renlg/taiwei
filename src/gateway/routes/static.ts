@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { json } from '../http.js';
 import type { RouteContext } from './route-context.js';
 
-export const STATIC_ASSET_VERSION = '81';
+export const STATIC_ASSET_VERSION = '82';
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',

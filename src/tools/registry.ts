@@ -8,6 +8,7 @@ import { PolicyEngine, toolPath } from '../security/policy.js';
 import { resolveInWorkspace } from '../util/paths.js';
 import { appendAudit } from '../observability/audit.js';
 import { emitEvent } from '../observability/events.js';
+import type { LspServerConfig } from '../lsp/client.js';
 
 export interface ToolConfigField {
   type: 'number' | 'string';
@@ -51,7 +52,7 @@ export interface ToolContext {
   runId?: string;
   policy?: PolicyEngine;
   workspaceOnly?: boolean;
-  lsp?: { enabled: boolean; maxDiagnostics: number; autoInject: boolean };
+  lsp?: { enabled: boolean; maxDiagnostics: number; autoInject: boolean; servers?: LspServerConfig[] };
   beforeFileWrite?: (path: string) => Promise<void> | void;
   afterFileWrite?: (path: string) => Promise<void> | void;
 }

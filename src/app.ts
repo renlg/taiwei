@@ -29,6 +29,10 @@ import { createLoadSkillTool } from './tools/impl/skill.js';
 import { createUserSkillTools } from './tools/impl/user-skill.js';
 import { writeTool } from './tools/impl/write.js';
 import { editTool } from './tools/impl/edit.js';
+import { applyPatchTool } from './tools/impl/patch.js';
+import { todoTools } from './tools/impl/todo.js';
+import { createLspTools } from './tools/impl/lsp.js';
+import { LspManager } from './lsp/client.js';
 import { diagnosticsTool } from './tools/impl/diagnostics.js';
 import { ToolRegistry, type TenantIdentity } from './tools/registry.js';
 import { CommandSecurity, type ConfirmationHandler } from './security/commands.js';
@@ -65,11 +69,13 @@ export class TaiweiApp {
   delegation!: DelegationManager;
   activeAgentId = 'build';
   readonly browser = new BrowserToolRuntime();
+  lspManager!: LspManager;
 
   async initialize(options: { external?: boolean; scheduler?: boolean } = {}): Promise<void> {
     this.config = await loadConfig();
     getAgentProfiles(); // Load and validate ~/.taiwei/agents.json once at startup.
     this.runtime = new SessionRuntime(this.config.runtime.maxConcurrentTurns);
+    this.lspManager = new LspManager(this.config.lsp.servers);
     this.skills.setDisabled(this.config.skillsDisabled);
     this.registry.configure(resolveToolSettings(this.config));
     const workspace = resolveWorkspaceDir(this.config);
@@ -78,7 +84,7 @@ export class TaiweiApp {
     this.delegation = new DelegationManager((request) => this.runChild(request), this.config.delegation.maxConcurrent, this.config.delegation.maxDepth);
     const nginxAddProxyTool = createNginxAddProxyTool({ publicUrl: this.config.publicUrl });
     // User-skill management tools: create_skill, list_skills, delete_skill.
-    for (const tool of [bashTool, readTool, writeTool, editTool, diagnosticsTool, searchTool, nginxAddProxyTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, createLoadSkillTool(this.skills, this.userSkills, this.userSkillStates), ...createUserSkillTools(this.userSkills, this.userSkillStates), ...createMemoryTools(this.memory), ...createWatchdogTools(this.cronJobs, this.scheduler), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
+    for (const tool of [bashTool, readTool, writeTool, editTool, applyPatchTool, diagnosticsTool, searchTool, nginxAddProxyTool, ragSearchTool, webSearchTool, imageGenTool, videoGenTool, ...historyTools, ...todoTools, ...createLspTools(this.lspManager), createLoadSkillTool(this.skills, this.userSkills, this.userSkillStates), ...createUserSkillTools(this.userSkills, this.userSkillStates), ...createMemoryTools(this.memory), ...createWatchdogTools(this.cronJobs, this.scheduler), ...taskTools, ...this.browser.tools()]) this.registry.register(tool);
     this.registry.register(createDelegateTool(this.delegation));
     // history.db is a rebuildable index. A missing/unsupported SQLite runtime must never block chat startup.
     await importHistoryIfEmpty().catch(() => {});
@@ -220,5 +226,5 @@ export class TaiweiApp {
     this.interrupt.notify({ title: `cron job "${job.name}" ${run.status}`, message: summary });
   }
 
-  async close(): Promise<void> { this.scheduler.stop(); await this.browser.close(); await this.plugins.close(); await this.mcp.close(); }
+  async close(): Promise<void> { this.scheduler.stop(); await this.browser.close(); await this.plugins.close(); await this.mcp.close(); await this.lspManager?.close(); }
 }

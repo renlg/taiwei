@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { DEFAULT_CONFIG, loadConfig, resolveCompressThreshold, resolveWorkspaceDir, validateGatewayAuth, type TaiweiConfig } from '../src/config/config.js';
+import { DEFAULT_CONFIG, initializeConfig, loadConfig, resolveCompressThreshold, resolveWorkspaceDir, validateGatewayAuth, type TaiweiConfig } from '../src/config/config.js';
 import { nextRun, parseInterval } from '../src/cron/scheduler.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { streamChat } from '../src/llm/client.js';
@@ -25,6 +25,7 @@ import { SkillLoader } from '../src/skills/loader.js';
 import { createLoadSkillTool } from '../src/tools/impl/skill.js';
 import { appendMessage, closeHistoryDatabases, getSession, HistoryUnavailableError, listSessions, searchMessages, upsertSession } from '../src/history/db.js';
 import { createHistoryTools } from '../src/tools/impl/history.js';
+import { DEFAULT_LSP_SERVERS } from '../src/lsp/client.js';
 
 const emptyHooks = (): HookCommands => ({ beforeMessage: [], beforeLLM: [], afterLLM: [], beforeTool: [], afterTool: [] });
 
@@ -50,7 +51,7 @@ test('config initializes with defaults and honors environment overrides', async 
     assert.equal(config.memoryFlush, true);
     assert.equal(resolveCompressThreshold({ ...config, compressThreshold: 0 }), 0.7);
     assert.equal(config.maxTurns, 50);
-    assert.deepEqual(config.lsp, { enabled: true, maxDiagnostics: 5, autoInject: true });
+    assert.deepEqual(config.lsp, { enabled: true, maxDiagnostics: 5, autoInject: true, servers: DEFAULT_LSP_SERVERS });
     assert.equal(config.customPrompt, '');
     assert.equal(config.autoLoadSkills, true);
     assert.deepEqual(config.oss, {
@@ -78,6 +79,61 @@ test('config initializes with defaults and honors environment overrides', async 
     if (oldAuthPassword === undefined) delete process.env.TAIWEI_AUTH_PASSWORD; else process.env.TAIWEI_AUTH_PASSWORD = oldAuthPassword;
     if (oldOauthSecret === undefined) delete process.env.OAUTH_TAIWEI_SECRET; else process.env.OAUTH_TAIWEI_SECRET = oldOauthSecret;
     if (oldOauthRedirect === undefined) delete process.env.OAUTH_TAIWEI_REDIRECT; else process.env.OAUTH_TAIWEI_REDIRECT = oldOauthRedirect;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('config resolves ${VAR} secret references from environment variables', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'taiwei-secrets-test-'));
+  const oldHome = process.env.TAIWEI_HOME;
+  const oldSecret = process.env.TAIWEI_TEST_SECRET;
+  const oldApiKey = process.env.TAIWEI_TEST_KEY;
+  process.env.TAIWEI_HOME = directory;
+  process.env.TAIWEI_TEST_SECRET = 'resolved-secret-value';
+  process.env.TAIWEI_TEST_KEY = 'resolved-api-key';
+  try {
+    await writeFile(join(directory, 'config.json'), JSON.stringify({
+      apiKey: '${TAIWEI_TEST_KEY}',
+      auth: { enabled: true, username: 'admin', password: '${TAIWEI_TEST_SECRET}' },
+      oauth: { clientSecret: '${TAIWEI_TEST_SECRET}' },
+      oss: { accessKeySecret: '${TAIWEI_TEST_SECRET}' },
+      model: 'plain-${TAIWEI_TEST_SECRET}-model',
+      customPrompt: 'Keep ${TAIWEI_TEST_SECRET} literal',
+      gitea: { adminToken: '$${TAIWEI_TEST_SECRET}' },
+      share: { token: '${TAIWEI_TEST_SECRET}' },
+    }));
+    const config = await loadConfig();
+    assert.equal(config.apiKey, 'resolved-api-key');
+    assert.equal(config.auth.password, 'resolved-secret-value');
+    assert.equal(config.oauth.clientSecret, 'resolved-secret-value');
+    assert.equal(config.oss.accessKeySecret, 'resolved-secret-value');
+    assert.equal(config.model, 'plain-${TAIWEI_TEST_SECRET}-model', 'non-secret fields are not interpolated');
+    assert.equal(config.customPrompt, 'Keep ${TAIWEI_TEST_SECRET} literal');
+    assert.equal(config.gitea.adminToken, '${TAIWEI_TEST_SECRET}', '$$ escapes interpolation in supported fields');
+    assert.equal(config.share.token, 'resolved-secret-value');
+    const disk = await readFile(join(directory, 'config.json'), 'utf8');
+    assert.match(disk, /\$\{TAIWEI_TEST_KEY\}/);
+    assert.match(disk, /\$\{TAIWEI_TEST_SECRET\}/);
+    assert.ok(!disk.includes('resolved-api-key'));
+    assert.ok(!disk.includes('resolved-secret-value'));
+    await import('../src/config/config.js').then(({ saveConfig }) => saveConfig(config));
+    const resaved = await readFile(join(directory, 'config.json'), 'utf8');
+    assert.ok(!resaved.includes('resolved-api-key'), 'saving a runtime config must not leak an interpolated legacy/provider key');
+    assert.ok(!resaved.includes('resolved-secret-value'), 'saving a runtime config must not leak interpolated secrets');
+    assert.match(resaved, /\$\$\{TAIWEI_TEST_SECRET\}/, 'escaped references survive subsequent saves');
+    assert.equal(config.oauth.clientSecret, 'resolved-secret-value', 'saveConfig must not mutate live OAuth secrets');
+    assert.equal(config.oss.accessKeySecret, 'resolved-secret-value', 'saveConfig must not mutate live OSS secrets');
+    assert.equal(config.gitea.adminToken, '${TAIWEI_TEST_SECRET}', 'saveConfig must not mutate live Gitea secrets');
+    assert.equal(config.share.token, 'resolved-secret-value', 'saveConfig must not mutate live share secrets');
+
+    const initialized = await initializeConfig();
+    const initializedDisk = JSON.parse(await readFile(join(directory, 'config.json'), 'utf8')) as TaiweiConfig;
+    assert.equal(initialized.auth.password, '${TAIWEI_TEST_SECRET}', 'initializeConfig must not hash environment templates');
+    assert.equal(initializedDisk.auth.password, '${TAIWEI_TEST_SECRET}');
+  } finally {
+    if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;
+    if (oldSecret === undefined) delete process.env.TAIWEI_TEST_SECRET; else process.env.TAIWEI_TEST_SECRET = oldSecret;
+    if (oldApiKey === undefined) delete process.env.TAIWEI_TEST_KEY; else process.env.TAIWEI_TEST_KEY = oldApiKey;
     await rm(directory, { recursive: true, force: true });
   }
 });

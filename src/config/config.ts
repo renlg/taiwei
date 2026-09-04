@@ -6,6 +6,7 @@ import { HOOK_EVENTS, type HookCommands } from '../hooks/runner.js';
 import { passwordForStorage } from './password.js';
 import type { PolicyConfig } from '../security/policy.js';
 import type { ProviderConfig } from '../llm/providers/types.js';
+import { DEFAULT_LSP_SERVERS, type LspServerConfig } from '../lsp/client.js';
 
 export type SecurityRememberMode = 'off' | 'session' | 'permanent';
 
@@ -50,7 +51,7 @@ export interface TaiweiConfig {
   retry: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number; maxFeedbackIterations: number };
   runtime: { maxConcurrentTurns: number };
   bash: BashConfig;
-  lsp: { enabled: boolean; maxDiagnostics: number; autoInject: boolean };
+  lsp: { enabled: boolean; maxDiagnostics: number; autoInject: boolean; servers: LspServerConfig[] };
   policy: PolicyConfig;
   customPrompt: string;
   hookTimeoutSeconds: number;
@@ -122,7 +123,7 @@ export const DEFAULT_CONFIG: TaiweiConfig = {
   retry: { maxAttempts: 3, baseDelayMs: 1_000, maxDelayMs: 30_000, maxFeedbackIterations: 2 },
   runtime: { maxConcurrentTurns: 4 },
   bash: { backend: 'local' },
-  lsp: { enabled: true, maxDiagnostics: 5, autoInject: true },
+  lsp: { enabled: true, maxDiagnostics: 5, autoInject: true, servers: DEFAULT_LSP_SERVERS },
   policy: { rules: [] },
   customPrompt: '',
   hookTimeoutSeconds: 10,
@@ -210,6 +211,52 @@ export function resolveCompressThreshold(config: TaiweiConfig): number {
     : DEFAULT_CONFIG.compressThreshold ?? 0.7;
 }
 
+/** Resolve an environment template in an explicitly supported connection/secret field.
+ * `$${VAR}` escapes interpolation and becomes the literal `${VAR}` at runtime.
+ */
+function resolveSecret(value: string): string {
+  const escaped: string[] = [];
+  const protectedValue = value.replace(/\$\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => {
+    escaped.push(`\${${name}}`);
+    return `\u0000TAIWEI_ESC_${escaped.length - 1}\u0000`;
+  });
+  return protectedValue
+    .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name: string) => process.env[name] ?? match)
+    .replace(/\u0000TAIWEI_ESC_(\d+)\u0000/g, (_match, index: string) => escaped[Number(index)]!);
+}
+
+function hasEnvironmentTemplate(value: string): boolean {
+  return /(^|[^$])\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(value);
+}
+
+function hasEnvironmentReference(value: string): boolean {
+  return /\$\$?\{[A-Za-z_][A-Za-z0-9_]*\}/.test(value);
+}
+
+/** Deliberately do not walk arbitrary strings such as prompts or hook commands. */
+function resolveRuntimeSecrets(config: TaiweiConfig): TaiweiConfig {
+  const resolved = structuredClone(config);
+  resolved.apiKey = resolveSecret(resolved.apiKey);
+  resolved.baseUrl = resolveSecret(resolved.baseUrl);
+  if (resolved.publicUrl) resolved.publicUrl = resolveSecret(resolved.publicUrl);
+  resolved.providers = resolved.providers.map((provider) => ({
+    ...provider,
+    apiKey: resolveSecret(provider.apiKey ?? ''),
+    baseUrl: resolveSecret(provider.baseUrl),
+  }));
+  resolved.auth.password = resolveSecret(resolved.auth.password);
+  resolved.oauth.providerBaseUrl = resolveSecret(resolved.oauth.providerBaseUrl);
+  resolved.oauth.clientSecret = resolveSecret(resolved.oauth.clientSecret);
+  resolved.oauth.redirectUri = resolveSecret(resolved.oauth.redirectUri);
+  resolved.oss.accessKeyId = resolveSecret(resolved.oss.accessKeyId);
+  resolved.oss.accessKeySecret = resolveSecret(resolved.oss.accessKeySecret);
+  resolved.oss.endpoint = resolveSecret(resolved.oss.endpoint);
+  resolved.gitea.baseUrl = resolveSecret(resolved.gitea.baseUrl);
+  resolved.gitea.adminToken = resolveSecret(resolved.gitea.adminToken);
+  resolved.share.token = resolveSecret(resolved.share.token);
+  return resolved;
+}
+
 export async function loadConfig(): Promise<TaiweiConfig> {
   const paths = await ensureTaiweiHome();
   let stored: Partial<TaiweiConfig> = {};
@@ -224,7 +271,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
   const { guests: _ignoredGuests, ...storedConfig } = stored as Partial<TaiweiConfig> & { guests?: unknown };
   const legacyBaseUrl = typeof (storedConfig as { apiBaseUrl?: unknown }).apiBaseUrl === 'string'
     ? (storedConfig as { apiBaseUrl: string }).apiBaseUrl : storedConfig.baseUrl;
-  const config: TaiweiConfig = {
+  let config: TaiweiConfig = {
     ...DEFAULT_CONFIG,
     ...storedConfig,
     customPrompt: typeof storedConfig.customPrompt === 'string' ? storedConfig.customPrompt : DEFAULT_CONFIG.customPrompt,
@@ -241,7 +288,7 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     retry: { ...DEFAULT_CONFIG.retry, ...storedConfig.retry },
     runtime: { ...DEFAULT_CONFIG.runtime, ...storedConfig.runtime },
     bash: mergeBashConfig(storedConfig.bash),
-    lsp: { ...DEFAULT_CONFIG.lsp, ...storedConfig.lsp },
+    lsp: normalizeLsp(storedConfig.lsp),
     policy: { rules: Array.isArray(storedConfig.policy?.rules) ? storedConfig.policy.rules : [] },
     browser: { ...DEFAULT_CONFIG.browser, ...storedConfig.browser },
     gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },
@@ -263,12 +310,15 @@ export async function loadConfig(): Promise<TaiweiConfig> {
     model: stored.model ?? DEFAULT_CONFIG.model,
     embedModel: stored.embedModel ?? DEFAULT_CONFIG.embedModel,
   };
-  const storedPassword = config.auth.password;
-  const diskPassword = passwordForStorage(storedPassword);
-  if (diskPassword !== storedPassword) {
-    config.auth.password = diskPassword;
-    await saveConfig(config);
+  const rawPassword = config.auth.password;
+  if (!hasEnvironmentTemplate(rawPassword)) {
+    const diskPassword = passwordForStorage(resolveSecret(rawPassword));
+    if (diskPassword !== rawPassword) {
+      config.auth.password = diskPassword;
+      await saveConfig(config);
+    }
   }
+  config = resolveRuntimeSecrets(config);
   config.apiKey = process.env.TAIWEI_API_KEY ?? config.apiKey;
   config.baseUrl = process.env.TAIWEI_BASE_URL ?? config.baseUrl;
   config.model = process.env.TAIWEI_MODEL ?? config.model;
@@ -277,6 +327,12 @@ export async function loadConfig(): Promise<TaiweiConfig> {
   if (process.env.TAIWEI_AUTH_PASSWORD !== undefined) config.auth.password = process.env.TAIWEI_AUTH_PASSWORD;
   if (process.env.OAUTH_TAIWEI_SECRET !== undefined) config.oauth.clientSecret = process.env.OAUTH_TAIWEI_SECRET;
   if (process.env.OAUTH_TAIWEI_REDIRECT !== undefined) config.oauth.redirectUri = process.env.OAUTH_TAIWEI_REDIRECT;
+  if (process.env.TAIWEI_OSS_SECRET !== undefined) config.oss.accessKeySecret = process.env.TAIWEI_OSS_SECRET;
+  if (process.env.GITEA_ADMIN_TOKEN !== undefined) config.gitea.adminToken = process.env.GITEA_ADMIN_TOKEN;
+  for (const provider of config.providers) {
+    const envKey = `TAIWEI_PROVIDER_${provider.id.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}_API_KEY`;
+    if (process.env[envKey] !== undefined) provider.apiKey = process.env[envKey]!;
+  }
   return config;
 }
 
@@ -309,11 +365,11 @@ function normalizeProviders(value: unknown, legacy: Pick<TaiweiConfig, 'baseUrl'
 export async function saveConfig(config: TaiweiConfig): Promise<void> {
   const paths = await ensureTaiweiHome();
   const { guests: _ignoredGuests, ...configWithoutGuests } = config as TaiweiConfig & { guests?: unknown };
-  const stored = {
-    ...configWithoutGuests,
-    auth: { ...config.auth, password: passwordForStorage(config.auth.password) },
-  };
+  const stored = structuredClone(configWithoutGuests) as TaiweiConfig;
   await stripEnvironmentOverrides(config, stored, paths.config);
+  stored.auth.password = hasEnvironmentTemplate(stored.auth.password)
+    ? stored.auth.password
+    : passwordForStorage(stored.auth.password);
   await writeFile(paths.config, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
 }
 
@@ -325,12 +381,15 @@ export async function saveConfig(config: TaiweiConfig): Promise<void> {
  */
 async function stripEnvironmentOverrides(config: TaiweiConfig, stored: TaiweiConfig, configPath: string): Promise<void> {
   const env = process.env;
+  const hasProviderOverride = config.providers.some((provider) => process.env[`TAIWEI_PROVIDER_${provider.id.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}_API_KEY`] !== undefined);
   const hasAny = env.TAIWEI_API_KEY !== undefined || env.TAIWEI_BASE_URL !== undefined || env.TAIWEI_MODEL !== undefined
-    || env.TAIWEI_AUTH_PASSWORD !== undefined || env.OAUTH_TAIWEI_SECRET !== undefined || env.OAUTH_TAIWEI_REDIRECT !== undefined;
-  if (!hasAny) return;
+    || env.TAIWEI_AUTH_PASSWORD !== undefined || env.OAUTH_TAIWEI_SECRET !== undefined || env.OAUTH_TAIWEI_REDIRECT !== undefined
+    || env.TAIWEI_OSS_SECRET !== undefined || env.GITEA_ADMIN_TOKEN !== undefined || hasProviderOverride;
   let disk: Partial<TaiweiConfig> = {};
   try { disk = JSON.parse(await readFile(configPath, 'utf8')) as Partial<TaiweiConfig>; }
   catch { /* no previous on-disk config: nothing to restore */ }
+  restoreInterpolatedFields(stored, disk);
+  if (!hasAny) return;
   const restore = (value: string | undefined, override: string | undefined, diskValue: unknown, fallback: string): string | undefined =>
     override !== undefined && value === override ? (typeof diskValue === 'string' ? diskValue : fallback) : value;
   stored.apiKey = restore(config.apiKey, env.TAIWEI_API_KEY, disk.apiKey, '')!;
@@ -345,6 +404,12 @@ async function stripEnvironmentOverrides(config: TaiweiConfig, stored: TaiweiCon
   if (env.OAUTH_TAIWEI_REDIRECT !== undefined && config.oauth.redirectUri === env.OAUTH_TAIWEI_REDIRECT) {
     stored.oauth = { ...stored.oauth, redirectUri: typeof disk.oauth?.redirectUri === 'string' ? disk.oauth.redirectUri : DEFAULT_CONFIG.oauth.redirectUri };
   }
+  if (env.TAIWEI_OSS_SECRET !== undefined && config.oss.accessKeySecret === env.TAIWEI_OSS_SECRET) {
+    stored.oss = { ...stored.oss, accessKeySecret: typeof disk.oss?.accessKeySecret === 'string' ? disk.oss.accessKeySecret : '' };
+  }
+  if (env.GITEA_ADMIN_TOKEN !== undefined && config.gitea.adminToken === env.GITEA_ADMIN_TOKEN) {
+    stored.gitea = { ...stored.gitea, adminToken: typeof disk.gitea?.adminToken === 'string' ? disk.gitea.adminToken : '' };
+  }
   const defaultIndex = stored.providers?.findIndex((provider) => provider.id === 'default') ?? -1;
   if (defaultIndex >= 0 && stored.providers) {
     const diskProvider = Array.isArray(disk.providers) ? disk.providers.find((provider) => provider?.id === 'default') : undefined;
@@ -355,6 +420,42 @@ async function stripEnvironmentOverrides(config: TaiweiConfig, stored: TaiweiCon
     provider.defaultModel = restore(provider.defaultModel, env.TAIWEI_MODEL, diskProvider?.defaultModel, DEFAULT_CONFIG.model)!;
     providers[defaultIndex] = provider;
     stored.providers = providers;
+  }
+  if (stored.providers) {
+    stored.providers = stored.providers.map((provider) => {
+      const envKey = `TAIWEI_PROVIDER_${provider.id.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}_API_KEY`;
+      const override = env[envKey];
+      const diskProvider = Array.isArray(disk.providers) ? disk.providers.find((candidate) => candidate?.id === provider.id) : undefined;
+      return override !== undefined && config.providers.find((candidate) => candidate.id === provider.id)?.apiKey === override
+        ? { ...provider, apiKey: typeof diskProvider?.apiKey === 'string' ? diskProvider.apiKey : '' }
+        : provider;
+    });
+  }
+}
+
+/** Restore unresolved disk templates when saveConfig receives a runtime-resolved config. */
+function restoreInterpolatedFields(stored: TaiweiConfig, disk: Partial<TaiweiConfig>): void {
+  const restore = (runtime: string, raw: unknown): string =>
+    typeof raw === 'string' && hasEnvironmentReference(raw) && resolveSecret(raw) === runtime ? raw : runtime;
+  stored.apiKey = restore(stored.apiKey, disk.apiKey);
+  stored.baseUrl = restore(stored.baseUrl, disk.apiBaseUrl ?? disk.baseUrl);
+  if (stored.publicUrl !== undefined) stored.publicUrl = restore(stored.publicUrl, disk.publicUrl);
+  stored.auth.password = restore(stored.auth.password, disk.auth?.password);
+  stored.oauth.providerBaseUrl = restore(stored.oauth.providerBaseUrl, disk.oauth?.providerBaseUrl);
+  stored.oauth.clientSecret = restore(stored.oauth.clientSecret, disk.oauth?.clientSecret);
+  stored.oauth.redirectUri = restore(stored.oauth.redirectUri, disk.oauth?.redirectUri);
+  stored.oss.accessKeyId = restore(stored.oss.accessKeyId, disk.oss?.accessKeyId);
+  stored.oss.accessKeySecret = restore(stored.oss.accessKeySecret, disk.oss?.accessKeySecret);
+  stored.oss.endpoint = restore(stored.oss.endpoint, disk.oss?.endpoint);
+  stored.gitea.baseUrl = restore(stored.gitea.baseUrl, disk.gitea?.baseUrl);
+  stored.gitea.adminToken = restore(stored.gitea.adminToken, disk.gitea?.adminToken);
+  stored.share.token = restore(stored.share.token, disk.share?.token);
+  if (Array.isArray(stored.providers)) {
+    stored.providers = stored.providers.map((provider) => {
+      const raw = (Array.isArray(disk.providers) ? disk.providers.find((candidate) => candidate?.id === provider.id) : undefined)
+        ?? (provider.id === 'default' ? { apiKey: disk.apiKey, baseUrl: disk.apiBaseUrl ?? disk.baseUrl } : undefined);
+      return raw ? { ...provider, apiKey: restore(provider.apiKey ?? '', raw.apiKey), baseUrl: restore(provider.baseUrl, raw.baseUrl) } : provider;
+    });
   }
 }
 
@@ -380,6 +481,7 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
       retry: { ...DEFAULT_CONFIG.retry, ...storedConfig.retry },
       runtime: { ...DEFAULT_CONFIG.runtime, ...storedConfig.runtime },
       bash: mergeBashConfig(storedConfig.bash),
+      lsp: normalizeLsp(storedConfig.lsp),
       policy: { rules: Array.isArray(storedConfig.policy?.rules) ? storedConfig.policy.rules : [] },
       browser: { ...DEFAULT_CONFIG.browser, ...storedConfig.browser },
       gateway: { ...DEFAULT_CONFIG.gateway, ...storedConfig.gateway },
@@ -396,7 +498,9 @@ export async function initializeConfig(): Promise<TaiweiConfig> {
         approvedPatterns: [...(stored.security?.approvedPatterns ?? DEFAULT_CONFIG.security.approvedPatterns)],
       },
     };
-    config.auth.password = passwordForStorage(config.auth.password);
+    if (!hasEnvironmentTemplate(config.auth.password)) {
+      config.auth.password = passwordForStorage(config.auth.password);
+    }
     await saveConfig(config);
     return config;
   } catch (error) {
@@ -426,6 +530,39 @@ function mergeBashConfig(value: Partial<BashConfig> | undefined): BashConfig {
     ...(value?.docker ? { docker: { ...value.docker } } : {}),
     ...(value?.ssh ? { ssh: { ...value.ssh } } : {}),
   } as BashConfig;
+}
+
+function normalizeLspServers(value: unknown): LspServerConfig[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const servers: LspServerConfig[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const raw = entry as Record<string, unknown>;
+    if (typeof raw.command !== 'string' || !raw.command.trim()) continue;
+    const extensions = Array.isArray(raw.extensions)
+      ? raw.extensions.filter((extension): extension is string => typeof extension === 'string' && extension.startsWith('.'))
+      : [];
+    servers.push({
+      command: raw.command.trim(),
+      ...(Array.isArray(raw.args) ? { args: raw.args.filter((arg): arg is string => typeof arg === 'string') } : {}),
+      extensions,
+      ...(raw.env && typeof raw.env === 'object' && !Array.isArray(raw.env) ? {
+        env: Object.fromEntries(Object.entries(raw.env as Record<string, unknown>)
+          .filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+      } : {}),
+    });
+  }
+  return servers.length ? servers : undefined;
+}
+
+function normalizeLsp(value: unknown): TaiweiConfig['lsp'] {
+  const raw = (value && typeof value === 'object' ? value : {}) as { enabled?: unknown; maxDiagnostics?: unknown; autoInject?: unknown; servers?: unknown };
+  return {
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : DEFAULT_CONFIG.lsp.enabled,
+    maxDiagnostics: typeof raw.maxDiagnostics === 'number' && raw.maxDiagnostics > 0 ? Math.floor(raw.maxDiagnostics) : DEFAULT_CONFIG.lsp.maxDiagnostics,
+    autoInject: typeof raw.autoInject === 'boolean' ? raw.autoInject : DEFAULT_CONFIG.lsp.autoInject,
+    servers: normalizeLspServers(raw.servers) ?? DEFAULT_CONFIG.lsp.servers,
+  };
 }
 
 function normalizeHooks(value?: Partial<HookCommands>): HookCommands {

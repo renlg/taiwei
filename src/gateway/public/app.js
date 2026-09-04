@@ -313,6 +313,76 @@ function containsMedia(result) {
 
 const MEDIA_GENERATION_TOOLS = new Set(['generate_image', 'generate_video']);
 
+const TODO_TOOLS = new Set(['todo_write', 'todo_read']);
+
+const TODO_STATUS_META = {
+  complete: { icon: '✅', label: '已完成' },
+  in_progress: { icon: '🔄', label: '进行中' },
+  pending: { icon: '⬜', label: '待办' },
+  cancelled: { icon: '🚫', label: '已取消' },
+};
+
+function parseTodoResult(result) {
+  if (result === undefined || result === null) return null;
+  try {
+    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+    if (!parsed || !Array.isArray(parsed.todos)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function todoSummaryText(parsed) {
+  const todos = Array.isArray(parsed?.todos) ? parsed.todos : [];
+  const done = todos.filter((item) => item.status === 'complete').length;
+  return `📋 任务清单 · ${done}/${todos.length}`;
+}
+
+function renderTodoList(parsed) {
+  const panel = document.createElement('div');
+  panel.className = 'todo-panel';
+  const todos = Array.isArray(parsed?.todos) ? parsed.todos : [];
+  const total = todos.length;
+  const done = todos.filter((item) => item.status === 'complete').length;
+  const head = document.createElement('div');
+  head.className = 'todo-head';
+  const title = document.createElement('span');
+  title.className = 'todo-title';
+  title.textContent = '任务清单';
+  const count = document.createElement('span');
+  count.className = 'todo-count';
+  count.textContent = total ? `${done}/${total} 完成` : '暂无任务';
+  head.append(title, count);
+  panel.append(head);
+  if (total) {
+    const bar = document.createElement('div');
+    bar.className = 'todo-progress';
+    const fill = document.createElement('i');
+    fill.style.width = `${Math.round((done / total) * 100)}%`;
+    bar.append(fill);
+    panel.append(bar);
+  }
+  const list = document.createElement('ul');
+  list.className = 'todo-items';
+  for (const item of todos) {
+    const status = TODO_STATUS_META[item.status] ? item.status : 'pending';
+    const row = document.createElement('li');
+    row.className = `todo-item todo-${status}`;
+    const check = document.createElement('span');
+    check.className = 'todo-check';
+    check.textContent = TODO_STATUS_META[status].icon;
+    check.title = TODO_STATUS_META[status].label;
+    const text = document.createElement('span');
+    text.className = 'todo-text';
+    text.textContent = item.content ?? '';
+    row.append(check, text);
+    list.append(row);
+  }
+  panel.append(list);
+  return panel;
+}
+
 function isVideoMediaUrl(url) {
   return /\.(?:mp4|webm|mov)(?:\?[^\s<]*)?$/i.test(url)
     || /\/video\//i.test(url)
@@ -1861,7 +1931,11 @@ function renderUsage(usage = state.usage) {
   elements.contextMeter.classList.toggle('danger', percentage >= 90);
   elements.contextMeter.setAttribute('aria-valuenow', percentage.toFixed(1));
   elements.contextMeter.setAttribute('aria-valuetext', `${percentage.toFixed(1)}%，${formatTokens(totalTokens)} / ${formatTokens(contextWindow)} tokens`);
-  elements.contextTooltip.textContent = `总计 ${formatTokens(totalTokens)} · 提示 ${formatTokens(usage.promptTokens)} · 补全 ${formatTokens(usage.completionTokens)} · 窗口 ${formatTokens(contextWindow)} tokens · ${percentage.toFixed(1)}%`;
+  const cumulativeTotal = Math.max(0, Number(usage.cumulativeTotalTokens) || 0);
+  const cumulativeHint = cumulativeTotal > 0
+    ? ` · 累计 ${formatTokens(cumulativeTotal)} tokens`
+    : '';
+  elements.contextTooltip.textContent = `总计 ${formatTokens(totalTokens)} · 提示 ${formatTokens(usage.promptTokens)} · 补全 ${formatTokens(usage.completionTokens)} · 窗口 ${formatTokens(contextWindow)} tokens · ${percentage.toFixed(1)}%${cumulativeHint}`;
 }
 
 function setStreaming(streaming) {
@@ -2163,24 +2237,30 @@ function renderTools(container, calls = []) {
   for (const call of calls) {
     const redacted = call.redacted === true;
     const isMediaGeneration = MEDIA_GENERATION_TOOLS.has(call.name);
+    const isTodo = TODO_TOOLS.has(call.name);
     const details = document.createElement('details');
-    details.className = `tool-entry${isMediaGeneration ? ' tool-entry-media' : ''}${call.result !== undefined || redacted ? ' done' : ''}`;
+    details.className = `tool-entry${isMediaGeneration ? ' tool-entry-media' : ''}${isTodo ? ' tool-entry-todo' : ''}${call.result !== undefined || redacted ? ' done' : ''}`;
     const summary = document.createElement('summary');
     const dot = document.createElement('i');
     dot.className = 'tool-state';
     const label = document.createElement('span');
     const preview = redacted ? '' : JSON.stringify(call.args || {});
     const toolIcon = call.name === 'generate_image' ? '🖼️' : call.name === 'generate_video' ? '🎬' : '🔧';
-    label.textContent = `${toolIcon} ${call.name}${preview ? ` ${preview.length > 70 ? `${preview.slice(0, 70)}…` : preview}` : ''}`;
+    if (isTodo) {
+      const parsed = parseTodoResult(call.result);
+      label.textContent = parsed ? todoSummaryText(parsed) : '📋 任务清单';
+    } else {
+      label.textContent = `${toolIcon} ${call.name}${preview ? ` ${preview.length > 70 ? `${preview.slice(0, 70)}…` : preview}` : ''}`;
+    }
     const detail = document.createElement('div');
     detail.className = 'tool-detail';
     const opensWithMedia = isMediaGeneration && call.result !== undefined && containsMedia(call.result);
-    details.open = opensWithMedia;
+    details.open = opensWithMedia || (isTodo && call.result !== undefined);
     details.addEventListener('toggle', () => {
       if (redacted) return;
       if (details.open) renderToolDetail(detail, call.args, call.result, call.name);
     });
-    if (opensWithMedia) renderToolDetail(detail, call.args, call.result, call.name);
+    if (details.open) renderToolDetail(detail, call.args, call.result, call.name);
     summary.append(dot, label);
     details.append(summary, detail);
     list.append(details);
@@ -2192,6 +2272,10 @@ function renderTools(container, calls = []) {
 function renderToolDetail(detail, args, result, toolName = '') {
   if (detail.dataset.rendered === 'true') return;
   detail.dataset.rendered = 'true';
+  if (TODO_TOOLS.has(toolName)) {
+    const parsed = parseTodoResult(result);
+    if (parsed) { detail.replaceChildren(renderTodoList(parsed)); return; }
+  }
   const argsBlock = document.createElement('pre');
   argsBlock.className = 'tool-args';
   argsBlock.textContent = JSON.stringify(args || {}, null, 2);
@@ -3302,6 +3386,12 @@ async function submit(message, files = [], skills = []) {
             if (MEDIA_GENERATION_TOOLS.has(target.call.name) && containsMedia(item.data.result)) {
               target.details.open = true;
             }
+            if (TODO_TOOLS.has(target.call.name)) {
+              target.details.open = true;
+              const parsed = parseTodoResult(item.data.result);
+              const summaryLabel = target.details.querySelector('summary > span');
+              if (summaryLabel) summaryLabel.textContent = parsed ? todoSummaryText(parsed) : '📋 任务清单';
+            }
             if (target.details.open) renderToolDetail(detail, target.call.args, item.data.result, target.call.name);
           }
         } else if (item.event === 'confirm') {
@@ -3322,6 +3412,9 @@ async function submit(message, files = [], skills = []) {
             contextWindow: item.data.contextWindow || state.contextWindow,
             model: item.data.model || state.currentModel,
             compressed: item.data.compressed === true,
+            cumulativePromptTokens: item.data.cumulativePromptTokens || 0,
+            cumulativeCompletionTokens: item.data.cumulativeCompletionTokens || 0,
+            cumulativeTotalTokens: item.data.cumulativeTotalTokens || 0,
           };
           state.contextWindow = state.usage.contextWindow;
           state.current.usage = state.usage;

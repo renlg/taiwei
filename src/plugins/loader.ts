@@ -2,7 +2,8 @@ import { access, readFile, readdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import type { ToolRegistry } from '../tools/registry.js';
+import { Worker } from 'node:worker_threads';
+import type { ToolContext, ToolRegistry } from '../tools/registry.js';
 import type { Skill } from '../skills/loader.js';
 import { parseSkill } from '../skills/loader.js';
 import { ensureTaiweiHome } from '../util/paths.js';
@@ -12,7 +13,8 @@ import type { PolicyConfig } from '../security/policy.js';
 import type { PluginManifest, PluginModule, PluginRuntimeApi, PluginToolHandler } from './api.js';
 
 export interface PluginStatus { name: string; version?: string; enabled: boolean; tools: number; skills: number; crashed?: boolean; error?: string; }
-interface LoadedPlugin { manifest: PluginManifest; module: PluginModule; pending: Set<Promise<unknown>>; toolNames: string[]; }
+interface LoadedPlugin { manifest: PluginManifest; module?: PluginModule; worker?: Worker; pending: Set<Promise<unknown>>; toolNames: string[]; policyConfig: PolicyConfig; crashed?: boolean; crashError?: string; }
+const EXECUTE_TIMEOUT_MS = 30_000;
 const NAME = /^[a-z0-9-]{1,64}$/;
 const requirePlugin = createRequire(import.meta.url);
 function safeName(value: string): string { return value.replace(/[^A-Za-z0-9_-]/g, '_'); }
@@ -50,8 +52,19 @@ export class PluginLoader {
         const main = resolve(directory, manifest.main);
         if (relative(directory, main).startsWith('..') || isAbsolute(relative(directory, main))) throw new Error('manifest main escapes plugin directory');
         await access(main);
+        const useWorker = !manifest.capabilities.includes('main-process') && manifest.version !== '0.0.0-legacy';
+        if (useWorker) {
+          const loaded = await this.spawnWorker(main, manifest, directory, setting?.config ?? {}, config.policy);
+          this.loaded.set(manifest.name, loaded);
+          this.statuses.push({
+            name: manifest.name, version: manifest.version, enabled: true, tools: loaded.toolNames.length,
+            skills: this.injectedSkills.filter((skill) => skill.path.startsWith(directory)).length,
+            ...(loaded.crashed ? { crashed: true, error: loaded.crashError } : {}),
+          });
+          continue;
+        }
         const module = await this.importModule(main);
-        const loaded: LoadedPlugin = { manifest, module, pending: new Set(), toolNames: [] };
+        const loaded: LoadedPlugin = { manifest, module, pending: new Set(), toolNames: [], policyConfig: config.policy };
         this.loaded.set(manifest.name, loaded);
         const runtime = this.runtime(loaded, directory, setting?.config ?? {}, config.policy);
         for (const skillPath of manifest.skills ?? []) await runtime.registerSkill(skillPath);
@@ -107,6 +120,125 @@ export class PluginLoader {
     return loaded.default ?? loaded;
   }
 
+  private async spawnWorker(file: string, manifest: PluginManifest, directory: string, pluginConfig: Record<string, unknown>, policyConfig: PolicyConfig): Promise<LoadedPlugin> {
+    const workerUrl = new URL('./worker-script.js', import.meta.url);
+    const worker = new Worker(workerUrl);
+    const loaded: LoadedPlugin = { manifest, worker, pending: new Set(), toolNames: [], policyConfig };
+    const prefix = `plugin_${safeName(manifest.name)}_`;
+    type WorkerLoad = { tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>; skillPaths: string[]; skills: Array<Omit<Skill, 'path'>> };
+    let workerLoad: WorkerLoad;
+    try {
+      workerLoad = await new Promise<WorkerLoad>((resolveLoad, rejectLoad) => {
+        const cleanup = () => { clearTimeout(timer); worker.removeListener('message', onMessage); worker.removeListener('error', onError); worker.removeListener('exit', onExit); };
+        const fail = (error: Error) => { cleanup(); rejectLoad(error); };
+        const onMessage = (message: { type: string; tools?: WorkerLoad['tools']; skillPaths?: string[]; skills?: WorkerLoad['skills']; error?: string }) => {
+          if (message.type === 'loaded') { cleanup(); resolveLoad({ tools: message.tools ?? [], skillPaths: message.skillPaths ?? [], skills: message.skills ?? [] }); }
+          else if (message.type === 'error') fail(new Error(message.error ?? 'worker load failed'));
+        };
+        const onError = (error: Error) => fail(error);
+        const onExit = (code: number) => fail(new Error(`Plugin "${manifest.name}" worker exited during load (${code})`));
+        const timer = setTimeout(() => fail(new Error(`Plugin "${manifest.name}" worker load timed out`)), EXECUTE_TIMEOUT_MS);
+        worker.on('message', onMessage); worker.once('error', onError); worker.once('exit', onExit);
+        worker.postMessage({ type: 'load', file, config: pluginConfig, policyConfig, cwd: process.cwd(), skillPaths: manifest.skills ?? [] });
+      });
+    } catch (error) {
+      await worker.terminate().catch(() => {});
+      throw error;
+    }
+    try {
+      for (const skillPath of workerLoad.skillPaths) {
+        const full = resolve(directory, skillPath);
+        if (relative(directory, full).startsWith('..') || isAbsolute(relative(directory, full))) throw new Error(`skill path escapes plugin directory: ${skillPath}`);
+        this.injectedSkills.push(parseSkill(await readFile(full, 'utf8'), full));
+      }
+      for (const skill of workerLoad.skills) this.injectedSkills.push({ ...skill, path: file });
+      // Forward worker log messages.
+      worker.on('message', (message: { type: string; level?: string; message?: string }) => {
+        if (message.type === 'log' && message.level && message.message) {
+          const level = (['debug', 'info', 'warn', 'error'] as const).includes(message.level as 'debug') ? message.level as 'debug' | 'info' | 'warn' | 'error' : 'info';
+          console[level](`[taiwei:plugin:${manifest.name}] ${message.message}`);
+        }
+      });
+      worker.on('error', (error) => this.markWorkerCrashed(loaded, error.message));
+      worker.on('exit', (code) => this.markWorkerCrashed(loaded, `worker exited (${code})`));
+      for (const tool of workerLoad.tools) {
+        const name = `${prefix}${safeName(tool.name)}`;
+        loaded.toolNames.push(name);
+        this.registry.register({
+          name,
+          description: tool.description,
+          parameters: tool.parameters,
+          execute: (args, context) => this.invokeWorker(loaded, name, tool.name, args, context),
+        });
+      }
+      return loaded;
+    } catch (error) {
+      await worker.terminate().catch(() => {});
+      throw error;
+    }
+  }
+
+  private invokeWorker(loaded: LoadedPlugin, registeredTool: string, tool: string, args: Record<string, unknown>, context: ToolContext): Promise<unknown> {
+    const status = this.statuses.find((item) => item.name === loaded.manifest.name);
+    if (loaded.crashed || status?.crashed) return Promise.resolve({ error: `Plugin "${loaded.manifest.name}" worker crashed and is unavailable` });
+    const worker = loaded.worker;
+    if (!worker) return Promise.resolve({ error: `Plugin "${loaded.manifest.name}" worker not available` });
+    const policy = (context.policy ?? new PolicyEngine(loaded.policyConfig)).decide({
+      role: context.role ?? 'admin', agentMode: context.agentProfile?.mode ?? 'build', sessionId: context.sessionId ?? 'local',
+      tool: registeredTool, args, cwd: context.cwd, workspaceRoot: context.workspaceRoot ?? context.cwd, identity: context.identity ?? context.role ?? 'admin',
+    });
+    if (policy.effect === 'deny') return Promise.resolve({ error: `Tool "${registeredTool}" denied by policy`, policy: policy.rule });
+    if (context.signal?.aborted) return Promise.resolve({ error: `Plugin "${loaded.manifest.name}" execution cancelled` });
+    const pending = new Promise<unknown>((resolveExec) => {
+      const id = Date.now() + Math.random();
+      const cleanup = () => {
+        clearTimeout(timer); worker.removeListener('message', onMessage); worker.removeListener('error', onError);
+        worker.removeListener('exit', onExit); context.signal?.removeEventListener('abort', onAbort);
+      };
+      const settle = (value: unknown) => { cleanup(); resolveExec(value); };
+      const timer = setTimeout(() => {
+        cleanup(); worker.postMessage({ type: 'cancel', id }); void worker.terminate();
+        this.markWorkerCrashed(loaded, 'worker execution timed out');
+        resolveExec({ error: `Plugin "${loaded.manifest.name}" timed out after ${EXECUTE_TIMEOUT_MS}ms` });
+      }, EXECUTE_TIMEOUT_MS);
+      const onMessage = (message: { type: string; id?: number; ok?: boolean; result?: unknown; error?: string }) => {
+        if (message.type === 'result' && message.id === id) {
+          if (!message.ok && status) { status.crashed = true; status.error = message.error ?? 'worker execution failed'; }
+          settle(message.ok ? message.result : { error: message.error ?? 'worker execution failed' });
+        }
+      };
+      const onError = (error: Error) => {
+        this.markWorkerCrashed(loaded, error.message);
+        settle({ error: `Plugin "${loaded.manifest.name}" worker failed: ${error.message}` });
+      };
+      const onExit = (code: number) => {
+        this.markWorkerCrashed(loaded, `worker exited (${code})`);
+        settle({ error: `Plugin "${loaded.manifest.name}" worker exited (${code})` });
+      };
+      const onAbort = () => { worker.postMessage({ type: 'cancel', id }); settle({ error: `Plugin "${loaded.manifest.name}" execution cancelled` }); };
+      worker.on('message', onMessage);
+      worker.once('error', onError); worker.once('exit', onExit); context.signal?.addEventListener('abort', onAbort, { once: true });
+      const serializableContext = {
+        cwd: context.cwd, sessionId: context.sessionId, role: context.role, identity: context.identity, guestId: context.guestId,
+        workspaceRoot: context.workspaceRoot, workspaceOnly: context.workspaceOnly, runId: context.runId,
+        delegationDepth: context.delegationDepth, tenantIdentity: context.tenantIdentity, toolConfig: context.toolConfig,
+        agentProfile: context.agentProfile ? structuredClone(context.agentProfile) : undefined,
+        grantedModels: context.grantedModels ? [...context.grantedModels] : undefined,
+        lsp: context.lsp ? structuredClone(context.lsp) : undefined,
+      };
+      worker.postMessage({ type: 'execute', id, tool, args, context: serializableContext });
+    });
+    loaded.pending.add(pending);
+    return pending.finally(() => loaded.pending.delete(pending));
+  }
+
+  private markWorkerCrashed(loaded: LoadedPlugin, error: string): void {
+    loaded.crashed = true;
+    loaded.crashError = error;
+    const status = this.statuses.find((item) => item.name === loaded.manifest.name);
+    if (status) { status.crashed = true; status.error = error; }
+  }
+
   private runtime(loaded: LoadedPlugin, directory: string, pluginConfig: Record<string, unknown>, policyConfig: PolicyConfig): PluginRuntimeApi {
     const prefix = `plugin_${safeName(loaded.manifest.name)}_`;
     return {
@@ -140,7 +272,16 @@ export class PluginLoader {
   private async dispose(name: string): Promise<void> {
     const loaded = this.loaded.get(name); if (!loaded) return;
     await Promise.allSettled([...loaded.pending]);
-    await loaded.module.dispose?.();
+    if (loaded.worker) {
+      loaded.worker.postMessage({ type: 'dispose' });
+      await new Promise<void>((resolveDispose) => {
+        const finish = () => { clearTimeout(timer); void loaded.worker?.terminate(); resolveDispose(); };
+        const timer = setTimeout(finish, 3000);
+        loaded.worker?.once('message', (message: { type: string }) => { if (message.type === 'disposed') finish(); });
+        loaded.worker?.once('exit', finish);
+      });
+    }
+    await loaded.module?.dispose?.();
     for (const tool of loaded.toolNames) this.registry.unregister(tool);
     this.loaded.delete(name);
   }

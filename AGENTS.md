@@ -142,9 +142,18 @@ Add password login to the web gateway (it currently binds 0.0.0.0 with no auth â
 - Security and execution events append to `~/.taiwei/audit.jsonl`; argument keys matching `key|token|secret|password|apiKey` are recursively redacted. Cron audit events reference `cron-runs.jsonl`.
 - `GET /api/audit?limit=&offset=` and the settings audit viewer are administrator-only.
 
-## Plugin API v1 isolation note
+## Plugin API v1 worker isolation
 
-- Plugin manifests, lifecycle disposal, policy checks, configuration, crash guards, and enable/disable APIs are implemented. Plugins currently execute in the main process: thrown or rejected handlers are contained and mark the plugin crashed, but native crashes and infinite synchronous loops are not worker-isolated yet.
+- Plugin manifests, lifecycle disposal, policy checks, configuration, crash guards, and enable/disable APIs are implemented. Plugins with `capabilities: ["worker"]` (the default for manifests with `version != "0.0.0-legacy"`) run in a dedicated `worker_threads` worker. Tool execution is proxied via IPC with a 30-second timeout; native crashes and infinite loops cannot kill the main process. Plugins that need `registerSkill` or other main-process hooks must declare `capabilities: ["main-process"]` to opt out of isolation.
+
+## Structured editing, todo, and LSP tools
+
+- **`edit_file`** now falls back to whitespace-tolerant fuzzy matching when an exact match fails, with indent-step-aware reindentation.
+- **`apply_patch`** applies an ordered list of `{oldString, newString, replaceAll?}` edits atomically (all-or-nothing). Plan mode denies it.
+- **`todo_write`** and **`todo_read`** provide a visible per-session task checklist with progress tracking. The gateway renders it inline with a progress bar.
+- **`go_to_definition`**, **`find_references`**, and **`document_symbols`** use LSP (Language Server Protocol) for read-only semantic code navigation. Configured via `lsp.servers` in `config.json` with defaults for TypeScript, Python, Go, Rust, and C/C++. Admin-only; guests are blocked, while Plan and Research may use these navigation-only tools. Mutating `lsp_*` tools are blocked in Plan mode.
+- Config supports `${ENV_VAR}` references in connection and secret fields (API keys, passwords, provider/base URLs, OSS, and Gitea), resolved only in memory at load time; `$${ENV_VAR}` escapes interpolation. Prompts and hook commands remain literal. New env overrides: `TAIWEI_OSS_SECRET`, `GITEA_ADMIN_TOKEN`, `TAIWEI_PROVIDER_<ID>_API_KEY`.
+- Gateway session usage tracks cumulative token totals (`cumulativePromptTokens`, `cumulativeCompletionTokens`, `cumulativeTotalTokens`) alongside per-turn numbers.
 
 ## Core Requirements
 

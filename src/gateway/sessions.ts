@@ -34,6 +34,9 @@ export interface SessionUsage {
   contextWindow: number;
   model: string;
   compressed?: boolean;
+  cumulativePromptTokens?: number;
+  cumulativeCompletionTokens?: number;
+  cumulativeTotalTokens?: number;
 }
 
 export interface SessionIdentity {

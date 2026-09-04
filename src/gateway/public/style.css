@@ -464,6 +464,22 @@ a.message-attachment-file:hover { background: rgba(255,255,255,.25); text-decora
 .tool-result { color: var(--text); font-family: inherit; white-space: normal; }
 .tool-result p { margin: 6px 0 0; }
 .tool-result img, .tool-result video { display: block; max-width: 100%; height: auto; margin-top: 7px; }
+.tool-entry-todo { border-color: color-mix(in srgb, var(--success) 32%, var(--border)); border-left: 3px solid var(--success); background: color-mix(in srgb, var(--surface) 62%, transparent); }
+.tool-entry-todo summary { color: var(--text); font-weight: 600; }
+.todo-panel { display: grid; gap: 8px; }
+.todo-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.todo-title { color: var(--text); font: 600 12px/1.4 ui-sans-serif, system-ui, sans-serif; }
+.todo-count { color: var(--muted); font: 11px/1.4 ui-sans-serif, system-ui, sans-serif; }
+.todo-progress { height: 5px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--border-strong) 70%, transparent); }
+.todo-progress > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--success), color-mix(in srgb, var(--success) 55%, var(--accent))); transition: width .25s ease; }
+.todo-items { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.todo-item { display: flex; align-items: flex-start; gap: 7px; padding: 3px 0; font: 12px/1.5 ui-sans-serif, system-ui, sans-serif; }
+.todo-check { flex: none; font-size: 12px; line-height: 1.5; }
+.todo-text { color: var(--text); }
+.todo-complete .todo-text { color: var(--muted); text-decoration: line-through; }
+.todo-in_progress .todo-text { color: var(--text); font-weight: 600; }
+.todo-pending .todo-text { color: var(--muted); }
+.todo-cancelled .todo-text { color: var(--faint); text-decoration: line-through; }
 .media-download { position: relative; display: inline-block; max-width: 100%; vertical-align: top; }
 .media-download-button { position: absolute; z-index: 2; top: 8px; right: 8px; display: inline-flex; align-items: center; min-height: 28px; padding: 4px 9px; border: 1px solid color-mix(in srgb, var(--border-strong) 65%, transparent); border-radius: 7px; color: var(--text); background: color-mix(in srgb, var(--surface) 78%, transparent); box-shadow: 0 2px 8px rgba(0,0,0,.14); backdrop-filter: blur(6px); text-decoration: none; font: 600 11px/1 ui-sans-serif, system-ui, sans-serif; transition: background .15s, box-shadow .15s; }
 .media-download-button:hover, .media-download-button:focus-visible { color: var(--text); background: color-mix(in srgb, var(--surface) 94%, var(--surface-hover)); box-shadow: 0 3px 10px rgba(0,0,0,.22); text-decoration: none; }

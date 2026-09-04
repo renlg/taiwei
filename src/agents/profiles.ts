@@ -13,13 +13,13 @@ export const BUILTIN_AGENTS: readonly AgentProfile[] = [
   {
     id: 'plan', mode: 'plan',
     prompt: 'Plan mode: investigate, reason, and propose a precise plan. You are read-only and must not modify files or execute shell commands.',
-    toolPolicy: { deny: ['bash', 'write_file', 'edit_file', 'apply_patch', 'memory_append', 'memory_extend', 'plugin_*', 'browser_*', 'mcp_*'] },
+    toolPolicy: { deny: ['bash', 'write_file', 'edit_file', 'apply_patch', 'memory_append', 'memory_extend', 'plugin_*', 'browser_*', 'mcp_*', 'lsp_*'] },
   },
   { id: 'build', mode: 'build', prompt: 'Build mode: implement and verify requested changes using the available tools.' },
   {
     id: 'research', mode: 'plan',
-    prompt: 'Research mode: you may only search code, read files, and search the public web to investigate and report findings. You cannot modify files, run shell commands, manage memory, browse interactively, or call MCP/plugin tools.',
-    toolPolicy: { allow: ['search_files', 'read_file', 'web_search'] },
+    prompt: 'Research mode: you may only search code, read files, navigate symbols, and search the public web to investigate and report findings. You cannot modify files, run shell commands, manage memory, browse interactively, or call MCP/plugin tools.',
+    toolPolicy: { allow: ['search_files', 'read_file', 'web_search', 'document_symbols', 'go_to_definition', 'find_references', 'todo_write', 'todo_read'] },
   },
 ];
 

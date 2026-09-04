@@ -292,7 +292,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=81/);
+    assert.match(pageBody, /logo\.png\?v=82/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -378,7 +378,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.match(body, /event: tool\ndata: \{"name":"read","args":\{"path":"README.md"\}\}/);
     assert.match(body, /event: tool_result/);
     assert.match(body, /event: compressing\ndata: \{\}/);
-    assert.match(body, /event: usage\ndata: \{"promptTokens":10,"completionTokens":2,"totalTokens":12,"contextWindow":1000,"model":"free","compressed":true\}/);
+    assert.match(body, /event: usage\ndata: \{"promptTokens":10,"completionTokens":2,"totalTokens":12,"contextWindow":1000,"model":"free","compressed":true,"cumulativePromptTokens":10,"cumulativeCompletionTokens":2,"cumulativeTotalTokens":12\}/);
     assert.match(body, new RegExp(`event: done\\ndata: \\{"text":"Hello world","sessionId":"${created.id}"\\}`));
 
     const detail = await fetch(`${baseUrl}/api/sessions/${created.id}`);
@@ -393,7 +393,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     ]);
     assert.match(mock.messages[0], /\[附件: notes\.txt\]\nlocal attachment contents/);
     assert.equal(persisted.messages[1].toolCalls?.length, 1);
-    assert.deepEqual(persisted.usage, { promptTokens: 10, completionTokens: 2, totalTokens: 12, contextWindow: 1_000, model: 'free', compressed: true });
+    assert.deepEqual(persisted.usage, { promptTokens: 10, completionTokens: 2, totalTokens: 12, contextWindow: 1_000, model: 'free', compressed: true, cumulativePromptTokens: 10, cumulativeCompletionTokens: 2, cumulativeTotalTokens: 12 });
     assert.equal(indexedSessions[0]?.id, created.id);
     assert.equal(indexedSessions[0]?.source, 'gateway');
     assert.equal(indexedSessions[0]?.model, 'free');
@@ -407,7 +407,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: 'again', sessionId: created.id }),
     });
     assert.equal(secondChat.status, 200);
-    assert.match(await secondChat.text(), /event: usage\ndata: \{"promptTokens":10,"completionTokens":2,"totalTokens":12,"contextWindow":1000,"model":"free","compressed":true\}/);
+    assert.match(await secondChat.text(), /event: usage\ndata: \{"promptTokens":10,"completionTokens":2,"totalTokens":12,"contextWindow":1000,"model":"free","compressed":true,"cumulativePromptTokens":\d+,"cumulativeCompletionTokens":\d+,"cumulativeTotalTokens":\d+\}/);
     assert.match(typeof mock.histories[1][0].content === 'string' ? mock.histories[1][0].content : JSON.stringify(mock.histories[1][0].content), /\[附件: notes\.txt\]\nlocal attachment contents/);
     assert.deepEqual(mock.histories[1][1], { role: 'assistant', content: 'Hello world' });
 

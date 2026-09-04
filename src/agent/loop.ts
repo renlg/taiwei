@@ -73,6 +73,9 @@ interface ModelErrorFeedback {
   retryAfterMs?: number;
 }
 
+/** Admin-only tools hidden from guest tool listings (they are also denied at dispatch). */
+const GUEST_HIDDEN_TOOLS = new Set(['get_diagnostics', 'go_to_definition', 'find_references', 'document_symbols']);
+
 function isAbortError(error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true || (error instanceof Error && error.name === 'AbortError');
 }
@@ -264,7 +267,7 @@ export async function runAgentTurn(
       systemPrompt = limitTextTokens(`${systemPrompt}\n\n${feedback}`, config.budget.systemMax, config.tokenEstimateCharsPerToken);
     }
     const availableTools = registry.list({ profile: options.agentProfile })
-      .filter((tool) => options.role !== 'guest' || tool.name !== 'get_diagnostics')
+      .filter((tool) => options.role !== 'guest' || !GUEST_HIDDEN_TOOLS.has(tool.name))
       .map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters }));
     const tools = limitToolsTokens(filterToolsForModel(availableTools, resolved.model), config.budget.toolsMax, config.tokenEstimateCharsPerToken);
     const contextWindow = resolved.model.capabilities.contextWindow || resolveContextWindow(config, model);

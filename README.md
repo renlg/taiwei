@@ -95,7 +95,9 @@ Edit `~/.taiwei/config.json`, or set environment variables:
 }
 ```
 
-`TAIWEI_API_KEY`, `TAIWEI_BASE_URL`, `TAIWEI_MODEL`, and `TAIWEI_AUTH_PASSWORD` override the corresponding file values. `OAUTH_TAIWEI_SECRET` overrides `oauth.clientSecret`, and `OAUTH_TAIWEI_REDIRECT` overrides `oauth.redirectUri`. `TAIWEI_HOME` can override the state directory (useful for isolated environments).
+`TAIWEI_API_KEY`, `TAIWEI_BASE_URL`, `TAIWEI_MODEL`, and `TAIWEI_AUTH_PASSWORD` override the corresponding file values. `OAUTH_TAIWEI_SECRET` overrides `oauth.clientSecret`, and `OAUTH_TAIWEI_REDIRECT` overrides `oauth.redirectUri`. `TAIWEI_OSS_SECRET` overrides `oss.accessKeySecret`, `GITEA_ADMIN_TOKEN` overrides `gitea.adminToken`, and `TAIWEI_PROVIDER_<ID>_API_KEY` overrides per-provider API keys. `TAIWEI_HOME` can override the state directory (useful for isolated environments).
+
+Connection and secret fields in `config.json` support `${ENV_VAR}` references that are resolved in memory at load time. For example, `"apiKey": "${MY_API_KEY}"` or `"password": "${AUTH_PASSWORD}"`. Their placeholders remain on disk across saves; prompts and hook commands are intentionally not interpolated. Use `$${VAR}` when a supported field must contain the literal text `${VAR}`.
 
 `providers` is the provider/model capability catalog. An empty array preserves the legacy behavior by synthesizing a `default` OpenAI-compatible provider from `baseUrl`, `apiKey`, `model`, and `models`. The historical `apiBaseUrl` spelling is also accepted as a legacy alias. Explicit providers use `{id,name,type,baseUrl,apiKey?,defaultModel?,models?}`; types are `openai-compatible` and `anthropic` (`responses` is reserved but not implemented). Each model declares `capabilities: {tools,vision,reasoning,streaming,contextWindow}` and optional per-million-token costs. Models without tool support receive no tool definitions.
 
@@ -197,7 +199,29 @@ The agent can start long-running commands (deploys, batch jobs, data syncs) as d
 
 Multiple tasks run concurrently. The task registry (`~/.taiwei/tasks/registry.json`) persists across turns and restarts; finished tasks retain their full logs. All `task_*` tools are admin-only; guests are denied the entire family, and plan mode blocks `task_start` and `task_kill`.
 
-Plan, Build, and Research are built-in session profiles. Plan hides and rejects shell, file-write, browser, and MCP tools; Build retains the normal tool set; Research allows only `search_files`, `read_file`, and `web_search` (read-only investigation). `delegate_task` starts an isolated child conversation, returns only its final result, inherits the parent’s restrictions, propagates cancellation, and defaults to three concurrent children with depth two. Delegation defaults to the `research` agent (least-privilege read-only); administrators may enable `plan` or `build` via the `delegate_task` tool setting `allowedAgents`.
+Plan, Build, and Research are built-in session profiles. Plan hides and rejects shell, file-write, browser, and MCP tools; Build retains the normal tool set; Research allows only `search_files`, `read_file`, `web_search`, and LSP navigation tools (read-only investigation). `delegate_task` starts an isolated child conversation, returns only its final result, inherits the parent's restrictions, propagates cancellation, and defaults to three concurrent children with depth two. Delegation defaults to the `research` agent (least-privilege read-only); administrators may enable `plan` or `build` via the `delegate_task` tool setting `allowedAgents`.
+
+### Structured editing tools
+
+- **`edit_file(filePath, oldString, newString, replaceAll?)`** — exact string replacement in a single file. When an exact match fails, the tool falls back to a whitespace-tolerant fuzzy match that ignores leading-indentation drift and trailing spaces, then re-indents `newString` to the file's actual indentation (including indent-step scaling).
+- **`apply_patch(filePath, edits)`** — atomic multi-edit patch: applies an ordered list of `{oldString, newString, replaceAll?}` replacements to the same file. All-or-nothing: if any edit fails the file is left untouched and the error reports the failing edit index. Later edits see the results of earlier ones.
+
+### Todo / task-progress tools
+
+- **`todo_write(todos, merge?)`** — create or update a visible task checklist. Each item has `{id, content, status}` where status is `pending`, `in_progress`, `complete`, or `cancelled`. `merge: true` updates existing items by id; otherwise the entire list is replaced. The gateway renders the checklist inline with a progress bar.
+- **`todo_read()`** — return the current checklist and summary counts.
+
+The system prompt encourages the agent to maintain a visible checklist for any non-trivial task, keeping exactly one item `in_progress` at a time.
+
+### LSP semantic navigation
+
+Three tools use Language Server Protocol (LSP) to navigate code semantically — much more accurate than text search for large repositories:
+
+- **`go_to_definition(filePath, line?, character?, symbol?)`** — find where a symbol is defined.
+- **`find_references(filePath, line?, character?, symbol?)`** — find all references to a symbol across the workspace.
+- **`document_symbols(filePath)`** — list all symbols (classes, functions, methods, variables) with kinds and ranges.
+
+Configure language servers in `~/.taiwei/config.json` under `lsp.servers`. Defaults include `typescript-language-server`, `pyright-langserver`, `gopls`, `rust-analyzer`, and `clangd`. The agent resolves binaries from the workspace's `node_modules/.bin` or `PATH`. LSP tools are admin-only; guests cannot use them. The three navigation tools are read-only and remain available in Plan and Research modes; any future mutating `lsp_*` tool is denied in Plan mode by default.
 
 ### 自定义 Subagent
 
@@ -524,6 +548,8 @@ Plugin API v1 uses `~/.taiwei/plugins/<directory>/manifest.json` (or a `package.
 ```
 
 The main ESM/CommonJS module receives `{log, registerTool, registerSkill, config, policyCheck}` in `init(api)` and may export `dispose()`. Per-plugin settings live at `plugins.<name>.{enabled,config}` and can be changed with `GET /api/plugins` and `POST /api/plugins/:name`. Pending tool work is awaited before disposal; thrown handlers mark the plugin crashed and subsequent calls return an error. Legacy `plugin.js` exports remain supported.
+
+**Worker isolation** (v1.2): Plugins without `"main-process"` in `capabilities` run in a dedicated `worker_threads` worker. Tool execution is proxied via IPC; native crashes and infinite loops cannot kill the main process. Workers time out after 30 seconds per call. `registerSkill` is not available inside workers — plugins that need skill injection must declare `"capabilities": ["main-process"]`. Legacy plugins (no manifest) continue to run in the main process for backward compatibility.
 
 ```js
 export default {
