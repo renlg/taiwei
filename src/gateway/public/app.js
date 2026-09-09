@@ -2255,7 +2255,7 @@ function renderTools(container, calls = []) {
     const detail = document.createElement('div');
     detail.className = 'tool-detail';
     const opensWithMedia = isMediaGeneration && call.result !== undefined && containsMedia(call.result);
-    details.open = opensWithMedia || (isTodo && call.result !== undefined);
+    details.open = opensWithMedia;
     details.addEventListener('toggle', () => {
       if (redacted) return;
       if (details.open) renderToolDetail(detail, call.args, call.result, call.name);
@@ -3387,7 +3387,6 @@ async function submit(message, files = [], skills = []) {
               target.details.open = true;
             }
             if (TODO_TOOLS.has(target.call.name)) {
-              target.details.open = true;
               const parsed = parseTodoResult(item.data.result);
               const summaryLabel = target.details.querySelector('summary > span');
               if (summaryLabel) summaryLabel.textContent = parsed ? todoSummaryText(parsed) : '📋 任务清单';
