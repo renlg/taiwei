@@ -65,7 +65,7 @@ export function getPaths(): TaiweiPaths {
 }
 
 /** Resolve an existing path, or the nearest existing parent for a new path, without permitting symlink escapes. */
-export async function resolveInWorkspace(path: string, workspaceRoot: string): Promise<string> {
+export async function resolveInWorkspace(path: string, workspaceRoot: string, additionalRoot?: string): Promise<string> {
   const root = await realpath(resolve(workspaceRoot));
   const candidate = resolve(workspaceRoot, path);
   let existing = candidate;
@@ -82,7 +82,17 @@ export async function resolveInWorkspace(path: string, workspaceRoot: string): P
   }
   const resolved = resolve(existing, ...suffix);
   const child = relative(root, resolved);
-  if (child.startsWith('..') || isAbsolute(child)) throw new Error(`Path escapes workspace: ${path}`);
+  if (child.startsWith('..') || isAbsolute(child)) {
+    // Also allow the path when it lives under an explicitly granted additional root
+    // (e.g. a guest's own skill directory), so guest tools can read/execute their
+    // installed skill scripts without widening the main workspace jail.
+    if (additionalRoot) {
+      const extraRoot = await realpath(resolve(additionalRoot));
+      const extraChild = relative(extraRoot, resolved);
+      if (!extraChild.startsWith('..') && !isAbsolute(extraChild)) return resolved;
+    }
+    throw new Error(`Path escapes workspace: ${path}`);
+  }
   return resolved;
 }
 

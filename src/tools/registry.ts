@@ -6,6 +6,7 @@ import type { AgentProfile } from '../agents/profiles.js';
 import { toolDenied } from '../agents/profiles.js';
 import { PolicyEngine, toolPath } from '../security/policy.js';
 import { resolveInWorkspace } from '../util/paths.js';
+import { dirname, resolve } from 'node:path';
 import { appendAudit } from '../observability/audit.js';
 import { emitEvent } from '../observability/events.js';
 import type { LspServerConfig } from '../lsp/client.js';
@@ -137,7 +138,10 @@ export class ToolRegistry {
       }
     }
     if (candidatePath && workspaceOnly) {
-      try { await resolveInWorkspace(candidatePath, workspaceRoot); }
+      const guestSkillDir = role === 'guest' && context.tenantIdentity?.osUsername
+        ? resolve(workspaceRoot.endsWith(`/${context.tenantIdentity.osUsername}/projects`) ? dirname(workspaceRoot) : `/home/${context.tenantIdentity.osUsername}`, '.taiwei', 'skills')
+        : undefined;
+      try { await resolveInWorkspace(candidatePath, workspaceRoot, guestSkillDir); }
       catch (error) {
         const output = JSON.stringify({ error: error instanceof Error ? error.message : String(error), policy: 'workspace-boundary' });
         await appendAudit({ type: 'policy.decision', runId, sessionId, tool: name, outcome: 'deny', role, agentMode, rule: 'workspace-boundary', args }).catch(() => {});
