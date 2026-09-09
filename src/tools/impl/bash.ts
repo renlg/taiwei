@@ -166,11 +166,30 @@ const SYSTEM_COMMAND = /\b(?:sudo|su|useradd|userdel|chown|chmod|mount|umount|ip
 const FILESYSTEM_COMMAND = /(?:^|[;&|()\n]\s*)(?:cat|ls|rm|cp|mv|touch|mkdir|rmdir|find|grep|rg|sed|awk|head|tail|tee|readlink|stat|tar|zip|unzip|dd|file|du|df|ln|realpath|cd)\b/i;
 
 function commandWords(command: string): string[] {
-  return command.match(/"(?:\\.|[^"])*"|'[^']*'|[^\s;&|()<>]+/g)?.map((word) => {
+  // Treat substitution delimiters as shell syntax, not path text. The contents
+  // remain in the string and are tokenized normally, so paths used inside a
+  // substitution are still checked below.
+  const scannable = command.replace(/\$\(/g, ' ').replace(/`/g, ' ');
+  return scannable.match(/"(?:\\.|[^"])*"|'[^']*'|[^\s;&|()<>]+/g)?.map((word) => {
     const unquoted = ((word.startsWith('"') && word.endsWith('"')) || (word.startsWith("'") && word.endsWith("'"))) ? word.slice(1, -1) : word;
     const equals = unquoted.indexOf('=');
     return equals >= 0 ? unquoted.slice(equals + 1) : unquoted;
   }).filter(Boolean) ?? [];
+}
+
+function systemCommandBinaries(command: string): Set<string> {
+  const binaries = new Set<string>();
+  const systemBin = String.raw`\/(?:usr\/(?:local\/)?(?:s?bin)|s?bin)\/[^\s;&|()<>]+`;
+  const commandPosition = new RegExp(
+    String.raw`(?:^|[;&|()\n]\s*)(?:(?:nohup|command|exec|env)\s+)*("|')?(${systemBin})\1`,
+    'g',
+  );
+  for (const match of command.matchAll(commandPosition)) binaries.add(match[2]);
+  return binaries;
+}
+
+function isShellVariableReference(word: string): boolean {
+  return /^(?:\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!_-])|\$\{[^}]+\})+$/.test(word);
 }
 
 /**
@@ -205,13 +224,19 @@ export async function constrainGuestBash(command: string, cwd: string, workspace
   }
   const touchesFilesystem = FILESYSTEM_COMMAND.test(command) || /[<>]/.test(command);
   const words = commandWords(command);
+  const commandBinaries = systemCommandBinaries(command);
   const embeddedPaths = command.match(/(?:^|[\s'"=(])((?:~(?:\/|$)|\/)[^\s'";&|()<>]*)/g)?.map((match) => match.trim().replace(/^['"=(]+/, '')) ?? [];
   for (const rawWord of [...words, ...embeddedPaths]) {
     const word = rawWord.replace(/^["']|["',:]$/g, '');
     if (!word || word.startsWith('-')) continue;
+    if (word === '[' || word === ']') continue;
     // /dev/null 及标准空设备是无害的 shell 重定向目标，跳过路径边界检查（guest 读写 /dev/null 无副作用）
     if (/^\/dev\/(?:null|stdin|stdout|stderr|tty|zero|random|urandom)$/.test(word)) continue;
-    if (touchesFilesystem && (word.includes('$') || word.includes('`') || /[*?\[\]]/.test(word))) {
+    // A root-owned system binary in command position is executable code, not a
+    // data path. Arguments and every other absolute path remain constrained.
+    if (commandBinaries.has(word)) continue;
+    if (isShellVariableReference(word)) continue;
+    if (touchesFilesystem && (word.includes('$') || /[*?\[\]]/.test(word))) {
       return { error: `${GUEST_DENIAL}：无法安全解析路径`, command, cwd };
     }
     const explicitlyPathLike = word.startsWith('/') || word.startsWith('~') || word === '..' || word.startsWith('../');
