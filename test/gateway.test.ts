@@ -225,17 +225,12 @@ test('guest browser chat can activate an installed skill but cannot use other ov
       assert.deepEqual(await forbidden.json(), { error: 'Gateway chat overrides require X-API-Key authentication' });
     }
 
-    const uninstalledListing = await (await fetch(`${baseUrl}/api/skills`, {
-      headers: { authorization: `Bearer ${token}` },
-    })).json() as { skills: Array<{ name: string; enabled: boolean; installed: boolean }> };
-    assert.equal(uninstalledListing.skills.some((skill) => skill.name === 'system-only'), false);
-
-    await userSkills.save(guestId, 'system-only', skillSource('system-only', 'SYSTEM_ONLY_BODY'));
     const listing = await (await fetch(`${baseUrl}/api/skills`, {
       headers: { authorization: `Bearer ${token}` },
     })).json() as { skills: Array<{ name: string; enabled: boolean; installed: boolean }> };
-    assert.equal(listing.skills.find((skill) => skill.name === 'system-only')?.installed, true);
-    assert.equal(listing.skills.every((skill) => skill.installed), true);
+    const systemOnly = listing.skills.find((skill) => skill.name === 'system-only');
+    assert.equal(systemOnly?.enabled, false);
+    assert.equal(systemOnly?.installed, false);
   } finally {
     await closeGateway(server);
     if (oldHome === undefined) delete process.env.TAIWEI_HOME; else process.env.TAIWEI_HOME = oldHome;

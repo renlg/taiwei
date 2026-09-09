@@ -1053,9 +1053,7 @@ async function loadSystemSkills() {
     const { skills } = await requestJson('/api/skills');
     if (state.skillTab !== 'system') return;
     if (!skills.length) {
-      renderResourceEmpty(elements.skillList, state.role === 'guest'
-        ? '暂无已安装技能'
-        : '暂无技能, 将 SKILL.md 放入 ~/.taiwei/skills/<name>/ 目录');
+      renderResourceEmpty(elements.skillList, '暂无技能, 将 SKILL.md 放入 ~/.taiwei/skills/<name>/ 目录');
       return;
     }
     const isGuest = state.role === 'guest';
