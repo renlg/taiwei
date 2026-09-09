@@ -22,7 +22,10 @@ export async function handleSkillRoutes(ctx: RouteContext): Promise<boolean> {
     const installed = new Set(installedSkills.map((skill) => skill.name));
     const disabled = skillStoreOwner ? await userSkillStateStore.disabled(skillStoreOwner) : new Set<string>();
     const configDisabled = new Set(config.skillsDisabled ?? []);
-    json(response, 200, { skills: skills.map((skill) => ({
+    const visibleSkills = auth.role === 'guest'
+      ? skills.filter((skill) => installed.has(skill.name))
+      : skills;
+    json(response, 200, { skills: visibleSkills.map((skill) => ({
       name: skill.name,
       description: skill.description,
       enabled: skillStoreOwner
