@@ -104,7 +104,7 @@ export class TaiweiApp {
         this.config = await loadConfig();
         this.skills.setDisabled(this.config.skillsDisabled);
         const turnContext = options.context ?? this.context;
-        await this.refreshContextSkills(turnContext, options.role === 'guest' ? options.guestId ?? 'guest' : 'admin');
+        await this.refreshContextSkills(turnContext, options.role === 'guest' ? options.guestId ?? 'guest' : 'admin', options.role === 'guest' ? 'guest' : 'admin');
         this.registry.configure(resolveToolSettings(this.config));
         const cwd = options.workspaceRoot ? resolve(options.workspaceRoot) : resolveWorkspaceDir(this.config);
         await mkdir(cwd, { recursive: true });
@@ -143,13 +143,13 @@ export class TaiweiApp {
 
   stopSession(sessionId: string): boolean { return this.runtime.stop(sessionId); }
 
-  async refreshContextSkills(context: AgentContext, owner = 'admin'): Promise<void> {
+  async refreshContextSkills(context: AgentContext, owner = 'admin', role: 'admin' | 'guest' = 'admin'): Promise<void> {
     if (this.config.autoLoadSkills === false) {
       context.setAvailableSkills([]);
       context.setUserSkills([]);
       return;
     }
-    try { context.setAvailableSkills(await this.skills.list()); }
+    try { context.setAvailableSkills(role === 'guest' ? [] : await this.skills.list()); }
     catch { context.setAvailableSkills([]); }
     try { context.setUserSkills(await this.userSkills.loadEnabled(owner, await this.userSkillStates.disabled(owner))); }
     catch { context.setUserSkills([]); }
@@ -191,7 +191,7 @@ export class TaiweiApp {
 
   private async runChild(request: DelegateRequest & { childSessionId: string; signal: AbortSignal }): Promise<string> {
     const context = new AgentContext(request.memory, this.skills, request.extendedMemory, request.profile);
-    await this.refreshContextSkills(context, request.role === 'guest' ? guestIdForUsername(request.identity) : 'admin');
+    await this.refreshContextSkills(context, request.role === 'guest' ? guestIdForUsername(request.identity) : 'admin', request.role === 'guest' ? 'guest' : 'admin');
     const config = { ...this.config, ...(request.profile.model ? { model: request.profile.model } : {}) };
     const output = await runAgentTurn(request.task, context, this.registry, config, {
       signal: request.signal, cwd: request.workspaceRoot, retainConversation: false,
