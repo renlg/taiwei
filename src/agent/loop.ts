@@ -8,7 +8,7 @@ import type { HookRunner } from '../hooks/runner.js';
 import { MemoryStore } from '../memory/store.js';
 import type { AgentProfile } from '../agents/profiles.js';
 import { randomUUID } from 'node:crypto';
-import { applyContextBudget, estimateTokens, limitTextTokens, limitToolsTokens } from './budget.js';
+import { contextBudgetView, estimateTokens, limitTextTokens, limitToolsTokens } from './budget.js';
 import { PolicyEngine } from '../security/policy.js';
 import { appendAudit } from '../observability/audit.js';
 import { emitEvent } from '../observability/events.js';
@@ -271,7 +271,8 @@ export async function runAgentTurn(
       .map(({ name, description, parameters }) => toOpenAITool({ name, description, parameters }));
     const tools = limitToolsTokens(filterToolsForModel(availableTools, resolved.model), config.budget.toolsMax, config.tokenEstimateCharsPerToken);
     const contextWindow = resolved.model.capabilities.contextWindow || resolveContextWindow(config, model);
-    let budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
+    let budgetView = contextBudgetView(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
+    let budgetResult = budgetView.result;
     const compressionThreshold = contextWindow * resolveCompressThreshold(config);
     let compressedThisRequest = false;
     if (!compressionAttempted && (budgetResult.needsCompression || budgetResult.estimatedTokens > compressionThreshold)) {
@@ -286,7 +287,8 @@ export async function runAgentTurn(
         try { compressedThisRequest = await compressConversation(conversation, boundary, config, model, options.signal); }
         catch (error) { if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError'); console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`); }
       }
-      budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
+      budgetView = contextBudgetView(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
+      budgetResult = budgetView.result;
     }
     const lastMessage = conversation.at(-1);
     const lastMessagePreview = messageText(lastMessage ?? { role: 'user', content: '' }).slice(0, 500);
@@ -300,7 +302,7 @@ export async function runAgentTurn(
       result = await streamChat({
         baseUrl: resolved.provider.baseUrl, apiKey: resolved.provider.apiKey ?? '', model,
         provider: resolved.provider,
-        messages: [{ role: 'system', content: systemPrompt }, ...conversation],
+        messages: [{ role: 'system', content: systemPrompt }, ...budgetView.messages],
         tools,
         signal: options.signal, timeoutMs: config.requestTimeoutMs,
         fallbackModel: config.fallbackModel,
@@ -368,7 +370,7 @@ export async function runAgentTurn(
             if (options.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
             console.warn(`[taiwei] Conversation compression skipped: ${error instanceof Error ? error.message : String(error)}`);
           }
-          if (compressedThisRequest) budgetResult = applyContextBudget(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken);
+          if (compressedThisRequest) budgetResult = contextBudgetView(conversation, systemPrompt, tools, contextWindow, config.budget, config.tokenEstimateCharsPerToken).result;
         }
     }
     const reportedPromptTokens = compressedThisRequest ? budgetResult.estimatedTokens : promptTokens;

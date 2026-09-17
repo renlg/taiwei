@@ -14,8 +14,6 @@ export interface ModelDef {
   displayName: string;
   capabilities: ModelCapabilities;
   adminOnly?: boolean;
-  costPerMIn?: number;
-  costPerMOut?: number;
 }
 
 export interface ModelSelection { providerId: string; modelId: string; }

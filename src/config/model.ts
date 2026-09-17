@@ -59,8 +59,6 @@ function normalizeManagedModel(value: unknown, providerId: string): ModelDef {
       contextWindow: Math.floor(contextWindow),
     },
     ...(typeof candidate.adminOnly === 'boolean' ? { adminOnly: candidate.adminOnly } : {}),
-    ...(typeof candidate.costPerMIn === 'number' ? { costPerMIn: candidate.costPerMIn } : {}),
-    ...(typeof candidate.costPerMOut === 'number' ? { costPerMOut: candidate.costPerMOut } : {}),
   };
 }
 

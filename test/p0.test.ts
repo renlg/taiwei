@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { SessionRuntime } from '../src/agent/runtime.js';
-import { applyContextBudget } from '../src/agent/budget.js';
+import { applyContextBudget, contextBudgetView } from '../src/agent/budget.js';
 import { PolicyEngine } from '../src/security/policy.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { bashTool, constrainGuestBash, createBashTool } from '../src/tools/impl/bash.js';
@@ -238,8 +238,16 @@ test('context budget prunes tool results and reserves output capacity', () => {
     { role: 'assistant', content: null, tool_calls: [{ id: '1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
     { role: 'tool', tool_call_id: '1', content: 'x'.repeat(800) },
   ];
-  const result = applyContextBudget(messages, 'system', [], 100, { systemMax: 20, historyMax: 90, toolsMax: 20, outputReserve: 40 }, 4);
-  assert.ok(result.prunedChars > 0); assert.match((messages[2] as { content: string }).content, /^\[truncated 800 chars]/);
+  const settings = { systemMax: 20, historyMax: 90, toolsMax: 20, outputReserve: 40 };
+  const originalToolMessage = messages[2];
+  const result = applyContextBudget(messages, 'system', [], 100, settings, 4);
+  const view = contextBudgetView(messages, 'system', [], 100, settings, 4);
+  assert.ok(result.prunedChars > 0);
+  assert.equal((messages[2] as { content: string }).content, 'x'.repeat(800));
+  assert.equal(messages[2], originalToolMessage);
+  assert.match((view.messages[2] as { content: string }).content, /^\[truncated 800 chars]/);
+  assert.notEqual(view.messages[2], originalToolMessage);
+  assert.deepEqual(view.result, result);
   assert.ok(result.estimatedTokens <= 100 - 40 || result.needsCompression);
 });
 

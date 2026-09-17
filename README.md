@@ -4,7 +4,7 @@
 
 ## Install and initialize
 
-Requires Node.js 22 or newer (the tenant and history stores use `node:sqlite`).
+Requires Node.js 22.13 or newer (the tenant and history stores use stable `node:sqlite`).
 
 ```bash
 npm install
