@@ -182,22 +182,31 @@ async function streamChatOnce(request: ChatRequest, model: string): Promise<Chat
 
 export async function openAICompatibleStream(request: ChatRequest): Promise<ChatResult> {
   const retry = request.retry ?? { maxAttempts: 1, baseDelayMs: 1_000, maxDelayMs: 30_000 };
+  let emittedText = false;
+  const trackedRequest: ChatRequest = {
+    ...request,
+    onText: (text) => {
+      if (text.length > 0) emittedText = true;
+      request.onText?.(text);
+    },
+  };
   const runModel = async (model: string) => withProviderRetry(async (attempt) => {
     request.onAttempt?.({ model, attempt, outcome: 'start' });
-    const value = await streamChatOnce(request, model);
+    const value = await streamChatOnce(trackedRequest, model);
     request.onAttempt?.({ model, attempt, outcome: 'success' });
     return value;
   }, {
     ...retry,
+    shouldRetry: (error, attempt) => !emittedText && (retry.shouldRetry?.(error, attempt) ?? true),
     onRetry: (attempt, delayMs) => request.onAttempt?.({ model, attempt, delayMs, outcome: 'retry' }),
   });
   try {
     const result = await runModel(request.model);
     return { ...result.value, attempts: result.attempts };
   } catch (error) {
-    if (!request.fallbackModel || request.fallbackModel === request.model || !retryableProviderError(error)) throw error;
+    if (emittedText || !request.fallbackModel || request.fallbackModel === request.model || !retryableProviderError(error)) throw error;
     request.onAttempt?.({ model: request.fallbackModel, attempt: 1, outcome: 'fallback' });
-    const result = await streamChatOnce(request, request.fallbackModel);
+    const result = await streamChatOnce(trackedRequest, request.fallbackModel);
     return { ...result, attempts: retry.maxAttempts + 1 };
   }
 }

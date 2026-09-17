@@ -13,7 +13,7 @@ export const BUILTIN_AGENTS: readonly AgentProfile[] = [
   {
     id: 'plan', mode: 'plan',
     prompt: 'Plan mode: investigate, reason, and propose a precise plan. You are read-only and must not modify files or execute shell commands.',
-    toolPolicy: { deny: ['bash', 'write_file', 'edit_file', 'apply_patch', 'memory_append', 'memory_extend', 'plugin_*', 'browser_*', 'mcp_*', 'lsp_*'] },
+    toolPolicy: { deny: ['bash', 'write_file', 'edit_file', 'apply_patch', 'memory_append', 'memory_extend', 'plugin_*', 'browser_*', 'mcp_*', 'watchdog_*', 'nginx_add_proxy', 'lsp_*'] },
   },
   { id: 'build', mode: 'build', prompt: 'Build mode: implement and verify requested changes using the available tools.' },
   {

@@ -2,6 +2,7 @@ export interface RetryOptions {
   maxAttempts: number; baseDelayMs: number; maxDelayMs: number;
   sleep?: (ms: number) => Promise<void>; random?: () => number;
   onRetry?: (attempt: number, delayMs: number, error: unknown) => void;
+  shouldRetry?: (error: unknown, attempt: number) => boolean;
 }
 
 export class ProviderHttpError extends Error {
@@ -31,7 +32,7 @@ export async function withProviderRetry<T>(operation: (attempt: number) => Promi
     try { return { value: await operation(attempt), attempts: attempt }; }
     catch (error) {
       lastError = error;
-      if (attempt >= attempts || !retryableProviderError(error)) throw error;
+      if (attempt >= attempts || !retryableProviderError(error) || options.shouldRetry?.(error, attempt) === false) throw error;
       const exponential = Math.min(options.maxDelayMs, options.baseDelayMs * 2 ** (attempt - 1));
       const retryAfter = error instanceof ProviderHttpError ? error.retryAfterMs : undefined;
       const delay = Math.max(retryAfter ?? 0, Math.round(exponential * (0.5 + random() * 0.5)));

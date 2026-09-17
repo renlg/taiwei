@@ -46,7 +46,8 @@ export class PolicyEngine {
     if (input.agentMode === 'plan'
       && (input.tool === 'bash' || WRITE_TOOLS.has(input.tool) || input.tool === 'delegate_task'
         || input.tool.startsWith('memory_') || input.tool === 'task_start' || input.tool === 'task_kill'
-        || input.tool.startsWith('browser_') || input.tool.startsWith('mcp_')
+        || input.tool.startsWith('browser_') || input.tool.startsWith('mcp_') || input.tool.startsWith('watchdog_')
+        || input.tool === 'nginx_add_proxy'
         || (input.tool.startsWith('lsp_') && !READ_ONLY_LSP_TOOLS.has(input.tool)))) {
       return { effect: 'deny', rule: input.tool.startsWith('lsp_') ? 'builtin.plan.no-lsp-mutation' : 'builtin.plan.read-only', explicit: false };
     }
