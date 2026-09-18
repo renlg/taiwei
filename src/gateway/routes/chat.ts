@@ -337,6 +337,10 @@ export async function handleChatRoute(ctx: RouteContext): Promise<boolean> {
         };
         pendingTurn.usage = session.usage;
         sendSse(response, 'usage', session.usage);
+      } else if (event.type === 'clarification') {
+        const clarification = { questions: event.questions };
+        pendingMessage.clarification = clarification;
+        sendSse(response, 'clarification', clarification);
       } else {
         finalText = event.text;
         sendSse(response, 'done', { text: event.text, sessionId: session.id });

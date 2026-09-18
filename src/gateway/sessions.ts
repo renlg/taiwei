@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import type { ChatMessage } from '../llm/client.js';
+import type { ClarificationQuestion } from '../agent/clarification.js';
 import { isStateUnavailable, openStateDatabase, type DatabaseSync, type StateDatabase } from '../state/db.js';
 import { getPaths } from '../util/paths.js';
 
@@ -23,6 +24,7 @@ export interface SessionMessage {
   agentContent?: string;
   attachments?: SessionAttachment[];
   toolCalls?: SessionToolCall[];
+  clarification?: { questions: ClarificationQuestion[] };
   timestamp: string;
   status?: 'stopped' | 'error' | 'pending';
 }

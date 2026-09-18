@@ -19,6 +19,7 @@ import { guestIdForUsername } from '../util/paths.js';
 import { parseSkill } from '../skills/loader.js';
 import { UserSkillStore } from '../skills/user-store.js';
 import { DiagnosticFeedbackSession, formatDiagnostic } from '../lsp/diagnostics.js';
+import { ClarificationStreamGate, parseClarification, type ClarificationQuestion } from './clarification.js';
 
 export interface RunTurnOptions {
   signal?: AbortSignal;
@@ -55,6 +56,7 @@ export type AgentEvent =
   | { type: 'model_iterate'; model: string; feedbackAttempt: number; maxFeedbackIterations: number; error: ModelErrorFeedback }
   | { type: 'compressing' }
   | { type: 'usage'; usage: TokenUsage & { contextWindow: number }; model: string; compressed?: boolean }
+  | { type: 'clarification'; questions: ClarificationQuestion[] }
   | { type: 'done'; text: string };
 
 const COMPRESSION_PROMPT = 'Compress the following conversation history into a concise factual summary preserving key facts, decisions, user preferences, file paths, and unresolved tasks. Output only the summary.';
@@ -298,6 +300,7 @@ export async function runAgentTurn(
     });
     if (beforeLLM?.extraContext) systemPrompt = limitTextTokens(`${systemPrompt}\n\n${beforeLLM.extraContext}`, config.budget.systemMax, config.tokenEstimateCharsPerToken);
     let result: ChatResult;
+    const streamGate = new ClarificationStreamGate();
     try {
       result = await streamChat({
         baseUrl: resolved.provider.baseUrl, apiKey: resolved.provider.apiKey ?? '', model,
@@ -313,8 +316,11 @@ export async function runAgentTurn(
         },
         onText: (text) => {
           fullText += text;
-          options.onText?.(text);
-          options.onEvent?.({ type: 'token', text });
+          const visible = streamGate.push(text);
+          if (visible) {
+            options.onText?.(visible);
+            options.onEvent?.({ type: 'token', text: visible });
+          }
         },
       });
     } catch (error) {
@@ -381,6 +387,24 @@ export async function runAgentTurn(
       model,
       ...(compressedThisRequest ? { compressed: true } : {}),
     });
+    const clarification = parseClarification(result.content);
+    const remainingVisibleText = streamGate.finish(Boolean(clarification));
+    if (remainingVisibleText) {
+      options.onText?.(remainingVisibleText);
+      options.onEvent?.({ type: 'token', text: remainingVisibleText });
+    }
+    if (clarification) {
+      const text = clarification.cleanedText || '请回答以下澄清问题。';
+      // A clarification response wins over any simultaneously returned tool calls. Keep
+      // the structured questions in history, but never append dangling tool calls.
+      conversation.push({ role: 'assistant', content: result.content || null });
+      selfLearningConversation.push(conversation.at(-1)!);
+      options.onEvent?.({ type: 'clarification', questions: clarification.payload.questions });
+      options.onEvent?.({ type: 'done', text });
+      const endEvent = { type: 'turn.end', runId, sessionId, agentId: options.agentProfile?.id, model: result.model ?? model, latencyMs: Date.now() - startedAt, usage: result.usage, outcome: 'success' } as const;
+      emitEvent(endEvent); await appendAudit(endEvent).catch(() => {});
+      return text;
+    }
     const normalizedToolCalls = result.toolCalls.map((call) => {
       const repaired = repairToolCallArguments(call.function.arguments || '{}');
       return { call: { ...call, function: { ...call.function, arguments: repaired ?? '{}' } }, repaired };

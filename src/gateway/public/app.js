@@ -2371,6 +2371,9 @@ function addMessage(message, options = {}) {
     bubble.append(caret);
   }
   stack.append(bubble);
+  if (message.role === 'assistant' && message.clarification?.questions?.length) {
+    stack.append(renderClarificationCard(message.clarification.questions));
+  }
   if (message.status === 'stopped') {
     const stopped = document.createElement('div');
     stopped.className = 'stop-note';
@@ -2395,6 +2398,81 @@ function addMessage(message, options = {}) {
     autoScroll(options.forceScroll);
   }
   return { row, stack, bubble, meta, message };
+}
+
+function renderClarificationCard(questions) {
+  const card = document.createElement('section');
+  card.className = 'clarification-card';
+  card.setAttribute('aria-label', '需求澄清');
+  const title = document.createElement('div');
+  title.className = 'clarification-title';
+  title.textContent = '需要你确认';
+  card.append(title);
+
+  const answer = async (section, index, value) => {
+    if (!value.trim() || section.classList.contains('answered')) return;
+    section.classList.add('answered');
+    section.querySelectorAll('button, input').forEach((control) => { control.disabled = true; });
+    const status = document.createElement('div');
+    status.className = 'clarification-answered';
+    status.textContent = `已回答 ✓ ${value.trim()}`;
+    section.append(status);
+    while (state.streaming) await new Promise((resolve) => setTimeout(resolve, 40));
+    await submit(`回答澄清问题${index + 1}：${value.trim()}`);
+    const next = card.querySelector(`.clarification-question[data-question-index="${index + 1}"]`);
+    if (next) {
+      next.classList.remove('waiting');
+      next.querySelectorAll('button, input').forEach((control) => { control.disabled = false; });
+    }
+  };
+
+  questions.forEach((item, index) => {
+    const section = document.createElement('div');
+    section.className = 'clarification-question';
+    section.dataset.questionIndex = String(index);
+    const prompt = document.createElement('div');
+    prompt.className = 'clarification-prompt';
+    prompt.textContent = `${index + 1}. ${item.question}`;
+    const options = document.createElement('div');
+    options.className = 'clarification-options';
+    for (const option of item.options || []) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'clarification-option';
+      button.textContent = option;
+      button.addEventListener('click', () => { void answer(section, index, option); });
+      options.append(button);
+    }
+    section.append(prompt, options);
+    if (item.allowCustom !== false) {
+      const otherButton = document.createElement('button');
+      otherButton.type = 'button';
+      otherButton.className = 'clarification-other';
+      otherButton.textContent = '其他 / Other';
+      const custom = document.createElement('div');
+      custom.className = 'clarification-custom';
+      custom.hidden = true;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = '请输入你的答案';
+      const confirm = document.createElement('button');
+      confirm.type = 'button';
+      confirm.textContent = '确认';
+      confirm.addEventListener('click', () => { void answer(section, index, input.value); });
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void answer(section, index, input.value); }
+      });
+      otherButton.addEventListener('click', () => { custom.hidden = false; otherButton.hidden = true; input.focus(); });
+      custom.append(input, confirm);
+      section.append(otherButton, custom);
+    }
+    if (index > 0) {
+      section.classList.add('waiting');
+      section.querySelectorAll('button, input').forEach((control) => { control.disabled = true; });
+    }
+    card.append(section);
+  });
+  return card;
 }
 
 function updateAssistant(view, content, streaming = true) {
@@ -3424,6 +3502,11 @@ async function submit(message, files = [], skills = []) {
             const suffix = savedTokens > 0 ? ` · 节省约 ${savedTokens.toLocaleString()} tokens` : ` · ${formatTime(new Date().toISOString())}`;
             compressionView = renderCompression(answerView.stack, `🧹 已压缩上下文${suffix}`, true);
           } else clearPendingCompression();
+        } else if (item.event === 'clarification') {
+          assistantMessage.clarification = { questions: item.data.questions || [] };
+          answerView.stack.querySelector('.clarification-card')?.remove();
+          answerView.stack.insertBefore(renderClarificationCard(assistantMessage.clarification.questions), answerView.meta);
+          autoScroll(true);
         } else if (item.event === 'done') {
           clearPendingCompression();
           const finalAnswer = item.data.text || answer;

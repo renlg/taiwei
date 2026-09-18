@@ -435,6 +435,20 @@ body.guest-mode .admin-only { display: none !important; }
 .copy-message:hover { color: var(--text); background: var(--surface-hover); }
 .streaming-caret { display: inline-block; width: 7px; height: 16px; margin-left: 3px; vertical-align: -3px; border-radius: 2px; background: var(--accent); animation: blink .8s infinite; }
 .stop-note { margin-top: 10px; color: var(--faint); font-size: 12px; }
+.clarification-card { display: grid; gap: 12px; margin-top: 10px; padding: 14px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 13px; background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface)); }
+.clarification-title { color: var(--text); font-size: 13px; font-weight: 750; }
+.clarification-question { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+.clarification-question.waiting { opacity: .55; }
+.clarification-prompt { color: var(--text); font-size: 13px; line-height: 1.5; }
+.clarification-options { display: flex; flex-wrap: wrap; gap: 7px; }
+.clarification-option, .clarification-other, .clarification-custom button { padding: 7px 11px; border: 1px solid var(--border-strong); border-radius: 9px; color: var(--text); background: var(--surface); cursor: pointer; font-size: 12px; }
+.clarification-option:hover, .clarification-other:hover, .clarification-custom button:hover { border-color: var(--accent); background: var(--accent-soft); }
+.clarification-custom { display: flex; gap: 7px; }
+.clarification-custom[hidden] { display: none; }
+.clarification-custom input { min-width: 0; flex: 1; padding: 7px 9px; border: 1px solid var(--border-strong); border-radius: 9px; color: var(--text); background: var(--surface); outline: none; }
+.clarification-custom input:focus { border-color: var(--accent); }
+.clarification-question.answered > :not(.clarification-prompt):not(.clarification-answered) { display: none; }
+.clarification-answered { color: var(--accent); font-size: 12px; }
 .load-earlier { display: block; margin: 0 auto 22px; padding: 7px 16px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: var(--surface); cursor: pointer; font-size: 12.5px; transition: .15s; }
 .load-earlier:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-hover); }
 .render-progress { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 0 20px; color: var(--muted); font-size: 13px; }

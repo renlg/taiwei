@@ -72,6 +72,15 @@ class MockChat implements ChatBridge {
     this.guestIds.push(guestId);
     this.models.push(_model);
     this.grantedModels.push([...grantedModels ?? []]);
+    if (message === 'clarify') {
+      sink.event({ type: 'clarification', questions: [
+        { question: '部署到哪里？', options: ['测试环境', '生产环境'], allowCustom: true },
+        { question: '何时执行？', options: ['现在', '今晚'], allowCustom: true },
+      ] });
+      sink.event({ type: 'done', text: '请回答以下澄清问题。' });
+      sink.context?.([...history, { role: 'user', content: message }, { role: 'assistant', content: '请回答以下澄清问题。' }]);
+      return;
+    }
     for (const event of [
       { type: 'token', text: 'Hello ' },
       { type: 'tool', name: 'read', args: { path: 'README.md' } },
@@ -292,7 +301,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=83/);
+    assert.match(pageBody, /logo\.png\?v=84/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -411,9 +420,20 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.match(typeof mock.histories[1][0].content === 'string' ? mock.histories[1][0].content : JSON.stringify(mock.histories[1][0].content), /\[附件: notes\.txt\]\nlocal attachment contents/);
     assert.deepEqual(mock.histories[1][1], { role: 'assistant', content: 'Hello world' });
 
+    const clarificationChat = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: 'clarify', sessionId: created.id }),
+    });
+    const clarificationBody = await clarificationChat.text();
+    assert.match(clarificationBody, /event: clarification\ndata: \{"questions":\[\{"question":"部署到哪里？","options":\["测试环境","生产环境"\],"allowCustom":true\}/);
+    assert.match(clarificationBody, /event: done\ndata: \{"text":"请回答以下澄清问题。"/);
+    const clarifiedSession = await (await fetch(`${baseUrl}/api/sessions/${created.id}`)).json() as {
+      messages: Array<{ clarification?: { questions: unknown[] } }>;
+    };
+    assert.equal(clarifiedSession.messages.at(-1)?.clarification?.questions.length, 2);
+
     const listed = await (await fetch(`${baseUrl}/api/sessions`)).json() as Array<{ id: string; messageCount: number }>;
     assert.equal(listed[0].id, created.id);
-    assert.equal(listed[0].messageCount, 4);
+    assert.equal(listed[0].messageCount, 6);
 
     const removed = await fetch(`${baseUrl}/api/sessions/${created.id}`, { method: 'DELETE' });
     assert.equal(removed.status, 204);

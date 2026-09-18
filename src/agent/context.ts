@@ -5,6 +5,11 @@ import type { Skill, SkillLoader } from '../skills/loader.js';
 import type { AgentProfile } from '../agents/profiles.js';
 
 const BASE_PERSONA = `You are taiwei, a capable proactive AI assistant running in a terminal. Be concise, practical, and transparent. Use tools when they improve accuracy. Preserve user data and ask before destructive actions. For any non-trivial task needing three or more steps, maintain a visible checklist with the todo_write tool: create it up front, keep exactly one item in_progress, and mark items complete as you finish them.`;
+const CLARIFICATION_GUIDANCE = `需求澄清：当用户需求不明确（缺少关键参数、有多种合理解释或目标冲突）时，不要调用工具、执行操作或猜测；只输出以下标记块，不要添加块外文字：
+<<<TAIWEI_CLARIFICATION>>>
+{"questions":[{"question":"问题文本","options":["选项一","选项二"],"allowCustom":true}]}
+<<<END_TAIWEI_CLARIFICATION>>>
+每次可同时给出多个问题；每题提供 2-5 个简短合理选项，allowCustom 必须为 true。需求明确时正常执行，不要输出此标记块。`;
 
 export class AgentContext {
   readonly messages: ChatMessage[] = [];
@@ -18,7 +23,7 @@ export class AgentContext {
   constructor(readonly memory: MemoryStore, private readonly skillLoader: SkillLoader, readonly extendedMemory = true, public profile?: AgentProfile) {}
 
   async systemPrompt(workspace?: string, customPrompt = ''): Promise<string> {
-    const sections = [BASE_PERSONA, `Current date and time: ${new Date().toString()}`];
+    const sections = [BASE_PERSONA, CLARIFICATION_GUIDANCE, `Current date and time: ${new Date().toString()}`];
     if (workspace) sections.push(`Current workspace (default working directory for tools): ${workspace}`);
     if (customPrompt.trim()) sections.push(`Custom instructions (from settings):\n${customPrompt.trim()}`);
     if (this.profile) sections.push(`Agent profile (${this.profile.id}, ${this.profile.mode} mode):\n${this.profile.prompt}`);
