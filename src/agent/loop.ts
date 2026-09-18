@@ -51,8 +51,9 @@ export interface RunTurnOptions {
 
 export type AgentEvent =
   | { type: 'token'; text: string }
-  | { type: 'tool'; name: string; args: Record<string, unknown> }
-  | { type: 'tool_result'; name: string; result: string }
+  | { type: 'tool_start'; index: number; name: string }
+  | { type: 'tool'; name: string; args: Record<string, unknown>; index?: number }
+  | { type: 'tool_result'; name: string; result: string; index?: number }
   | { type: 'model_iterate'; model: string; feedbackAttempt: number; maxFeedbackIterations: number; error: ModelErrorFeedback }
   | { type: 'compressing' }
   | { type: 'usage'; usage: TokenUsage & { contextWindow: number }; model: string; compressed?: boolean }
@@ -322,6 +323,7 @@ export async function runAgentTurn(
             options.onEvent?.({ type: 'token', text: visible });
           }
         },
+        onToolStart: ({ index, name }) => options.onEvent?.({ type: 'tool_start', index, name }),
       });
     } catch (error) {
       // Transient failures have already exhausted provider retry/fallback handling.
@@ -423,7 +425,7 @@ export async function runAgentTurn(
       }
       return text;
     }
-    for (const normalized of normalizedToolCalls) {
+    for (const [index, normalized] of normalizedToolCalls.entries()) {
       const call = normalized.call;
       let args: Record<string, unknown> = {};
       let output: string;
@@ -433,7 +435,7 @@ export async function runAgentTurn(
         try { args = JSON.parse(call.function.arguments) as Record<string, unknown>; }
         catch { output = JSON.stringify({ error: 'Invalid tool call arguments, please regenerate with valid JSON.' }); }
       }
-      options.onEvent?.({ type: 'tool', name: call.function.name, args });
+      options.onEvent?.({ type: 'tool', name: call.function.name, args, index });
       const cwd = options.cwd ?? process.cwd();
       output ??= await registry.dispatch(call.function.name, args, {
         signal: options.signal,
@@ -468,7 +470,7 @@ export async function runAgentTurn(
           catch (error) { if (options.signal?.aborted) throw error; console.debug(`[taiwei] Diagnostic refresh skipped: ${error instanceof Error ? error.message : String(error)}`); }
         } : undefined,
       });
-      options.onEvent?.({ type: 'tool_result', name: call.function.name, result: output });
+      options.onEvent?.({ type: 'tool_result', name: call.function.name, result: output, index });
       conversation.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: output });
       selfLearningConversation.push(conversation.at(-1)!);
     }

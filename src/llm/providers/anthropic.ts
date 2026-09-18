@@ -72,12 +72,15 @@ function parseArguments(value: string): Record<string, unknown> {
   try { return JSON.parse(value || '{}') as Record<string, unknown>; } catch { return {}; }
 }
 
-export function fromAnthropicResponse(payload: AnthropicPayload, onText?: (text: string) => void): ChatResult {
+export function fromAnthropicResponse(payload: AnthropicPayload, onText?: (text: string) => void, onToolStart?: (tool: { index: number; name: string }) => void): ChatResult {
   const text = (payload.content ?? []).filter((block) => block.type === 'text').map((block) => block.text ?? '').join('');
   if (text) onText?.(text);
   const toolCalls: ToolCall[] = (payload.content ?? []).filter((block) => block.type === 'tool_use').map((block) => ({
     id: block.id ?? '', type: 'function', function: { name: block.name ?? '', arguments: JSON.stringify(block.input ?? {}) },
   }));
+  toolCalls.forEach((call, index) => {
+    if (call.function.name) onToolStart?.({ index, name: call.function.name });
+  });
   const input = payload.usage?.input_tokens ?? 0; const output = payload.usage?.output_tokens ?? 0;
   const usage: TokenUsage | undefined = payload.usage ? { promptTokens: input, completionTokens: output, totalTokens: input + output } : undefined;
   return { content: text, toolCalls, usage, model: payload.model };
@@ -97,6 +100,6 @@ export class AnthropicAdapter implements ProviderAdapter {
       throw new ProviderHttpError(response.status, `Anthropic request failed (${response.status}): ${body.slice(0, 500)}`, parseRetryAfter(response.headers.get('retry-after')));
     }
     if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Anthropic streaming is not yet supported by this best-effort adapter; use a JSON response endpoint');
-    return fromAnthropicResponse(await response.json() as AnthropicPayload, request.onText);
+    return fromAnthropicResponse(await response.json() as AnthropicPayload, request.onText, request.onToolStart);
   }
 }

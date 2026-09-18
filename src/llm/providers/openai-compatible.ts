@@ -14,6 +14,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       signal: request.signal,
       timeoutMs: request.timeoutMs,
       onText: request.onText,
+      onToolStart: request.onToolStart,
       fallbackModel: request.fallbackModel,
       retry: request.retry,
       onAttempt: request.onAttempt,

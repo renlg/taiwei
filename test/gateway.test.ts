@@ -83,8 +83,9 @@ class MockChat implements ChatBridge {
     }
     for (const event of [
       { type: 'token', text: 'Hello ' },
-      { type: 'tool', name: 'read', args: { path: 'README.md' } },
-      { type: 'tool_result', name: 'read', result: 'contents' },
+      { type: 'tool_start', index: 0, name: 'read' },
+      { type: 'tool', index: 0, name: 'read', args: { path: 'README.md' } },
+      { type: 'tool_result', index: 0, name: 'read', result: 'contents' },
       { type: 'token', text: 'world' },
       { type: 'compressing' },
       { type: 'usage', usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, contextWindow: 1_000 }, model: 'free', compressed: true },
@@ -301,7 +302,7 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.equal(page.headers.get('cache-control'), 'no-cache');
     const pageBody = await page.text();
     assert.match(pageBody, /taiwei test/);
-    assert.match(pageBody, /logo\.png\?v=84/);
+    assert.match(pageBody, /logo\.png\?v=85/);
     assert.doesNotMatch(pageBody, /\{\{ASSET_VERSION\}\}/);
 
     const stylesheet = await fetch(`${baseUrl}/style.css`);
@@ -384,8 +385,10 @@ test('gateway serves health, static UI, and streamed SSE events', async () => {
     assert.match(chat.headers.get('content-type') ?? '', /text\/event-stream/);
     const body = await chat.text();
     assert.match(body, /event: token\ndata: \{"text":"Hello "\}/);
-    assert.match(body, /event: tool\ndata: \{"name":"read","args":\{"path":"README.md"\}\}/);
+    assert.match(body, /event: tool_start\ndata: \{"index":0,"name":"read"\}/);
+    assert.match(body, /event: tool\ndata: \{"name":"read","args":\{"path":"README.md"\},"index":0\}/);
     assert.match(body, /event: tool_result/);
+    assert.ok(body.indexOf('event: tool_start') < body.indexOf('event: tool\n'));
     assert.match(body, /event: compressing\ndata: \{\}/);
     assert.match(body, /event: usage\ndata: \{"promptTokens":10,"completionTokens":2,"totalTokens":12,"contextWindow":1000,"model":"free","compressed":true,"cumulativePromptTokens":10,"cumulativeCompletionTokens":2,"cumulativeTotalTokens":12\}/);
     assert.match(body, new RegExp(`event: done\\ndata: \\{"text":"Hello world","sessionId":"${created.id}"\\}`));

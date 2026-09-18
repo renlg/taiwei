@@ -518,6 +518,7 @@ test('cron schedule parser handles intervals and cron expressions', () => {
 
 test('LLM client assembles streamed text and fragmented tool calls', async () => {
   let requestPayload: { stream_options?: { include_usage?: boolean } } = {};
+  const toolStarts: Array<{ index: number; name: string }> = [];
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -538,11 +539,13 @@ test('LLM client assembles streamed text and fragmented tool calls', async () =>
       baseUrl: `http://127.0.0.1:${address.port}`,
       apiKey: '', model: 'test', messages: [{ role: 'user', content: 'hello' }], tools: [],
       onText: (text) => { streamed += text; },
+      onToolStart: (tool) => { toolStarts.push(tool); },
     });
     assert.equal(streamed, 'Hello world');
     assert.equal(result.content, 'Hello world');
     assert.deepEqual(result.usage, { promptTokens: 11, completionTokens: 3, totalTokens: 14 });
     assert.deepEqual(requestPayload.stream_options, { include_usage: true });
+    assert.deepEqual(toolStarts, [{ index: 0, name: 'memory_' }]);
     assert.deepEqual(result.toolCalls[0], { id: 'call_1', type: 'function', function: { name: 'memory_append', arguments: '{"text":"note"}' } });
   } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
 });

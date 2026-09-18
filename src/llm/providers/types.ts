@@ -25,6 +25,7 @@ export interface ProviderRequest {
   signal?: AbortSignal;
   timeoutMs?: number;
   onText?: (text: string) => void;
+  onToolStart?: (tool: { index: number; name: string }) => void;
   fallbackModel?: string;
   retry?: Omit<RetryOptions, 'onRetry'>;
   onAttempt?: (event: { model: string; attempt: number; delayMs?: number; outcome: 'start' | 'retry' | 'success' | 'fallback' }) => void;

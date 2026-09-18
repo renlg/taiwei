@@ -87,6 +87,7 @@ export interface ChatRequest {
   signal?: AbortSignal;
   timeoutMs?: number;
   onText?: (text: string) => void;
+  onToolStart?: (tool: { index: number; name: string }) => void;
   fallbackModel?: string;
   retry?: Omit<RetryOptions, 'onRetry'>;
   onAttempt?: (event: { model: string; attempt: number; delayMs?: number; outcome: 'start' | 'retry' | 'success' | 'fallback' }) => void;
@@ -140,6 +141,9 @@ async function streamChatOnce(request: ChatRequest, model: string): Promise<Chat
     if (!message) throw new Error('Provider returned a malformed completion');
     const content = message.content ?? '';
     if (content) request.onText?.(content);
+    message.tool_calls?.forEach((call, index) => {
+      if (call.function.name) request.onToolStart?.({ index, name: call.function.name });
+    });
     return { content, toolCalls: message.tool_calls ?? [], usage: normalizeUsage(payload.usage), model };
   }
   if (!response.body) throw new Error('Provider returned an empty response body');
@@ -150,6 +154,7 @@ async function streamChatOnce(request: ChatRequest, model: string): Promise<Chat
   let content = '';
   let usage: TokenUsage | undefined;
   const calls = new Map<number, ToolCall>();
+  const announcedCalls = new Set<number>();
   for (;;) {
     const { done, value } = await reader.read();
     buffer += decoder.decode(value, { stream: !done });
@@ -173,6 +178,10 @@ async function streamChatOnce(request: ChatRequest, model: string): Promise<Chat
         if (part.function?.name) call.function.name += part.function.name;
         if (part.function?.arguments) call.function.arguments += part.function.arguments;
         calls.set(part.index, call);
+        if (call.function.name && !announcedCalls.has(part.index)) {
+          announcedCalls.add(part.index);
+          request.onToolStart?.({ index: part.index, name: call.function.name });
+        }
       }
     }
     if (done) break;
@@ -183,11 +192,17 @@ async function streamChatOnce(request: ChatRequest, model: string): Promise<Chat
 export async function openAICompatibleStream(request: ChatRequest): Promise<ChatResult> {
   const retry = request.retry ?? { maxAttempts: 1, baseDelayMs: 1_000, maxDelayMs: 30_000 };
   let emittedText = false;
+  const announcedCalls = new Set<number>();
   const trackedRequest: ChatRequest = {
     ...request,
     onText: (text) => {
       if (text.length > 0) emittedText = true;
       request.onText?.(text);
+    },
+    onToolStart: (tool) => {
+      if (announcedCalls.has(tool.index)) return;
+      announcedCalls.add(tool.index);
+      request.onToolStart?.(tool);
     },
   };
   const runModel = async (model: string) => withProviderRetry(async (attempt) => {
@@ -218,7 +233,7 @@ export async function streamChat(request: ChatRequest): Promise<ChatResult> {
   const { providerAdapter } = await import('./providers/index.js');
   return providerAdapter(request.provider.type).stream({
     provider: request.provider, model: request.model, messages: request.messages, tools: request.tools,
-    signal: request.signal, timeoutMs: request.timeoutMs, onText: request.onText,
+    signal: request.signal, timeoutMs: request.timeoutMs, onText: request.onText, onToolStart: request.onToolStart,
     fallbackModel: request.fallbackModel, retry: request.retry, onAttempt: request.onAttempt,
   });
 }

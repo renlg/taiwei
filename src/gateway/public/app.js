@@ -3378,6 +3378,7 @@ async function submit(message, files = [], skills = []) {
   addMessage(userMessage, { forceScroll: true });
   const assistantMessage = { role: 'assistant', content: '', timestamp: new Date().toISOString(), toolCalls: [] };
   let answerView = addMessage(assistantMessage, { streaming: true, forceScroll: true });
+  const startingToolViews = new Map();
   const toolViews = [];
   let answer = '';
   let segmentText = '';
@@ -3441,6 +3442,20 @@ async function submit(message, files = [], skills = []) {
             completionTokens: state.usage.completionTokens + estimatedTokens,
             totalTokens: state.usage.totalTokens + estimatedTokens,
           });
+        } else if (item.event === 'tool_start') {
+          clearPendingCompression();
+          const index = Number(item.data.index);
+          if (!startingToolViews.has(index)) {
+            let list = answerView.stack.querySelector('.tool-list');
+            if (!list) { list = document.createElement('div'); list.className = 'tool-list'; }
+            const row = document.createElement('div');
+            row.className = 'tool-start';
+            row.textContent = `🔧 正在调用 ${item.data.name}…`;
+            list.append(row);
+            startingToolViews.set(index, row);
+            answerView.stack.insertBefore(list, answerView.bubble);
+            autoScroll();
+          }
         } else if (item.event === 'tool') {
           clearPendingCompression();
           const call = { name: item.data.name, args: item.data.args || {} };
@@ -3450,12 +3465,20 @@ async function submit(message, files = [], skills = []) {
           const holder = document.createElement('div');
           renderTools(holder, [call]);
           const details = holder.firstElementChild.firstElementChild;
-          list.append(details);
-          toolViews.push({ call, details });
+          const index = Number(item.data.index);
+          const startingRow = Number.isInteger(index) ? startingToolViews.get(index) : undefined;
+          if (startingRow) {
+            startingRow.replaceWith(details);
+            startingToolViews.delete(index);
+          } else list.append(details);
+          toolViews.push({ call, details, index: Number.isInteger(index) ? index : undefined });
           answerView.stack.insertBefore(list, answerView.bubble);
           autoScroll();
         } else if (item.event === 'tool_result') {
-          const target = [...toolViews].reverse().find((entry) => entry.call.name === item.data.name && entry.call.result === undefined);
+          const index = Number(item.data.index);
+          const target = Number.isInteger(index)
+            ? [...toolViews].reverse().find((entry) => entry.index === index && entry.call.result === undefined)
+            : [...toolViews].reverse().find((entry) => entry.call.name === item.data.name && entry.call.result === undefined);
           if (target) {
             target.call.result = item.data.result;
             target.details.classList.add('done');

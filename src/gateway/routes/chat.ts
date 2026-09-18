@@ -305,16 +305,18 @@ export async function handleChatRoute(ctx: RouteContext): Promise<boolean> {
         pendingTurn.answer = answer;
         sendSse(response, 'token', { text: event.text });
         throttledSave();
+      } else if (event.type === 'tool_start') {
+        sendSse(response, 'tool_start', { index: event.index, name: event.name });
       } else if (event.type === 'tool') {
         toolCalls.push({ name: event.name, args: event.args });
         pendingTurn.toolCalls = [...toolCalls];
-        sendSse(response, 'tool', { name: event.name, args: event.args });
+        sendSse(response, 'tool', { name: event.name, args: event.args, ...(event.index === undefined ? {} : { index: event.index }) });
         throttledSave();
       } else if (event.type === 'tool_result') {
         const call = [...toolCalls].reverse().find((item) => item.name === event.name && item.result === undefined);
         if (call) call.result = event.result;
         pendingTurn.toolCalls = [...toolCalls];
-        sendSse(response, 'tool_result', { name: event.name, result: event.result });
+        sendSse(response, 'tool_result', { name: event.name, result: event.result, ...(event.index === undefined ? {} : { index: event.index }) });
         throttledSave();
       } else if (event.type === 'model_iterate') {
         // Model feedback is an internal recovery step. Do not expose its raw error

@@ -20,6 +20,42 @@ test('repairToolCallArguments conservatively repairs common malformed JSON', () 
   assert.equal(repairToolCallArguments('{"name": ]'), null);
 });
 
+test('agent emits tool_start before formal tool events without adding status to history', async () => isolated(async () => {
+  let requests = 0;
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain */ }
+    requests += 1;
+    if (requests === 1) {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"echo_test","arguments":"{\\"value\\":\\"ok\\"}"}}]}}]}\n\n');
+      response.end('data: [DONE]\n\n');
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ choices: [{ message: { content: 'finished', tool_calls: [] } }] }));
+  });
+  const baseUrl = await listen(server);
+  try {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.skillSelfLearning = false;
+    config.baseUrl = baseUrl;
+    config.retry = { ...config.retry, maxAttempts: 1 };
+    const agentContext = context();
+    const registry = new ToolRegistry();
+    registry.register({ name: 'echo_test', description: 'echo', parameters: { type: 'object' }, execute: (args) => JSON.stringify(args) });
+    const events: AgentEvent[] = [];
+    assert.equal(await runAgentTurn('use the tool', agentContext, registry, config, { onEvent: (event) => events.push(event) }), 'finished');
+    assert.deepEqual(events.filter((event) => event.type === 'tool_start' || event.type === 'tool' || event.type === 'tool_result').map((event) => event.type), [
+      'tool_start', 'tool', 'tool_result',
+    ]);
+    assert.deepEqual(events.find((event) => event.type === 'tool_start'), { type: 'tool_start', index: 0, name: 'echo_test' });
+    assert.deepEqual(events.find((event) => event.type === 'tool'), { type: 'tool', index: 0, name: 'echo_test', args: { value: 'ok' } });
+    assert.deepEqual(events.find((event) => event.type === 'tool_result'), { type: 'tool_result', index: 0, name: 'echo_test', result: '{"value":"ok"}' });
+    assert.deepEqual(agentContext.messages.map((message) => message.role), ['user', 'assistant', 'tool', 'assistant']);
+    assert.equal(JSON.stringify(agentContext.messages).includes('tool_start'), false);
+  } finally { await close(server); }
+}));
+
 test('unrepairable tool arguments produce regeneration feedback without poisoning upstream history', async () => isolated(async () => {
   const requests: Array<{ messages: ChatMessage[] }> = [];
   const server = createServer(async (request, response) => {
