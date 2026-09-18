@@ -25,6 +25,22 @@ function validQuestion(value: unknown): value is ClarificationQuestion {
     && typeof item.allowCustom === 'boolean';
 }
 
+const CLARIFICATION_REPAIR_CANDIDATES = ['}', ']}', '}]', '"]}', '"}]'] as const;
+
+function parsePayload(content: string): ClarificationPayload | undefined {
+  try {
+    const value = JSON.parse(content) as Record<string, unknown>;
+    if (!Array.isArray(value.questions) || value.questions.length === 0 || !value.questions.every(validQuestion)) return undefined;
+    return { questions: value.questions.map((item) => ({
+      question: item.question.trim(),
+      options: item.options.map((option) => option.trim()),
+      allowCustom: item.allowCustom,
+    })) };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Detects and removes one valid clarification marker block from a completed response. */
 export function parseClarification(text: string): ParsedClarification | undefined {
   const start = text.indexOf(CLARIFICATION_START);
@@ -32,19 +48,21 @@ export function parseClarification(text: string): ParsedClarification | undefine
   const contentStart = start + CLARIFICATION_START.length;
   const end = text.indexOf(CLARIFICATION_END, contentStart);
   if (end < 0) return undefined;
-  try {
-    const value = JSON.parse(text.slice(contentStart, end).trim()) as Record<string, unknown>;
-    if (!Array.isArray(value.questions) || value.questions.length === 0 || !value.questions.every(validQuestion)) return undefined;
-    const questions = value.questions.map((item) => ({
-      question: item.question.trim(),
-      options: item.options.map((option) => option.trim()),
-      allowCustom: item.allowCustom,
-    }));
-    const cleanedText = `${text.slice(0, start)}${text.slice(end + CLARIFICATION_END.length)}`.trim();
-    return { payload: { questions }, cleanedText };
-  } catch {
-    return undefined;
+  const raw = text.slice(contentStart, end).trim();
+  let payload = parsePayload(raw);
+  if (!payload) {
+    const repairBases = raw.endsWith('"') ? [raw, raw.slice(0, -1)] : [raw];
+    for (const base of repairBases) {
+      for (const candidate of CLARIFICATION_REPAIR_CANDIDATES) {
+        payload = parsePayload(base + candidate);
+        if (payload) break;
+      }
+      if (payload) break;
+    }
   }
+  if (!payload) return undefined;
+  const cleanedText = `${text.slice(0, start)}${text.slice(end + CLARIFICATION_END.length)}`.trim();
+  return { payload, cleanedText };
 }
 
 /** Holds only a possible leading marker; normal prose is released immediately. */

@@ -18,6 +18,7 @@ import { SkillLoader } from '../src/skills/loader.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 
 const payload = `${CLARIFICATION_START}\n{"questions":[{"question":"部署到哪里？","options":["测试环境","生产环境"],"allowCustom":true},{"question":"何时执行？","options":["现在","今晚"],"allowCustom":true}]}\n${CLARIFICATION_END}`;
+const wrapClarification = (content: string): string => `${CLARIFICATION_START}\n${content}\n${CLARIFICATION_END}`;
 
 test('clarification parser validates questions and strips its marker block', () => {
   assert.deepEqual(parseClarification(`请确认\n${payload}\n谢谢`), {
@@ -35,6 +36,26 @@ test('clarification parser validates questions and strips its marker block', () 
   assert.equal(gate.finish(true), '');
   const normal = new ClarificationStreamGate();
   assert.equal(normal.push('正常回答'), '正常回答');
+});
+
+test('clarification parser repairs a missing trailing object brace', () => {
+  const truncated = wrapClarification('{"questions":[{"question":"Where?","options":["A","B"],"allowCustom":true}]');
+  assert.equal(parseClarification(truncated)?.payload.questions.length, 1);
+});
+
+test('clarification parser repairs missing trailing array and object braces', () => {
+  const truncated = wrapClarification('{"questions":[{"question":"Where?","options":["A","B"],"allowCustom":true}');
+  assert.equal(parseClarification(truncated)?.payload.questions.length, 1);
+});
+
+test('clarification parser repairs a dangling trailing quote', () => {
+  const truncated = wrapClarification('{"questions":[{"question":"Where?","options":["A","B"],"allowCustom":true}"');
+  assert.equal(parseClarification(truncated)?.payload.questions.length, 1);
+});
+
+test('clarification parser rejects malformed content during repair', () => {
+  const malformed = wrapClarification('{"questions":[{"question":"Where?",garbage,"options":["A","B"],"allowCustom":true}]');
+  assert.equal(parseClarification(malformed), undefined);
 });
 
 test('agent emits clarification and discards simultaneous tool calls', async () => {
