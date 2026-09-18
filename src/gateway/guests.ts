@@ -69,6 +69,7 @@ export function guestPublicFolder({ path: _path, dirName: _dirName, ...folder }:
 export function guestRouteAllowed(method: string, pathname: string): boolean {
   if (method === 'GET' && pathname === '/api/info') return true;
   if (method === 'POST' && pathname === '/api/chat') return true;
+  if (method === 'POST' && pathname === '/api/confirm') return true;
   if (method === 'POST' && pathname === '/api/upload') return true;
   if (method === 'POST' && pathname === '/api/stop') return true;
   if ((method === 'GET' || method === 'POST') && pathname === '/api/sessions') return true;
