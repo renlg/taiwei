@@ -44,7 +44,13 @@ export function createGatewayServer(options: GatewayServerOptions): Server {
     await runtime.startupCleanup;
     const started = Date.now();
     const method = request.method ?? 'GET';
-    const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+    let pathname = '/';
+    try {
+      pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+    } catch {
+      json(response, 400, { error: 'Invalid URL' });
+      return;
+    }
     const sseErrorPersistence: { handler?: (error: Error) => Promise<void> } = {};
     response.once('finish', () => log(`[taiwei] ${method} ${pathname} ${response.statusCode} ${Date.now() - started}ms`));
     try {
